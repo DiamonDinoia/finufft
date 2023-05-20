@@ -17,21 +17,23 @@ if (FINUFFT_FFTW_LIBRARIES STREQUAL DEFAULT OR FINUFFT_FFTW_LIBRARIES STREQUAL D
             set(FINUFFT_USE_THREADS OFF)
         endif()
             CPMAddPackage(
-                    NAME fftw3
+                    NAME FFTW3
+                    URL "http://www.fftw.org/fftw-${FFTW_VERSION}.tar.gz"
+                    URL_HASH "MD5=8ccbf6a5ea78a16dbc3e1306e234cc5c"
+                    EXCLUDE_FROM_ALL YES
                     OPTIONS 
                         "ENABLE_AVX2 ON"
                         "BUILD_TESTS OFF"
                         "BUILD_SHARED_LIBS OFF"
                         "ENABLE_THREADS ${FINUFFT_USE_THREADS}"
                         "ENABLE_OPENMP ${FINUFFT_USE_OPENMP}"
-                    URL "http://www.fftw.org/fftw-${FFTW_VERSION}.tar.gz"
-                    URL_HASH "MD5=8ccbf6a5ea78a16dbc3e1306e234cc5c"
-                    EXCLUDE_FROM_ALL YES
-                    GIT_SHALLOW YES
             )
 
             CPMAddPackage(
-                    NAME fftw3f
+                    NAME FFTW3F
+                    URL "ftp://ftp.fftw.org/pub/fftw/fftw-${FFTW_VERSION}.tar.gz"
+                    URL_HASH "MD5=8ccbf6a5ea78a16dbc3e1306e234cc5c"
+                    EXCLUDE_FROM_ALL YES
                     OPTIONS 
                         "ENABLE_AVX2 ON"
                         "BUILD_TESTS OFF"
@@ -39,10 +41,7 @@ if (FINUFFT_FFTW_LIBRARIES STREQUAL DEFAULT OR FINUFFT_FFTW_LIBRARIES STREQUAL D
                         "ENABLE_FLOAT ON"
                         "ENABLE_THREADS ${FINUFFT_USE_THREADS}"
                         "ENABLE_OPENMP ${FINUFFT_USE_OPENMP}"
-                    URL "http://www.fftw.org/fftw-${FFTW_VERSION}.tar.gz"
-                    URL_HASH "MD5=8ccbf6a5ea78a16dbc3e1306e234cc5c"
-                    EXCLUDE_FROM_ALL YES
-                    GIT_SHALLOW YES
+
             )
 
             set(FINUFFT_FFTW_LIBRARIES fftw3 fftw3f)
