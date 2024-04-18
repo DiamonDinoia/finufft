@@ -26,6 +26,7 @@ option(FINUFFT_BUILD_EXAMPLES "Whether to build the FINUFFT examples" OFF)
 option(FINUFFT_BUILD_TESTS "Whether to build the FINUFFT tests" OFF)
 option(FINUFFT_BUILD_FORTRAN "Whether to build the FINUFFT Fortran examples" OFF)
 option(FINUFFT_BUILD_MATLAB "Whether to build the FINUFFT Matlab interface" OFF)
+option(FINUFFT_BUILD_BENCHMARKS "Whether to build the FINUFFT benchmakrs" OFF)
 option(FINUFFT_ENABLE_SANITIZERS "Whether to enable sanitizers, only effective for Debug configuration." ON)
 option(FINUFFT_USE_OPENMP "Whether to use OpenMP for parallelization. If disabled, the finufft library will be single threaded. This does not affect the choice of FFTW library." ON)
 option(FINUFFT_USE_CUDA "Whether to build CUDA accelerated FINUFFT library (libcufinufft). This is completely independent of the main FINUFFT library" OFF)
@@ -244,6 +245,10 @@ endif ()
 
 if (FINUFFT_BUILD_MATLAB)
     add_subdirectory(matlab)
+endif ()
+
+if (FINUFFT_BUILD_BENCHMARKS)
+    add_subdirectory(benchmarks)
 endif ()
 
 include(GNUInstallDirs)
