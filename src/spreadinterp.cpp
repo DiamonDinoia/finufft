@@ -41,21 +41,21 @@ void interp_line(FLT *out,FLT *du, FLT *ker,BIGINT i1,BIGINT N1,int ns);
 void interp_square(FLT *out,FLT *du, FLT *ker1, FLT *ker2, BIGINT i1,BIGINT i2,BIGINT N1,BIGINT N2,int ns);
 void interp_cube(FLT *out,FLT *du, FLT *ker1, FLT *ker2, FLT *ker3,
 		 BIGINT i1,BIGINT i2,BIGINT i3,BIGINT N1,BIGINT N2,BIGINT N3,int ns);
-void spread_subproblem_1d(BIGINT off1, BIGINT size1,FLT *du0,BIGINT M0,FLT *kx0,
-                          FLT *dd0,const finufft_spread_opts& opts);
+void spread_subproblem_1d(BIGINT off1, BIGINT size1,std::vector<FLT>& du0,BIGINT M0,std::vector<FLT>& kx0,
+                          std::vector<FLT>& dd0,const finufft_spread_opts& opts);
 void spread_subproblem_2d(BIGINT off1, BIGINT off2, BIGINT size1,BIGINT size2,
-                          FLT *du0,BIGINT M0,
-			  FLT *kx0,FLT *ky0,FLT *dd0,const finufft_spread_opts& opts);
+                          std::vector<FLT>& du0,BIGINT M0,
+                          std::vector<FLT>& kx0,std::vector<FLT>& ky0,std::vector<FLT>& dd0,const finufft_spread_opts& opts);
 void spread_subproblem_3d(BIGINT off1,BIGINT off2, BIGINT off3, BIGINT size1,
-                          BIGINT size2,BIGINT size3,FLT *du0,BIGINT M0,
-			  FLT *kx0,FLT *ky0,FLT *kz0,FLT *dd0,
+                          BIGINT size2,BIGINT size3,std::vector<FLT>& du0,BIGINT M0,
+                          std::vector<FLT>& kx0,std::vector<FLT>& ky0,std::vector<FLT>& kz0, std::vector<FLT>& dd0,
 			  const finufft_spread_opts& opts);
 void add_wrapped_subgrid(BIGINT offset1,BIGINT offset2,BIGINT offset3,
 			 BIGINT size1,BIGINT size2,BIGINT size3,BIGINT N1,
-			 BIGINT N2,BIGINT N3,FLT *data_uniform, FLT *du0);
+			 BIGINT N2,BIGINT N3,FLT *data_uniform, std::vector<FLT>& du0);
 void add_wrapped_subgrid_thread_safe(BIGINT offset1,BIGINT offset2,BIGINT offset3,
                                      BIGINT size1,BIGINT size2,BIGINT size3,BIGINT N1,
-                                     BIGINT N2,BIGINT N3,FLT *data_uniform, FLT *du0);
+                                     BIGINT N2,BIGINT N3,FLT *data_uniform, std::vector<FLT>& du0);
 void bin_sort_singlethread(BIGINT *ret, BIGINT M, FLT *kx, FLT *ky, FLT *kz,
 	      BIGINT N1,BIGINT N2,BIGINT N3,int pirange,
 	      double bin_size_x,double bin_size_y,double bin_size_z, int debug);
@@ -64,8 +64,8 @@ void bin_sort_multithread(BIGINT *ret, BIGINT M, FLT *kx, FLT *ky, FLT *kz,
               double bin_size_x,double bin_size_y,double bin_size_z, int debug,
               int nthr);
 void get_subgrid(BIGINT &offset1,BIGINT &offset2,BIGINT &offset3,BIGINT &size1,
-		 BIGINT &size2,BIGINT &size3,BIGINT M0,FLT* kx0,FLT* ky0,
-		 FLT* kz0,int ns, int ndims);
+		 BIGINT &size2,BIGINT &size3,BIGINT M0,std::vector<FLT>& kx0,std::vector<FLT>& ky0,
+                 std::vector<FLT>& kz0,int ns, int ndims);
 
 
 
@@ -368,19 +368,24 @@ int spreadSorted(BIGINT* sort_indices,BIGINT N1, BIGINT N2, BIGINT N3,
       printf("\tnthr big: switching add_wrapped OMP from critical to atomic (!)\n");
 
     std::vector<BIGINT> brk(nb+1); // NU index breakpoints defining nb subproblems
+    //FIXME: Clang-Tidy: Casting (double + 0.5) to integer leads to incorrect rounding; consider using lround (#include <cmath>) instead
     for (int p=0;p<=nb;++p)
       brk[p] = (BIGINT)(0.5 + M*p/(double)nb);
 
-#pragma omp parallel for num_threads(nthr) schedule(dynamic,1)  // each is big
+    std::vector<FLT> kx0, ky0, kz0, dd0, du0; // subproblem data
+
+#pragma omp parallel for num_threads(nthr) schedule(dynamic,1) firstprivate(kx0, ky0, kz0, dd0, du0)  // each is big
       for (int isub=0; isub<nb; isub++) {   // Main loop through the subproblems
         BIGINT M0 = brk[isub+1]-brk[isub];  // # NU pts in this subproblem
         // copy the location and data vectors for the nonuniform points
-        FLT *kx0=(FLT*)malloc(sizeof(FLT)*M0), *ky0=NULL, *kz0=NULL;
-        if (N2>1)
-          ky0=(FLT*)malloc(sizeof(FLT)*M0);
-        if (N3>1)
-          kz0=(FLT*)malloc(sizeof(FLT)*M0);
-        FLT *dd0=(FLT*)malloc(sizeof(FLT)*M0*2);    // complex strength data
+        kx0.resize(M0);
+        if (N2>1) {
+            ky0.resize(M0);
+        }
+        if (N3>1) {
+            kz0.resize(M0);
+        }
+        dd0.resize(2*M0);  // complex strength data
         for (BIGINT j=0; j<M0; j++) {           // todo: can avoid this copying?
           BIGINT kk=sort_indices[j+brk[isub]];  // NU pt from subprob index list
           kx0[j]=FOLDRESCALE(kx[kk],N1,opts.pirange);
@@ -401,8 +406,7 @@ int spreadSorted(BIGINT* sort_indices,BIGINT N1, BIGINT N2, BIGINT N3,
             printf("\tsubgrid: off %lld,%lld,%lld\t siz %lld,%lld,%lld\t #NU %lld\n",(long long)offset1,(long long)offset2,(long long)offset3,(long long)size1,(long long)size2,(long long)size3,(long long)M0);
 	}
         // allocate output data for this subgrid
-        FLT *du0=(FLT*)malloc(sizeof(FLT)*2*size1*size2*size3); // complex
-
+        du0.resize(2*size1*size2*size3); // complex
         // Spread to subgrid without need for bounds checking or wrapping
         if (!(opts.flags & TF_OMIT_SPREADING)) {
           if (ndims==1)
@@ -423,12 +427,6 @@ int spreadSorted(BIGINT* sort_indices,BIGINT N1, BIGINT N2, BIGINT N3,
           }
         }
 
-        // free up stuff from this subprob... (that was malloc'ed by hand)
-        free(dd0);
-        free(du0);
-        free(kx0);
-        if (N2>1) free(ky0);
-        if (N3>1) free(kz0);
       }     // end main loop over subprobs
       if (opts.debug) printf("\tt1 fancy spread: \t%.3g s (%d subprobs)\n",timer.elapsedsec(), nb);
     }   // end of choice of which t1 spread type to use
@@ -938,8 +936,8 @@ void interp_cube(FLT *target,FLT *du, FLT *ker1, FLT *ker2, FLT *ker3,
   target[1] = out[1];
 }
 
-void spread_subproblem_1d(BIGINT off1, BIGINT size1,FLT *du,BIGINT M,
-			  FLT *kx,FLT *dd, const finufft_spread_opts& opts)
+void spread_subproblem_1d(BIGINT off1, BIGINT size1, std::vector<FLT>& du,BIGINT M,
+                          std::vector<FLT>& kx, std::vector<FLT>& dd, const finufft_spread_opts& opts)
 /* 1D spreader from nonuniform to uniform subproblem grid, without wrapping.
    Inputs:
    off1 - integer offset of left end of du subgrid from that of overall fine
@@ -994,7 +992,7 @@ void spread_subproblem_1d(BIGINT off1, BIGINT size1,FLT *du,BIGINT M,
 }
 
 void spread_subproblem_2d(BIGINT off1,BIGINT off2,BIGINT size1,BIGINT size2,
-                          FLT *du,BIGINT M, FLT *kx,FLT *ky,FLT *dd,
+                          std::vector<FLT>& du,BIGINT M,std::vector<FLT>&kx,std::vector<FLT>& ky,std::vector<FLT>& dd,
 			  const finufft_spread_opts& opts)
 /* spreader from dd (NU) to du (uniform) in 2D without wrapping.
    See above docs/notes for spread_subproblem_2d.
@@ -1039,7 +1037,7 @@ void spread_subproblem_2d(BIGINT off1,BIGINT off2,BIGINT size1,BIGINT size2,
     for (int dy=0; dy<ns; ++dy) {
       BIGINT j = size1*(i2-off2+dy) + i1-off1;   // should be in subgrid
       FLT kerval = ker2[dy];
-      FLT *trg = du+2*j;
+      FLT *trg = du.data()+2*j;
       for (int dx=0; dx<2*ns; ++dx) {
 	trg[dx] += kerval*ker1val[dx];
       }
@@ -1048,8 +1046,8 @@ void spread_subproblem_2d(BIGINT off1,BIGINT off2,BIGINT size1,BIGINT size2,
 }
 
 void spread_subproblem_3d(BIGINT off1,BIGINT off2,BIGINT off3,BIGINT size1,
-                          BIGINT size2,BIGINT size3,FLT *du,BIGINT M,
-			  FLT *kx,FLT *ky,FLT *kz,FLT *dd,
+                          BIGINT size2,BIGINT size3,std::vector<FLT>& du,BIGINT M,
+                          std::vector<FLT>& kx, std::vector<FLT>& ky,std::vector<FLT>& kz, std::vector<FLT>&dd,
 			  const finufft_spread_opts& opts)
 /* spreader from dd (NU) to du (uniform) in 3D without wrapping.
    See above docs/notes for spread_subproblem_2d.
@@ -1101,7 +1099,7 @@ void spread_subproblem_3d(BIGINT off1,BIGINT off2,BIGINT off3,BIGINT size1,
       for (int dy=0; dy<ns; ++dy) {
 	BIGINT j = oz + size1*(i2-off2+dy) + i1-off1;   // should be in subgrid
 	FLT kerval = ker2[dy]*ker3[dz];
-	FLT *trg = du+2*j;
+	FLT *trg = du.data()+2*j;
 	for (int dx=0; dx<2*ns; ++dx) {
 	  trg[dx] += kerval*ker1val[dx];
 	}
@@ -1112,7 +1110,7 @@ void spread_subproblem_3d(BIGINT off1,BIGINT off2,BIGINT off3,BIGINT size1,
 
 void add_wrapped_subgrid(BIGINT offset1,BIGINT offset2,BIGINT offset3,
 			 BIGINT size1,BIGINT size2,BIGINT size3,BIGINT N1,
-			 BIGINT N2,BIGINT N3,FLT *data_uniform, FLT *du0)
+			 BIGINT N2,BIGINT N3,FLT *data_uniform, std::vector<FLT>& du0)
 /* Add a large subgrid (du0) to output grid (data_uniform),
    with periodic wrapping to N1,N2,N3 box.
    offset1,2,3 give the offset of the subgrid from the lowest corner of output.
@@ -1141,7 +1139,7 @@ void add_wrapped_subgrid(BIGINT offset1,BIGINT offset2,BIGINT offset3,
     for (int dy=0; dy<size2; dy++) {
       BIGINT oy = oz + N1*o2[dy];        // off due to y & z (0 in 1D)
       FLT *out = data_uniform + 2*oy;
-      FLT *in  = du0 + 2*size1*(dy + size2*dz);   // ptr to subgrid array
+      FLT *in  = du0.data() + 2*size1*(dy + size2*dz);   // ptr to subgrid array
       BIGINT o = 2*(offset1+N1);         // 1d offset for output
       for (int j=0; j<2*nlo; j++)        // j is really dx/2 (since re,im parts)
 	out[j+o] += in[j];
@@ -1157,7 +1155,7 @@ void add_wrapped_subgrid(BIGINT offset1,BIGINT offset2,BIGINT offset3,
 
 void add_wrapped_subgrid_thread_safe(BIGINT offset1,BIGINT offset2,BIGINT offset3,
                                      BIGINT size1,BIGINT size2,BIGINT size3,BIGINT N1,
-                                     BIGINT N2,BIGINT N3,FLT *data_uniform, FLT *du0)
+                                     BIGINT N2,BIGINT N3,FLT *data_uniform, std::vector<FLT>& du0)
 /* Add a large subgrid (du0) to output grid (data_uniform),
    with periodic wrapping to N1,N2,N3 box.
    offset1,2,3 give the offset of the subgrid from the lowest corner of output.
@@ -1186,7 +1184,7 @@ void add_wrapped_subgrid_thread_safe(BIGINT offset1,BIGINT offset2,BIGINT offset
     for (int dy=0; dy<size2; dy++) {
       BIGINT oy = oz + N1*o2[dy];        // off due to y & z (0 in 1D)
       FLT *out = data_uniform + 2*oy;
-      FLT *in  = du0 + 2*size1*(dy + size2*dz);   // ptr to subgrid array
+      FLT *in  = du0.data() + 2*size1*(dy + size2*dz);   // ptr to subgrid array
       BIGINT o = 2*(offset1+N1);         // 1d offset for output
       for (int j=0; j<2*nlo; j++) { // j is really dx/2 (since re,im parts)
 #pragma omp atomic
@@ -1349,7 +1347,7 @@ void bin_sort_multithread(BIGINT *ret, BIGINT M, FLT *kx, FLT *ky, FLT *kz,
 }
 
 
-void get_subgrid(BIGINT &offset1,BIGINT &offset2,BIGINT &offset3,BIGINT &size1,BIGINT &size2,BIGINT &size3,BIGINT M,FLT* kx,FLT* ky,FLT* kz,int ns,int ndims)
+void get_subgrid(BIGINT &offset1,BIGINT &offset2,BIGINT &offset3,BIGINT &size1,BIGINT &size2,BIGINT &size3,BIGINT M,std::vector<FLT>& kx,std::vector<FLT>& ky,std::vector<FLT>& kz,int ns,int ndims)
 /* Writes out the integer offsets and sizes of a "subgrid" (cuboid subset of
    Z^ndims) large enough to enclose all of the nonuniform points with
    (non-periodic) padding of half the kernel width ns to each side in
@@ -1395,12 +1393,12 @@ void get_subgrid(BIGINT &offset1,BIGINT &offset2,BIGINT &offset3,BIGINT &size1,B
 {
   FLT ns2 = (FLT)ns/2;
   FLT min_kx,max_kx;   // 1st (x) dimension: get min/max of nonuniform points
-  arrayrange(M,kx,&min_kx,&max_kx);
+  arrayrange(M,kx.data(),&min_kx,&max_kx);
   offset1 = (BIGINT)std::ceil(min_kx-ns2);   // min index touched by kernel
   size1 = (BIGINT)std::ceil(max_kx-ns2) - offset1 + ns;  // int(ceil) first!
   if (ndims>1) {
     FLT min_ky,max_ky;   // 2nd (y) dimension: get min/max of nonuniform points
-    arrayrange(M,ky,&min_ky,&max_ky);
+    arrayrange(M,ky.data(),&min_ky,&max_ky);
     offset2 = (BIGINT)std::ceil(min_ky-ns2);
     size2 = (BIGINT)std::ceil(max_ky-ns2) - offset2 + ns;
   } else {
@@ -1409,7 +1407,7 @@ void get_subgrid(BIGINT &offset1,BIGINT &offset2,BIGINT &offset3,BIGINT &size1,B
   }
   if (ndims>2) {
     FLT min_kz,max_kz;   // 3rd (z) dimension: get min/max of nonuniform points
-    arrayrange(M,kz,&min_kz,&max_kz);
+    arrayrange(M,kz.data(),&min_kz,&max_kz);
     offset3 = (BIGINT)std::ceil(min_kz-ns2);
     size3 = (BIGINT)std::ceil(max_kz-ns2) - offset3 + ns;
   } else {
