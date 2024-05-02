@@ -32,4 +32,4 @@ target_link_libraries(finufft_benchlib INTERFACE finufft_static tabulate indicat
 set_target_properties(finufft_benchlib PROPERTIES INTERFACE_COMPILE_FEATURES cxx_std_20)
 add_executable(finufft_benchmarks benchmakrs.cpp)
 target_compile_definitions(finufft_benchmarks PRIVATE DATA_FILE="${CMAKE_CURRENT_SOURCE_DIR}/input.csv")
-target_link_libraries(finufft_benchmarks PRIVATE finufft_benchlib benchmark::benchmark)
+target_link_libraries(finufft_benchmarks PRIVATE finufft_benchlib)

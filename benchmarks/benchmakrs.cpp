@@ -1,13 +1,13 @@
-
-#include "benchmark.h"
 #include "finufft_benchmarks.h"
 #include "parse_csv.h"
 #include <indicators/progress_bar.hpp>
 #include <ranges>
+#include "benchmark.h"
 // std visit to call the correct benchmark
 constexpr auto RUNS = 5;
 
 int main(int argc, char **argv) {
+
     using namespace indicators;
 
     std::minstd_rand gen(42);

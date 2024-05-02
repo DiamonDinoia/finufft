@@ -159,7 +159,7 @@ class BenchmarkReporter {
 
         auto parse_throughput = [&row, &mean]() {
             std::stringstream ss;
-            ss << std::scientific << std::setprecision(0)
+            ss << std::scientific << std::setprecision(2)
                << static_cast<double>(row.M) / mean;
             return ss.str();
         };

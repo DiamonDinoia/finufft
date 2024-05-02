@@ -155,6 +155,7 @@ function(set_finufft_options target)
 
 endfunction()
 
+
 if(FINUFFT_USE_CPU)
     # Main finufft libraries
     add_library(finufft_f32 OBJECT ${FINUFFT_PRECISION_DEPENDENT_SOURCES})
@@ -250,6 +251,8 @@ endif ()
 if (FINUFFT_BUILD_BENCHMARKS)
     add_subdirectory(benchmarks)
 endif ()
+
+
 
 include(GNUInstallDirs)
 install(TARGETS ${INSTALL_TARGETS} PUBLIC_HEADER)

@@ -58,6 +58,7 @@ class finufft_benchmark {
     std::vector<std::complex<RealType>> &benchmark_finufft1d1()
         requires SingleType<RealType> && OneDimensional<Dim>
     {
+       
         safe_call(__func__, finufftf1d1, M, x.data(), c.data(), +1, eps,
                   dims[0], F.data(), &opts);
         return F;
@@ -72,6 +73,7 @@ class finufft_benchmark {
     std::vector<std::complex<RealType>> &benchmark_finufft1d1()
         requires DoubleType<RealType> && OneDimensional<Dim>
     {
+       
         safe_call(__func__, finufft1d1, M, x.data(), c.data(), +1, eps, dims[0],
                   F.data(), &opts);
         return F;
@@ -84,7 +86,9 @@ class finufft_benchmark {
      */
     std::vector<std::complex<RealType>> &benchmark_finufft1d2()
         requires SingleType<RealType> && OneDimensional<Dim>
+
     {
+       
         safe_call(__func__, finufftf1d2, M, x.data(), c.data(), +1, eps,
                   dims[0], F.data(), &opts);
         return F;
@@ -99,6 +103,7 @@ class finufft_benchmark {
     std::vector<std::complex<RealType>> &benchmark_finufft1d2()
         requires DoubleType<RealType> && OneDimensional<Dim>
     {
+       
         safe_call(__func__, finufft1d2, M, x.data(), c.data(), +1, eps, dims[0],
                   F.data(), &opts);
         return F;
@@ -112,6 +117,7 @@ class finufft_benchmark {
     std::vector<std::complex<RealType>> &benchmark_finufft2d1()
         requires SingleType<RealType> && TwoDimensional<Dim>
     {
+       
         safe_call(__func__, finufftf2d1, M, x.data(), y.data(), c.data(), +1,
                   eps, dims[0], dims[1], F.data(), &opts);
         return F;
@@ -126,6 +132,7 @@ class finufft_benchmark {
     std::vector<std::complex<RealType>> &benchmark_finufft2d1()
         requires DoubleType<RealType> && TwoDimensional<Dim>
     {
+       
         safe_call(__func__, finufft2d1, M, x.data(), y.data(), c.data(), +1,
                   eps, dims[0], dims[1], F.data(), &opts);
         return F;
@@ -139,6 +146,7 @@ class finufft_benchmark {
     std::vector<std::complex<RealType>> &benchmark_finufft2d2()
         requires SingleType<RealType> && TwoDimensional<Dim>
     {
+       
         safe_call(__func__, finufftf2d2, M, x.data(), y.data(), c.data(), +1,
                   eps, dims[0], dims[1], F.data(), &opts);
         return F;
@@ -153,6 +161,7 @@ class finufft_benchmark {
     std::vector<std::complex<RealType>> &benchmark_finufft2d2()
         requires DoubleType<RealType> && TwoDimensional<Dim>
     {
+       
         safe_call(__func__, finufft2d2, M, x.data(), y.data(), c.data(), +1,
                   eps, dims[0], dims[1], F.data(), &opts);
         return F;
@@ -166,6 +175,7 @@ class finufft_benchmark {
     std::vector<std::complex<RealType>> &benchmark_finufft3d1()
         requires SingleType<RealType> && ThreeDimensional<Dim>
     {
+       
         safe_call(__func__, finufftf3d1, M, x.data(), y.data(), z.data(),
                   c.data(), +1, eps, dims[0], dims[1], dims[2], F.data(),
                   &opts);
@@ -180,6 +190,7 @@ class finufft_benchmark {
     std::vector<std::complex<RealType>> &benchmark_finufft3d1()
         requires DoubleType<RealType> && ThreeDimensional<Dim>
     {
+       
         safe_call(__func__, finufft3d1, M, x.data(), y.data(), z.data(),
                   c.data(), +1, eps, dims[0], dims[1], dims[2], F.data(),
                   &opts);
