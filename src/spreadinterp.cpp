@@ -26,15 +26,19 @@
          (x + (x>=-PI ? (x<PI ? PI : -PI) : 3*PI)) * ((FLT)M_1_2PI*N) : \
                         (x>=0.0 ? (x<(FLT)N ? x : x-(FLT)N) : x+(FLT)N))
 
-template <bool p> FLT foldrescale(FLT x, BIGINT N) {
-  return p ? (x + (x>=-PI ? (x<PI ? PI : -PI) : 3*PI)) * ((FLT)M_1_2PI*N) :
-             (x>=0.0 ? (x<(FLT)N ? x : x-(FLT)N) : x+(FLT)N);
+template <bool p> __attribute__((always_inline)) inline static constexpr
+FLT foldrescale(FLT x, BIGINT N) noexcept {
+  if constexpr (p) {
+    return (x + (x>=-PI ? (x<PI ? PI : -PI) : 3*PI)) * ((FLT)M_1_2PI*N);
+  } else {
+    return (x>=0.0 ? (x<(FLT)N ? x : x-(FLT)N) : x+(FLT)N);
+  }
 }
 
-template<bool p>
+template<bool p> __attribute__((always_inline)) inline static constexpr
 void processSubproblem(BIGINT M0, BIGINT* sort_indices, std::vector<BIGINT>& brk, BIGINT isub, FLT* kx, BIGINT N1,
                        FLT* ky, BIGINT N2, FLT* kz, BIGINT N3, FLT* data_nonuniform, FLT* kx0, FLT* ky0,
-                       FLT* kz0, FLT* dd0) {
+                       FLT* kz0, FLT* dd0) noexcept {
 #pragma omp simd
   for (BIGINT j=0; j<M0; j++) {
     const BIGINT kk=sort_indices[j+brk[isub]];  // NU pt from subprob index list
