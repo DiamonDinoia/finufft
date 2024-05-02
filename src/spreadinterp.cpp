@@ -36,9 +36,9 @@ FLT foldrescale(FLT x, BIGINT N) noexcept {
 }
 
 template<bool p> __attribute__((always_inline)) inline static constexpr
-void processSubproblem(BIGINT M0, BIGINT* sort_indices, std::vector<BIGINT>& brk, BIGINT isub, FLT* kx, BIGINT N1,
-                       FLT* ky, BIGINT N2, FLT* kz, BIGINT N3, FLT* data_nonuniform, FLT* kx0, FLT* ky0,
-                       FLT* kz0, FLT* dd0) noexcept {
+void processSubproblem(const BIGINT M0, const BIGINT* sort_indices, const std::vector<BIGINT>& brk, const BIGINT isub,
+                       const FLT* kx, const BIGINT N1, const FLT* ky, const BIGINT N2,const FLT* kz, const BIGINT N3,
+                       const  FLT* data_nonuniform, FLT* kx0, FLT* ky0, FLT* kz0, FLT* dd0) noexcept {
 #pragma omp simd
   for (BIGINT j=0; j<M0; j++) {
     const BIGINT kk=sort_indices[j+brk[isub]];  // NU pt from subprob index list
