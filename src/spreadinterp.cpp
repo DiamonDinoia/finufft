@@ -26,6 +26,37 @@
          (x + (x>=-PI ? (x<PI ? PI : -PI) : 3*PI)) * ((FLT)M_1_2PI*N) : \
                         (x>=0.0 ? (x<(FLT)N ? x : x-(FLT)N) : x+(FLT)N))
 
+template <bool p> FLT foldrescale(FLT x, BIGINT N) {
+  return p ? (x + (x>=-PI ? (x<PI ? PI : -PI) : 3*PI)) * ((FLT)M_1_2PI*N) :
+             (x>=0.0 ? (x<(FLT)N ? x : x-(FLT)N) : x+(FLT)N);
+}
+
+template<bool p>
+void processSubproblem(BIGINT M0, BIGINT* sort_indices, std::vector<BIGINT>& brk, BIGINT isub, FLT* kx, BIGINT N1,
+                       FLT* ky, BIGINT N2, FLT* kz, BIGINT N3, FLT* data_nonuniform, FLT* kx0, FLT* ky0,
+                       FLT* kz0, FLT* dd0) {
+#pragma omp simd
+  for (BIGINT j=0; j<M0; j++) {
+    const BIGINT kk=sort_indices[j+brk[isub]];  // NU pt from subprob index list
+    kx0[j]=foldrescale<p>(kx[kk], N1);
+    dd0[j*2]=data_nonuniform[kk*2];     // real part
+    dd0[j*2+1]=data_nonuniform[kk*2+1]; // imag part
+  }
+  if (N2 > 1) {
+#pragma omp simd
+    for (BIGINT j=0; j<M0; j++) {
+      const BIGINT kk=sort_indices[j+brk[isub]];
+      ky0[j]=foldrescale<p>(ky[kk], N2);
+    }
+  }
+  if (N3 > 1) {
+#pragma omp simd
+    for (BIGINT j=0; j<M0; j++) {
+      const BIGINT kk=sort_indices[j+brk[isub]];
+      kz0[j]=foldrescale<p>(kz[kk], N3);
+    }
+  }
+}
 
 using namespace std;
 using namespace finufft::utils;              // access to timer
@@ -368,12 +399,12 @@ int spreadSorted(BIGINT* sort_indices,BIGINT N1, BIGINT N2, BIGINT N3,
       printf("\tnthr big: switching add_wrapped OMP from critical to atomic (!)\n");
 
     std::vector<BIGINT> brk(nb+1); // NU index breakpoints defining nb subproblems
-    for (int p=0;p<=nb;++p)
-      brk[p] = lround(double(M)*p/(double)nb);
-
+    for (int p=0;p<=nb;++p) {
+      brk[p] = lround(double(M) * p / (double) nb);
+    }
     FLT *kx0 = NULL, * ky0 = NULL, * kz0 = NULL, * dd0 = NULL, * du0 = NULL;
 #pragma omp parallel for num_threads(nthr) schedule(dynamic, 1) firstprivate(kx0, ky0, kz0, dd0, du0)  // each is big
-    for (int isub = nb - 1; isub >= 0; --isub) {   // Main loop through the subproblems
+    for (int isub = 0; isub < nb; ++isub) {   // Main loop through the subproblems
         const BIGINT M0 = brk[isub + 1] - brk[isub];  // # NU pts in this subproblem
         // copy the location and data vectors for the nonuniform points
         kx0 = (decltype(kz0)) realloc(kx0, sizeof(FLT) * M0);
@@ -382,13 +413,10 @@ int spreadSorted(BIGINT* sort_indices,BIGINT N1, BIGINT N2, BIGINT N3,
         if (N3 > 1)
           kz0 = (decltype(kz0)) realloc(kz0, sizeof(FLT) * M0);
         dd0 = (decltype(dd0)) realloc(dd0, sizeof(FLT) * M0 * 2);    // complex strength data
-        for (BIGINT j=0; j<M0; j++) {           // todo: can avoid this copying?
-          BIGINT kk=sort_indices[j+brk[isub]];  // NU pt from subprob index list
-          kx0[j]=FOLDRESCALE(kx[kk],N1,opts.pirange);
-          if (N2>1) ky0[j]=FOLDRESCALE(ky[kk],N2,opts.pirange);
-          if (N3>1) kz0[j]=FOLDRESCALE(kz[kk],N3,opts.pirange);
-          dd0[j*2]=data_nonuniform[kk*2];     // real part
-          dd0[j*2+1]=data_nonuniform[kk*2+1]; // imag part
+        if (opts.pirange) {
+          processSubproblem<true>(M0, sort_indices, brk, isub, kx, N1, ky, N2, kz, N3, data_nonuniform, kx0, ky0, kz0, dd0);
+        } else {
+          processSubproblem<false>(M0, sort_indices, brk, isub, kx, N1, ky, N2, kz, N3, data_nonuniform, kx0, ky0, kz0, dd0);
         }
         // get the subgrid which will include padding by roughly nspread/2
         BIGINT offset1,offset2,offset3,size1,size2,size3; // get_subgrid sets
