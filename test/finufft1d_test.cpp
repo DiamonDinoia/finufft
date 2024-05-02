@@ -1,3 +1,4 @@
+#include <callgraph.h>
 #include <finufft/test_defs.h>
 // this enforces recompilation, responding to SINGLE...
 #include "directft/dirft1d.cpp"
@@ -15,6 +16,7 @@ const char* help[]={
 
 int main(int argc, char* argv[])
 {
+  CALLGRAPH_MEASURE();
   BIGINT M, N;   // M = # srcs, N = # modes out
   double w, tol = 1e-6;         // default
   double err, errfail = INFINITY, errmax = 0;
@@ -34,7 +36,7 @@ int main(int argc, char* argv[])
   if (argc>5) sscanf(argv[5],"%d",&opts.spread_sort);
   if (argc>6) { sscanf(argv[6],"%lf",&w); opts.upsampfac=(FLT)w; }
   if (argc>7) sscanf(argv[7],"%lf",&errfail);
-  
+
   cout << scientific << setprecision(15);
 
   FLT *x = (FLT*)malloc(sizeof(FLT)*M);        // NU pts
@@ -84,7 +86,6 @@ int main(int argc, char* argv[])
     printf("\tdirft1d: rel l2-err of result F is %.3g\n",err);
     free(Ft);
   }
-
   printf("test 1d type 2:\n"); // -------------- type 2
  #pragma omp parallel
   {

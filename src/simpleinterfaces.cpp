@@ -1,5 +1,7 @@
 // public header
 #include <finufft.h>
+#include <callgraph.h>
+
 // private headers
 #include <finufft/defs.h>
 #include <cstdio>
@@ -31,6 +33,7 @@ int invokeGuruInterface(int n_dims, int type, int n_transf, BIGINT nj, FLT* xj,
 // Helper layer between simple interfaces (with opts) and the guru functions.
 // Author: Andrea Malleo, 2019.
 {
+  CALLGRAPH_MEASURE();
   FINUFFT_PLAN plan;
   int ier = FINUFFT_MAKEPLAN(type, n_dims, n_modes, iflag, n_transf, eps,
                              &plan, popts);  // popts (ptr to opts) can be NULL

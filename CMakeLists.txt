@@ -32,6 +32,9 @@ option(FINUFFT_USE_CUDA "Whether to build CUDA accelerated FINUFFT library (libc
 option(FINUFFT_USE_CPU "Whether to build the ordinary FINUFFT library (libfinufft)." ON)
 option(FINUFFT_STATIC_LINKING "Whether to link the static FINUFFT library (libfinufft_static)." ON)
 # sphinx tag (don't remove): @cmake_opts_end
+set(CPM_DOWNLOAD_VERSION 0.38.0)
+include(cmake/setupCPM.cmake)
+include(cmake/setupCallgraph.cmake)
 
 if(FINUFFT_USE_CPU)
     # suppress Windows warnings about "unsafe" functions
@@ -44,11 +47,9 @@ if(FINUFFT_USE_CPU)
         add_link_options("-ld64")
     endif()
 
-    set(CPM_DOWNLOAD_VERSION 0.38.0)
-    include(cmake/setupCPM.cmake)
-
     set(FFTW_VERSION 3.3.10)
     include(cmake/setupFFTW.cmake)
+
 endif()
 
 if (FINUFFT_BUILD_MATLAB)
@@ -106,11 +107,11 @@ function(finufft_link_test target)
           endif()
       endif()
   else()
-      target_link_libraries(${target} PRIVATE finufft)
       if(WIN32)
           target_compile_definitions(${target} PRIVATE FINUFFT_DLL)
       endif()
   endif()
+  target_link_libraries(${target} PRIVATE finufft callgraph)
   enable_asan(${target})
 endfunction()
 
@@ -160,22 +161,25 @@ if(FINUFFT_USE_CPU)
     target_compile_definitions(finufft_f32 PRIVATE SINGLE)
     set_finufft_options(finufft_f32)
     target_link_libraries(finufft_f32 PUBLIC ${FINUFFT_FFTW_LIBRARIES})
+    target_link_libraries(finufft_f32 PRIVATE callgraph)
 
     add_library(finufft_f64 OBJECT ${FINUFFT_PRECISION_DEPENDENT_SOURCES})
     target_compile_definitions(finufft_f64 PRIVATE)
     set_finufft_options(finufft_f64)
     target_link_libraries(finufft_f64 PUBLIC ${FINUFFT_FFTW_LIBRARIES})
-
+    target_link_libraries(finufft_f64 PRIVATE callgraph)
     if(WIN32)
         add_library(finufft_f32_dll OBJECT ${FINUFFT_PRECISION_DEPENDENT_SOURCES})
         target_compile_definitions(finufft_f32_dll PRIVATE SINGLE dll_EXPORTS FINUFFT_DLL)
         set_finufft_options(finufft_f32_dll)
         target_link_libraries(finufft_f32_dll PUBLIC ${FINUFFT_FFTW_LIBRARIES})
+        target_link_libraries(finufft_f32_dll PRIVATE callgraph)
 
         add_library(finufft_f64_dll OBJECT ${FINUFFT_PRECISION_DEPENDENT_SOURCES})
         target_compile_definitions(finufft_f64_dll PRIVATE dll_EXPORTS FINUFFT_DLL)
         set_finufft_options(finufft_f64_dll)
         target_link_libraries(finufft_f64_dll PUBLIC ${FINUFFT_FFTW_LIBRARIES})
+        target_link_libraries(finufft_f64_dll PRIVATE callgraph)
     endif()
 
     add_library(finufft SHARED src/utils_precindep.cpp contrib/legendre_rule_fast.cpp)
@@ -186,6 +190,7 @@ if(FINUFFT_USE_CPU)
     else()
         target_link_libraries(finufft PUBLIC finufft_f32_dll finufft_f64_dll)
     endif()
+    target_link_libraries(finufft PRIVATE callgraph)
     # windows does not have a math library, so we need to exclude it
     if(NOT WIN32)
         target_link_libraries(finufft PUBLIC m)
@@ -195,6 +200,7 @@ if(FINUFFT_USE_CPU)
     add_library(finufft_static STATIC src/utils_precindep.cpp contrib/legendre_rule_fast.cpp)
     set_finufft_options(finufft_static)
     target_link_libraries(finufft_static PUBLIC finufft_f32 finufft_f64)
+    target_link_libraries(finufft_static PRIVATE callgraph)
     # windows does not have a math library, so we need to exclude it
     if(NOT WIN32)
         target_link_libraries(finufft_static PUBLIC m)

@@ -1,5 +1,6 @@
 // public header
 #include <finufft.h>
+#include <callgraph.h>
 
 // private headers for lib build
 // (must come after finufft.h which clobbers FINUFFT* macros)
@@ -427,6 +428,7 @@ int spreadinterpSortedBatch(int batchSize, FINUFFT_PLAN p, CPX* cBatch)
   Barnett 5/19/20, based on Malleo 2019.
 */
 {
+  CALLGRAPH_MEASURE();
   // opts.spread_thread: 1 sequential multithread, 2 parallel single-thread.
   // omp_sets_nested deprecated, so don't use; assume not nested for 2 to work.
   // But when nthr_outer=1 here, omp par inside the loop sees all threads...
@@ -455,6 +457,7 @@ int deconvolveBatch(int batchSize, FINUFFT_PLAN p, CPX* fkBatch)
   Barnett 5/21/20, simplified from Malleo 2019 (eg t3 logic won't be in here)
 */
 {
+  CALLGRAPH_MEASURE();
   // since deconvolveshuffle?d are single-thread, omp par seems to help here...
 #pragma omp parallel for num_threads(batchSize)
   for (int i=0; i<batchSize; i++) {
@@ -558,6 +561,7 @@ int FINUFFT_MAKEPLAN(int type, int dim, BIGINT* n_modes, int iflag,
 // For types 1,2 allocates memory for internal working arrays,
 // evaluates spreading kernel coefficients, and instantiates the fftw_plan
 {
+  CALLGRAPH_MEASURE();
   FINUFFT_PLAN p;
   p = new FINUFFT_PLAN_S;                // allocate fresh plan struct
   *pp = p;                               // pass out plan as ptr to plan struct
@@ -765,6 +769,7 @@ int FINUFFT_SETPTS(FINUFFT_PLAN p, BIGINT nj, FLT* xj, FLT* yj, FLT* zj,
    and NU target freqs (stu), evaluates spreading kernel FT at all target freqs.
 */
 {
+  CALLGRAPH_MEASURE();
   int d = p->dim;     // abbrev for spatial dim
   CNTime timer; timer.start();
   p->nj = nj;    // the user only now chooses how many NU (x,y,z) pts
@@ -1017,8 +1022,8 @@ int FINUFFT_EXECUTE(FINUFFT_PLAN p, CPX* cj, CPX* fk){
    Return value 0 (no error diagnosis yet).
    Barnett 5/20/20, based on Malleo 2019.
 */
+  CALLGRAPH_MEASURE();
   CNTime timer; timer.start();
-  
   if (p->type!=3){ // --------------------- TYPE 1,2 EXEC ------------------
   
     double t_sprint = 0.0, t_fft = 0.0, t_deconv = 0.0;  // accumulated timing
@@ -1046,7 +1051,9 @@ int FINUFFT_EXECUTE(FINUFFT_PLAN p, CPX* cj, CPX* fk){
              
       // STEP 2: call the pre-planned FFT on this batch
       timer.restart();
+      callgraph::start_measure("FFTW_EXECUTE");
       FFTW_EX(p->fftwPlan);   // if thisBatchSize<batchSize it wastes some flops
+      callgraph::stop_measure();
       t_fft += timer.elapsedsec();
       if (p->opts.debug>1)
         printf("\tFFTW exec:\t\t%.3g s\n", timer.elapsedsec());
