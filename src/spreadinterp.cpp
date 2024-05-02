@@ -369,14 +369,14 @@ int spreadSorted(BIGINT* sort_indices,BIGINT N1, BIGINT N2, BIGINT N3,
 
     std::vector<BIGINT> brk(nb+1); // NU index breakpoints defining nb subproblems
     for (int p=0;p<=nb;++p)
-      brk[p] = (BIGINT)(0.5 + M*p/(double)nb);
+      brk[p] = lround(double(M)*p/(double)nb);
 
-    FLT *__restrict__ kx0 = NULL, *__restrict__ ky0 = NULL, *__restrict__ kz0 = NULL, *__restrict__ dd0 = NULL, *__restrict__ du0 = NULL;
+    FLT *kx0 = NULL, * ky0 = NULL, * kz0 = NULL, * dd0 = NULL, * du0 = NULL;
 #pragma omp parallel for num_threads(nthr) schedule(dynamic, 1) firstprivate(kx0, ky0, kz0, dd0, du0)  // each is big
     for (int isub = nb - 1; isub >= 0; --isub) {   // Main loop through the subproblems
-        BIGINT M0 = brk[isub + 1] - brk[isub];  // # NU pts in this subproblem
+        const BIGINT M0 = brk[isub + 1] - brk[isub];  // # NU pts in this subproblem
         // copy the location and data vectors for the nonuniform points
-        kx0 = (decltype(kz0)) (realloc(kx0, sizeof(FLT) * M0));
+        kx0 = (decltype(kz0)) realloc(kx0, sizeof(FLT) * M0);
         if (N2 > 1)
           ky0 = (decltype(ky0)) realloc(ky0, sizeof(FLT) * M0);
         if (N3 > 1)

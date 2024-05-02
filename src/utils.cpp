@@ -52,16 +52,16 @@ FLT infnorm(BIGINT n, CPX* a)
 }
 
 // ------------ real array utils ---------------------------------
-
-void arrayrange(BIGINT n, FLT* a, FLT *lo, FLT *hi)
+void arrayrange(const BIGINT n, const FLT* a, FLT * __restrict__ lo, FLT *__restrict__ hi)
 // With a a length-n array, writes out min(a) to lo and max(a) to hi,
 // so that all a values lie in [lo,hi].
 // If n==0, lo and hi are not finite.
 {
   *lo = INFINITY; *hi = -INFINITY;
+#pragma omp simd
   for (BIGINT m=0; m<n; ++m) {
-    if (a[m]<*lo) *lo = a[m];
-    if (a[m]>*hi) *hi = a[m];
+    *lo = (a[m]<*lo)  ?  a[m] : *lo;
+    *hi =(a[m]>*hi) ? a[m] : *hi;
   }
 }
 
