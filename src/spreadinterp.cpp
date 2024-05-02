@@ -371,16 +371,17 @@ int spreadSorted(BIGINT* sort_indices,BIGINT N1, BIGINT N2, BIGINT N3,
     for (int p=0;p<=nb;++p)
       brk[p] = (BIGINT)(0.5 + M*p/(double)nb);
 
-#pragma omp parallel for num_threads(nthr) schedule(dynamic,1)  // each is big
-      for (int isub=0; isub<nb; isub++) {   // Main loop through the subproblems
-        BIGINT M0 = brk[isub+1]-brk[isub];  // # NU pts in this subproblem
+    FLT *__restrict__ kx0 = NULL, *__restrict__ ky0 = NULL, *__restrict__ kz0 = NULL, *__restrict__ dd0 = NULL, *__restrict__ du0 = NULL;
+#pragma omp parallel for num_threads(nthr) schedule(dynamic, 1) firstprivate(kx0, ky0, kz0, dd0, du0)  // each is big
+    for (int isub = nb - 1; isub >= 0; --isub) {   // Main loop through the subproblems
+        BIGINT M0 = brk[isub + 1] - brk[isub];  // # NU pts in this subproblem
         // copy the location and data vectors for the nonuniform points
-        FLT *kx0=(FLT*)malloc(sizeof(FLT)*M0), *ky0=NULL, *kz0=NULL;
-        if (N2>1)
-          ky0=(FLT*)malloc(sizeof(FLT)*M0);
-        if (N3>1)
-          kz0=(FLT*)malloc(sizeof(FLT)*M0);
-        FLT *dd0=(FLT*)malloc(sizeof(FLT)*M0*2);    // complex strength data
+        kx0 = (decltype(kz0)) (realloc(kx0, sizeof(FLT) * M0));
+        if (N2 > 1)
+          ky0 = (decltype(ky0)) realloc(ky0, sizeof(FLT) * M0);
+        if (N3 > 1)
+          kz0 = (decltype(kz0)) realloc(kz0, sizeof(FLT) * M0);
+        dd0 = (decltype(dd0)) realloc(dd0, sizeof(FLT) * M0 * 2);    // complex strength data
         for (BIGINT j=0; j<M0; j++) {           // todo: can avoid this copying?
           BIGINT kk=sort_indices[j+brk[isub]];  // NU pt from subprob index list
           kx0[j]=FOLDRESCALE(kx[kk],N1,opts.pirange);
@@ -401,7 +402,7 @@ int spreadSorted(BIGINT* sort_indices,BIGINT N1, BIGINT N2, BIGINT N3,
             printf("\tsubgrid: off %lld,%lld,%lld\t siz %lld,%lld,%lld\t #NU %lld\n",(long long)offset1,(long long)offset2,(long long)offset3,(long long)size1,(long long)size2,(long long)size3,(long long)M0);
 	}
         // allocate output data for this subgrid
-        FLT *du0=(FLT*)malloc(sizeof(FLT)*2*size1*size2*size3); // complex
+        du0 = (decltype(du0)) realloc(du0, sizeof(FLT) * 2 * size1 * size2 * size3); // complex
 
         // Spread to subgrid without need for bounds checking or wrapping
         if (!(opts.flags & TF_OMIT_SPREADING)) {
@@ -422,14 +423,13 @@ int spreadSorted(BIGINT* sort_indices,BIGINT N1, BIGINT N2, BIGINT N3,
             add_wrapped_subgrid(offset1,offset2,offset3,size1,size2,size3,N1,N2,N3,data_uniform,du0);
           }
         }
-
-        // free up stuff from this subprob... (that was malloc'ed by hand)
-        free(dd0);
-        free(du0);
-        free(kx0);
-        if (N2>1) free(ky0);
-        if (N3>1) free(kz0);
       }     // end main loop over subprobs
+      // free up stuff from this subprob... (that was malloc'ed by hand)
+      free(dd0);
+      free(du0);
+      free(kx0);
+      if (N2>1) free(ky0);
+      if (N3>1) free(kz0);
       if (opts.debug) printf("\tt1 fancy spread: \t%.3g s (%d subprobs)\n",timer.elapsedsec(), nb);
     }   // end of choice of which t1 spread type to use
     return 0;
