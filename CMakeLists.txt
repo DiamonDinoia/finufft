@@ -31,6 +31,7 @@ option(FINUFFT_USE_OPENMP "Whether to use OpenMP for parallelization. If disable
 option(FINUFFT_USE_CUDA "Whether to build CUDA accelerated FINUFFT library (libcufinufft). This is completely independent of the main FINUFFT library" OFF)
 option(FINUFFT_USE_CPU "Whether to build the ordinary FINUFFT library (libfinufft)." ON)
 option(FINUFFT_STATIC_LINKING "Whether to link the static FINUFFT library (libfinufft_static)." ON)
+option(FINUFTT_BUILD_DEVEL "Whether to build developement executables" OFF)
 # sphinx tag (don't remove): @cmake_opts_end
 set(CPM_DOWNLOAD_VERSION 0.38.0)
 include(cmake/setupCPM.cmake)
@@ -250,6 +251,10 @@ endif ()
 
 if (FINUFFT_BUILD_MATLAB)
     add_subdirectory(matlab)
+endif ()
+
+if (FINUFTT_BUILD_DEVEL)
+    add_subdirectory(devel)
 endif ()
 
 include(GNUInstallDirs)

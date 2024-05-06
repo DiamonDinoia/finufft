@@ -60,8 +60,8 @@ void arrayrange(const BIGINT n, const FLT* a, FLT * __restrict__ lo, FLT *__rest
   *lo = INFINITY; *hi = -INFINITY;
 #pragma omp simd
   for (BIGINT m=0; m<n; ++m) {
-    *lo = (a[m]<*lo)  ?  a[m] : *lo;
-    *hi =(a[m]>*hi) ? a[m] : *hi;
+    *lo = (a[m]<*lo) ? a[m] : *lo;
+    *hi = (a[m]>*hi) ? a[m] : *hi;
   }
 }
 

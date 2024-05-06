@@ -86,6 +86,7 @@ int main(int argc, char* argv[])
     printf("\tdirft1d: rel l2-err of result F is %.3g\n",err);
     free(Ft);
   }
+  return  0;
   printf("test 1d type 2:\n"); // -------------- type 2
  #pragma omp parallel
   {

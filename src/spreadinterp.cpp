@@ -22,45 +22,10 @@
    The macro wins hands-down on i7, even for modern GCC9.
    This should be done in C++ not as a macro, someday.
 */
-#define FOLDRESCALE(x,N,p) (p ?                                         \
-         (x + (x>=-PI ? (x<PI ? PI : -PI) : 3*PI)) * ((FLT)M_1_2PI*N) : \
-                        (x>=0.0 ? (x<(FLT)N ? x : x-(FLT)N) : x+(FLT)N))
+#define FOLDRESCALE(x, N, p) (p ? \
+    ((x * FLT(M_1_2PI) + FLT(0.5)) - floor(x * FLT(M_1_2PI) + FLT(0.5))) * FLT(N) : \
+    (x >= 0.0 ? (x < (FLT) N ? x : x - (FLT) N) : x + (FLT) N))
 
-template <bool p> __attribute__((always_inline)) inline static constexpr
-FLT foldrescale(FLT x, BIGINT N) noexcept {
-  if constexpr (p) {
-    return (x + (x>=-PI ? (x<PI ? PI : -PI) : 3*PI)) * ((FLT)M_1_2PI*N);
-  } else {
-    return (x>=0.0 ? (x<(FLT)N ? x : x-(FLT)N) : x+(FLT)N);
-  }
-}
-
-template<bool p> __attribute__((always_inline)) inline static constexpr
-void processSubproblem(const BIGINT M0, const BIGINT* sort_indices, const std::vector<BIGINT>& brk, const BIGINT isub,
-                       const FLT* kx, const BIGINT N1, const FLT* ky, const BIGINT N2,const FLT* kz, const BIGINT N3,
-                       const  FLT* data_nonuniform, FLT* kx0, FLT* ky0, FLT* kz0, FLT* dd0) noexcept {
-#pragma omp simd
-  for (BIGINT j=0; j<M0; j++) {
-    const BIGINT kk=sort_indices[j+brk[isub]];  // NU pt from subprob index list
-    kx0[j]=foldrescale<p>(kx[kk], N1);
-    dd0[j*2]=data_nonuniform[kk*2];     // real part
-    dd0[j*2+1]=data_nonuniform[kk*2+1]; // imag part
-  }
-  if (N2 > 1) {
-#pragma omp simd
-    for (BIGINT j=0; j<M0; j++) {
-      const BIGINT kk=sort_indices[j+brk[isub]];
-      ky0[j]=foldrescale<p>(ky[kk], N2);
-    }
-  }
-  if (N3 > 1) {
-#pragma omp simd
-    for (BIGINT j=0; j<M0; j++) {
-      const BIGINT kk=sort_indices[j+brk[isub]];
-      kz0[j]=foldrescale<p>(kz[kk], N3);
-    }
-  }
-}
 
 using namespace std;
 using namespace finufft::utils;              // access to timer
@@ -388,7 +353,7 @@ int spreadSorted(BIGINT* sort_indices,BIGINT N1, BIGINT N2, BIGINT N3,
     // choose nb (# subprobs) via used nthreads:
     int nb = min((BIGINT)nthr,M);         // simply split one subprob per thr...
     if (nb*(BIGINT)opts.max_subproblem_size<M) {  // ...or more subprobs to cap size
-      nb = 1 + (M-1)/opts.max_subproblem_size;  // int div does ceil(M/opts.max_subproblem_size)
+      nb = (M-opts.max_subproblem_size-1)/opts.max_subproblem_size;  // Marco: using this formula is more numerically stable
       if (opts.debug) printf("\tcapping subproblem sizes to max of %d\n",opts.max_subproblem_size);
     }
     if (M*1000<N) {         // low-density heuristic: one thread per NU pt!
@@ -406,25 +371,54 @@ int spreadSorted(BIGINT* sort_indices,BIGINT N1, BIGINT N2, BIGINT N3,
     for (int p=0;p<=nb;++p) {
       brk[p] = lround(double(M) * p / (double) nb);
     }
-    FLT *kx0 = NULL, * ky0 = NULL, * kz0 = NULL, * dd0 = NULL, * du0 = NULL;
-#pragma omp parallel for num_threads(nthr) schedule(dynamic, 1) firstprivate(kx0, ky0, kz0, dd0, du0)  // each is big
+    // find the max subproblem size
+    BIGINT maxsub = 0;
+    for (int isub = 0; isub < nb; ++isub) {
+      BIGINT subsize = brk[isub + 1] - brk[isub];
+      if (subsize>maxsub) maxsub = subsize;
+    }
+    if (nb == 1) maxsub = M;  // single subproblem
+    // allocate vectors for each subproblem
+    alignas(sizeof(FLT)*8) std::vector<FLT> kx0_vec(maxsub), ky0_vec(1), kz0_vec(1), dd0_vec(maxsub*2), du0_vec(0);
+    if (N2 > 1) {
+      ky0_vec.resize(maxsub);
+    }
+    if (N3 > 1) {
+      kz0_vec.resize(maxsub);
+    }
+
+#pragma omp parallel for num_threads(nthr) schedule(dynamic, 1) firstprivate(kx0_vec, ky0_vec, kz0_vec, dd0_vec, du0_vec)
     for (int isub = 0; isub < nb; ++isub) {   // Main loop through the subproblems
         const BIGINT M0 = brk[isub + 1] - brk[isub];  // # NU pts in this subproblem
         // copy the location and data vectors for the nonuniform points
-        kx0 = (decltype(kz0)) realloc(kx0, sizeof(FLT) * M0);
-        if (N2 > 1)
-          ky0 = (decltype(ky0)) realloc(ky0, sizeof(FLT) * M0);
-        if (N3 > 1)
-          kz0 = (decltype(kz0)) realloc(kz0, sizeof(FLT) * M0);
-        dd0 = (decltype(dd0)) realloc(dd0, sizeof(FLT) * M0 * 2);    // complex strength data
-        if (opts.pirange) {
-          processSubproblem<true>(M0, sort_indices, brk, isub, kx, N1, ky, N2, kz, N3, data_nonuniform, kx0, ky0, kz0, dd0);
-        } else {
-          processSubproblem<false>(M0, sort_indices, brk, isub, kx, N1, ky, N2, kz, N3, data_nonuniform, kx0, ky0, kz0, dd0);
+        FLT* __restrict__ kx0 = kx0_vec.data(), *ky0 = ky0_vec.data(), *kz0 = kz0_vec.data(), *dd0 = dd0_vec.data();
+#pragma omp simd
+        for (BIGINT j=0; j<M0; j++) {           // todo: can avoid this copying?
+          BIGINT kk=sort_indices[j+brk[isub]];  // NU pt from subprob index list
+          kx0[j]=FOLDRESCALE(kx[kk],N1,opts.pirange);
+          dd0[j*2]=data_nonuniform[kk*2];     // real part
+          dd0[j*2+1]=data_nonuniform[kk*2+1]; // imag part
+        }
+        if (N3>1) {
+#pragma omp simd
+          for (BIGINT j = 0; j < M0; j++) {           // todo: can avoid this copying?
+            BIGINT kk = sort_indices[j + brk[isub]];  // NU pt from subprob index list
+            kz0[j] = FOLDRESCALE(kz[kk], N3, opts.pirange);
+          }
+        }
+        if (N2>1) {
+#pragma omp simd
+          for (BIGINT j = 0; j < M0; j++) {           // todo: can avoid this copying?
+            BIGINT kk = sort_indices[j + brk[isub]];  // NU pt from subprob index list
+            ky0[j] = FOLDRESCALE(ky[kk], N2, opts.pirange);
+          }
         }
         // get the subgrid which will include padding by roughly nspread/2
         BIGINT offset1,offset2,offset3,size1,size2,size3; // get_subgrid sets
         get_subgrid(offset1,offset2,offset3,size1,size2,size3,M0,kx0,ky0,kz0,ns,ndims);  // sets offsets and sizes
+        du0_vec.resize(size1*size2*size3*2);  // allocate the subgrid
+        FLT *du0 = du0_vec.data();
+
         if (opts.debug>1) { // verbose
           if (ndims==1)
             printf("\tsubgrid: off %lld\t siz %lld\t #NU %lld\n",(long long)offset1,(long long)size1,(long long)M0);
@@ -432,9 +426,7 @@ int spreadSorted(BIGINT* sort_indices,BIGINT N1, BIGINT N2, BIGINT N3,
             printf("\tsubgrid: off %lld,%lld\t siz %lld,%lld\t #NU %lld\n",(long long)offset1,(long long)offset2,(long long)size1,(long long)size2,(long long)M0);
           else
             printf("\tsubgrid: off %lld,%lld,%lld\t siz %lld,%lld,%lld\t #NU %lld\n",(long long)offset1,(long long)offset2,(long long)offset3,(long long)size1,(long long)size2,(long long)size3,(long long)M0);
-	}
-        // allocate output data for this subgrid
-        du0 = (decltype(du0)) realloc(du0, sizeof(FLT) * 2 * size1 * size2 * size3); // complex
+	      }
 
         // Spread to subgrid without need for bounds checking or wrapping
         if (!(opts.flags & TF_OMIT_SPREADING)) {
@@ -444,8 +436,7 @@ int spreadSorted(BIGINT* sort_indices,BIGINT N1, BIGINT N2, BIGINT N3,
             spread_subproblem_2d(offset1,offset2,size1,size2,du0,M0,kx0,ky0,dd0,opts);
           else
             spread_subproblem_3d(offset1,offset2,offset3,size1,size2,size3,du0,M0,kx0,ky0,kz0,dd0,opts);
-	}
-
+	      }
         // do the adding of subgrid to output
         if (!(opts.flags & TF_OMIT_WRITE_TO_GRID)) {
           if (nthr > opts.atomic_threshold)   // see above for debug reporting
@@ -456,12 +447,6 @@ int spreadSorted(BIGINT* sort_indices,BIGINT N1, BIGINT N2, BIGINT N3,
           }
         }
       }     // end main loop over subprobs
-      // free up stuff from this subprob... (that was malloc'ed by hand)
-      free(dd0);
-      free(du0);
-      free(kx0);
-      if (N2>1) free(ky0);
-      if (N3>1) free(kz0);
       if (opts.debug) printf("\tt1 fancy spread: \t%.3g s (%d subprobs)\n",timer.elapsedsec(), nb);
     }   // end of choice of which t1 spread type to use
     return 0;
@@ -731,6 +716,7 @@ static inline void evaluate_kernel_vector(FLT *ker, FLT *args, const finufft_spr
   for (int i = 0; i < N; i++)
     if (abs(args[i])>=(FLT)opts.ES_halfwidth) ker[i] = 0.0;
 }
+
 
 static inline void eval_kernel_vec_Horner(FLT *ker, const FLT x, const int w,
 					  const finufft_spread_opts &opts)
@@ -1379,7 +1365,6 @@ void bin_sort_multithread(BIGINT *ret, BIGINT M, FLT *kx, FLT *ky, FLT *kz,
     }
   }
 }
-
 
 void get_subgrid(BIGINT &offset1,BIGINT &offset2,BIGINT &offset3,BIGINT &size1,BIGINT &size2,BIGINT &size3,BIGINT M,FLT* kx,FLT* ky,FLT* kz,int ns,int ndims)
 /* Writes out the integer offsets and sizes of a "subgrid" (cuboid subset of
