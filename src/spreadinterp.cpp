@@ -10,6 +10,7 @@
 #include <vector>
 #include <math.h>
 #include <stdio.h>
+#include <cstring>
 
 
 /* local NU coord fold+rescale macro: does the following affine transform to x:
@@ -22,10 +23,9 @@
    The macro wins hands-down on i7, even for modern GCC9.
    This should be done in C++ not as a macro, someday.
 */
-#define FOLDRESCALE(x, N, p) (p ? \
-    ((x * FLT(M_1_2PI) + FLT(0.5)) - floor(x * FLT(M_1_2PI) + FLT(0.5))) * FLT(N) : \
-    (x >= 0.0 ? (x < (FLT) N ? x : x - (FLT) N) : x + (FLT) N))
-
+#define FOLDRESCALE(x, N, p) FLT(N) * (p ? \
+   ((x * FLT(M_1_2PI) + FLT(0.5)) - floor(x * FLT(M_1_2PI) + FLT(0.5))) : \
+    ((x/FLT(N))-floor(x/FLT(N))))
 
 using namespace std;
 using namespace finufft::utils;              // access to timer
@@ -332,6 +332,7 @@ int spreadSorted(BIGINT* sort_indices,BIGINT N1, BIGINT N2, BIGINT N3,
     printf("\tspread %dD (M=%lld; N1=%lld,N2=%lld,N3=%lld; pir=%d), nthr=%d\n",ndims,(long long)M,(long long)N1,(long long)N2,(long long)N3,opts.pirange,nthr);
 
   timer.start();
+//  std::memset(data_uniform,0,N*2*sizeof(FLT));  // zero the output array
   for (BIGINT i=0; i<2*N; i++) // zero the output array. std::fill is no faster
     data_uniform[i]=0.0;
   if (opts.debug) printf("\tzero output array\t%.3g s\n",timer.elapsedsec());

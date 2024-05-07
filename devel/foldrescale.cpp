@@ -3,7 +3,8 @@
 #include <iostream>
 #include <random>
 #include <cmath>
-
+// no vectorize
+#pragma GCC optimize("no-tree-vectorize")
 /* local NU coord fold+rescale macro: does the following affine transform to x:
      when p=true:   map [-3pi,-pi) and [-pi,pi) and [pi,3pi)    each to [0,N)
      otherwise,     map [-N,0) and [0,N) and [N,2N)             each to [0,N)
@@ -20,18 +21,27 @@
 
 
 #define FOLDRESCALE04(x, N, p) (p ? \
-    ((x * FLT(M_1_2PI) + FLT(0.5)) - floor(x * FLT(M_1_2PI) + FLT(0.5))) * FLT(N) : \
-    (x >= 0.0 ? (x < (FLT) N ? x : x - (FLT) N) : x + (FLT) N))
+   ((x * FLT(M_1_2PI) + FLT(0.5)) - floor(x * FLT(M_1_2PI) + FLT(0.5)))  * FLT(N) : \
+    ((x/FLT(N))-floor(x/FLT(N)))*FLT(N))
+
+#define FOLDRESCALE05(x, N, p) FLT(N) * (p ? \
+   ((x * FLT(M_1_2PI) + FLT(0.5)) - floor(x * FLT(M_1_2PI) + FLT(0.5))) : \
+    ((x/FLT(N))-floor(x/FLT(N))))
 
 inline __attribute__((always_inline))
 FLT foldRescale00(FLT x, BIGINT N, bool p) {
   FLT result;
+  FLT fN = FLT(N);
   if (p) {
-    result = (x + (x >= -PI ? (x < PI ? PI : -PI) : 3 * PI)) * ((FLT) M_1_2PI * N);
+    static constexpr FLT x2pi = FLT(M_1_2PI);
+    result = x * x2pi + FLT(0.5);
+    result -= floor(result);
   } else {
-    result = (x >= 0.0 ? (x < (FLT) N ? x : x - (FLT) N) : x + (FLT) N);
+    const FLT invN = FLT(1.0) / fN;
+    result = x * invN;
+    result -= floor(result);
   }
-  return result;
+  return result * fN;
 }
 
 inline __attribute__((always_inline))
@@ -53,20 +63,24 @@ FLT foldRescale02(FLT x, BIGINT N) {
 template<bool p>
 inline __attribute__((always_inline))
 FLT foldRescale03(FLT x, BIGINT N) {
+  FLT result;
+  FLT fN = FLT(N);
   if constexpr (p) {
     static constexpr FLT x2pi = FLT(M_1_2PI);
-    FLT tmp = x * x2pi + FLT(0.5);
-    tmp -= floor(tmp);
-    return tmp * FLT(N);
+    result = x * x2pi + FLT(0.5);
+    result -= floor(result);
   } else {
-    return (x >= 0.0 ? (x < (FLT) N ? x : x - (FLT) N) : x + (FLT) N);
+    const FLT invN = FLT(1.0) / fN;
+    result = x * invN;
+    result -= floor(result);
   }
+  return result * fN;
 }
 
 static std::mt19937_64 gen;
 static std::uniform_real_distribution<> dis(-3 * M_PI, 3 * M_PI);
 static const auto N = std::uniform_int_distribution<>{0, 1000}(gen);
-static std::uniform_real_distribution<> disN(0  , 2*N);
+static std::uniform_real_distribution<> disN(-N, 2*N);
 static volatile auto pirange = true;
 static volatile auto notPirange = !pirange;
 
@@ -165,6 +179,20 @@ static void BM_FoldRescale04N(benchmark::State &state) {
   }
 }
 
+static void BM_FoldRescale05(benchmark::State &state) {
+  for (auto _: state) {
+    FLT x = dis(gen);
+    benchmark::DoNotOptimize(FOLDRESCALE05(x, N, pirange));
+  }
+}
+
+static void BM_FoldRescale05N(benchmark::State &state) {
+  for (auto _: state) {
+    FLT x = disN(gen);
+    benchmark::DoNotOptimize(FOLDRESCALE05(x, N, notPirange));
+  }
+}
+
 
 BENCHMARK(BM_BASELINE);
 
@@ -174,6 +202,7 @@ BENCHMARK(BM_FoldRescale01);
 BENCHMARK(BM_FoldRescale02);
 BENCHMARK(BM_FoldRescale03);
 BENCHMARK(BM_FoldRescale04);
+BENCHMARK(BM_FoldRescale05);
 
 BENCHMARK(BM_FoldRescaleMacroN);
 BENCHMARK(BM_FoldRescale00N);
@@ -181,6 +210,7 @@ BENCHMARK(BM_FoldRescale01N);
 BENCHMARK(BM_FoldRescale02N);
 BENCHMARK(BM_FoldRescale03N);
 BENCHMARK(BM_FoldRescale04N);
+BENCHMARK(BM_FoldRescale05N);
 
 void testFoldRescaleFunctions() {
   for (bool p: {true, false}) {
@@ -191,6 +221,8 @@ void testFoldRescaleFunctions() {
       FLT result01 = foldRescale01(x, N, p);
       FLT result02 = p ? foldRescale02<true>(x, N) : foldRescale02<false>(x, N);
       FLT result03 = p ? foldRescale03<true>(x, N) : foldRescale03<false>(x, N);
+      FLT result04 = FOLDRESCALE04(x, N, p);
+      FLT result05 = FOLDRESCALE05(x, N, p);
       // function that compares two floating point number with a tolerance, using relative error
       auto compare = [](FLT a, FLT b) {
         return std::abs(a - b) > std::max(std::abs(a), std::abs(b)) * 10e-13;
@@ -211,6 +243,14 @@ void testFoldRescaleFunctions() {
       if (compare(resultMacro, result03)) {
         std::cout << "resultMacro: " << resultMacro << " result03: " << result03 << std::endl;
         throw std::runtime_error("function03 is wrong");
+      }
+      if (compare(resultMacro, result04)) {
+        std::cout << "resultMacro: " << resultMacro << " result04: " << result04 << std::endl;
+        throw std::runtime_error("function04 is wrong");
+      }
+      if (compare(resultMacro, result05)) {
+        std::cout << "resultMacro: " << resultMacro << " result05: " << result05 << std::endl;
+        throw std::runtime_error("function05 is wrong");
       }
     }
   }
