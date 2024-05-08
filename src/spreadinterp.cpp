@@ -1270,7 +1270,7 @@ void bin_sort_singlethread(BIGINT *ret, BIGINT M, FLT *kx, FLT *ky, FLT *kz,
   std::vector<BIGINT> counts(nbins,0);  // count how many pts in each bin
   for (BIGINT i=0; i<M; i++) {
     // find the bin index in however many dims are needed
-    BIGINT i1=FOLDRESCALE(kx[i],N1,pirange)/bin_size_x, i2=0, i3=0;
+    BIGINT i1=FOLDRESCALE(kx[i],N1,pirange)/bin_size_x, ifin  2=0, i3=0;
     if (isky) i2 = FOLDRESCALE(ky[i],N2,pirange)/bin_size_y;
     if (iskz) i3 = FOLDRESCALE(kz[i],N3,pirange)/bin_size_z;
     BIGINT bin = i1+nbins1*(i2+nbins2*i3);
