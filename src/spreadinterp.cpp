@@ -254,6 +254,7 @@ int indexSort(BIGINT* sort_indices, BIGINT N1, BIGINT N2, BIGINT N3, BIGINT M,
    Barnett 2017; split out by Melody Shih, Jun 2018.
 */
 {
+  CALLGRAPH_MEASURE();
   CNTime timer;
   int ndims = ndims_from_Ns(N1,N2,N3);
   BIGINT N=N1*N2*N3;            // U grid (periodic box) sizes
@@ -1270,7 +1271,7 @@ void bin_sort_singlethread(BIGINT *ret, BIGINT M, FLT *kx, FLT *ky, FLT *kz,
   std::vector<BIGINT> counts(nbins,0);  // count how many pts in each bin
   for (BIGINT i=0; i<M; i++) {
     // find the bin index in however many dims are needed
-    BIGINT i1=FOLDRESCALE(kx[i],N1,pirange)/bin_size_x, ifin  2=0, i3=0;
+    BIGINT i1=FOLDRESCALE(kx[i],N1,pirange)/bin_size_x, i2=0, i3=0;
     if (isky) i2 = FOLDRESCALE(ky[i],N2,pirange)/bin_size_y;
     if (iskz) i3 = FOLDRESCALE(kz[i],N3,pirange)/bin_size_z;
     BIGINT bin = i1+nbins1*(i2+nbins2*i3);
@@ -1329,17 +1330,20 @@ void bin_sort_multithread(BIGINT *ret, BIGINT M, FLT *kx, FLT *ky, FLT *kz,
 
 #pragma omp parallel num_threads(nt)
   {  // parallel binning to each thread's count. Block done once per thread
-    int t = MY_OMP_GET_THREAD_NUM();     // (we assume all nt threads created)
-    auto &my_counts(counts[t]);          // name for counts[t]
-    my_counts.resize(nbins,0);  // allocate counts[t], now in parallel region
+    std::vector<BIGINT> my_counts(nbins, 0);  // name for counts[t]
+    const auto t = MY_OMP_GET_THREAD_NUM();     // (we assume all nt threads created)
+    const auto inv_bin_size_x = 1.0/bin_size_x;
+    const auto inv_bin_size_y = 1.0/(isky ? bin_size_y : 1.0);
+    const auto inv_bin_size_z = 1.0/(iskz ? bin_size_z : 1.0);
     for (BIGINT i=brk[t]; i<brk[t+1]; i++) {
       // find the bin index in however many dims are needed
-      BIGINT i1=FOLDRESCALE(kx[i],N1,pirange)/bin_size_x, i2=0, i3=0;
-      if (isky) i2 = FOLDRESCALE(ky[i],N2,pirange)/bin_size_y;
-      if (iskz) i3 = FOLDRESCALE(kz[i],N3,pirange)/bin_size_z;
+      BIGINT i1=FOLDRESCALE(kx[i],N1,pirange)*inv_bin_size_x, i2=0, i3=0;
+      if (isky) i2 = FOLDRESCALE(ky[i],N2,pirange)*inv_bin_size_y;
+      if (iskz) i3 = FOLDRESCALE(kz[i],N3,pirange)*inv_bin_size_z;
       BIGINT bin = i1+nbins1*(i2+nbins2*i3);
       ++my_counts[bin];               // no clash btw threads
     }
+    counts[t] = std::move(my_counts);
   }
 
   // inner sum along both bin and thread (inner) axes to get global offsets
