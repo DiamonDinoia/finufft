@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.19)
 
 project(finufft VERSION 2.2.0 LANGUAGES C CXX)
 
+add_compile_options(-gdwarf -fno-omit-frame-pointer)
+
 set(GNU_LIKE_FRONTENDS AppleClang Clang GNU)
 if(CMAKE_CXX_COMPILER_ID IN_LIST GNU_LIKE_FRONTENDS)
     # Set custom compiler flags for gcc-compatible compilers

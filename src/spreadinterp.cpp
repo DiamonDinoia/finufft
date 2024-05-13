@@ -23,9 +23,8 @@
    The macro wins hands-down on i7, even for modern GCC9.
    This should be done in C++ not as a macro, someday.
 */
-#define FOLDRESCALE(x, N, p) FLT(N) * (p ? \
-   ((x * FLT(M_1_2PI) + FLT(0.5)) - floor(x * FLT(M_1_2PI) + FLT(0.5))) : \
-    ((x/FLT(N))-floor(x/FLT(N))))
+#define FOLDRESCALE(x, N, p) FLT(N) * \
+   ((x * FLT(M_1_2PI) + FLT(0.5)) - floor(x * FLT(M_1_2PI) + FLT(0.5)))
 
 using namespace std;
 using namespace finufft::utils;              // access to timer
@@ -1314,7 +1313,10 @@ void bin_sort_multithread(BIGINT *ret, BIGINT M, FLT *kx, FLT *ky, FLT *kz,
   BIGINT nbins1=N1/bin_size_x+1, nbins2, nbins3;  // see above note on why +1
   nbins2 = isky ? N2/bin_size_y+1 : 1;
   nbins3 = iskz ? N3/bin_size_z+1 : 1;
-  BIGINT nbins = nbins1*nbins2*nbins3;
+  const auto inv_bin_size_x = 1.0/bin_size_x;
+  const auto inv_bin_size_y = isky ? 1.0/bin_size_y : 1.0;
+  const auto inv_bin_size_z = iskz ? 1.0/bin_size_z : 1.0;
+  const auto nbins = nbins1*nbins2*nbins3;
   if (nthr==0)
     fprintf(stderr,"[%s] nthr (%d) must be positive!\n",__func__,nthr);
   int nt = min(M,(BIGINT)nthr);     // handle case of less points than threads
@@ -1322,7 +1324,7 @@ void bin_sort_multithread(BIGINT *ret, BIGINT M, FLT *kx, FLT *ky, FLT *kz,
 
   // distribute the NU pts to threads once & for all...
   for (int t=0; t<=nt; ++t)
-    brk[t] = (BIGINT)(0.5 + M*t/(double)nt);   // start index for t'th chunk
+    brk[t] = lround(M*t/(double)nt);   // start index for t'th chunk
 
   // set up 2d array (nthreads * nbins), just its pointers for now
   // (sub-vectors will be initialized later)
@@ -1330,18 +1332,36 @@ void bin_sort_multithread(BIGINT *ret, BIGINT M, FLT *kx, FLT *ky, FLT *kz,
 
 #pragma omp parallel num_threads(nt)
   {  // parallel binning to each thread's count. Block done once per thread
-    std::vector<BIGINT> my_counts(nbins, 0);  // name for counts[t]
+    alignas(sizeof(BIGINT)*8) std::vector<BIGINT> my_counts(nbins, 0);  // name for counts[t]
     const auto t = MY_OMP_GET_THREAD_NUM();     // (we assume all nt threads created)
-    const auto inv_bin_size_x = 1.0/bin_size_x;
-    const auto inv_bin_size_y = 1.0/(isky ? bin_size_y : 1.0);
-    const auto inv_bin_size_z = 1.0/(iskz ? bin_size_z : 1.0);
-    for (BIGINT i=brk[t]; i<brk[t+1]; i++) {
-      // find the bin index in however many dims are needed
-      BIGINT i1=FOLDRESCALE(kx[i],N1,pirange)*inv_bin_size_x, i2=0, i3=0;
-      if (isky) i2 = FOLDRESCALE(ky[i],N2,pirange)*inv_bin_size_y;
-      if (iskz) i3 = FOLDRESCALE(kz[i],N3,pirange)*inv_bin_size_z;
-      BIGINT bin = i1+nbins1*(i2+nbins2*i3);
-      ++my_counts[bin];               // no clash btw threads
+
+    if (iskz) {
+#pragma omp simd
+      for (BIGINT i = brk[t]; i < brk[t + 1]; i++) {
+        // find the bin index in however many dims are needed
+        BIGINT i1 = FOLDRESCALE(kx[i], N1, pirange) * inv_bin_size_x;
+        BIGINT i2 = FOLDRESCALE(ky[i], N2, pirange) * inv_bin_size_y;
+        BIGINT i3 = FOLDRESCALE(kz[i], N3, pirange) * inv_bin_size_z;
+        BIGINT bin = i1 + nbins1 * (i2 + nbins2 * i3);
+        ++my_counts[bin];               // no clash btw threads
+      }
+    } else if (isky) {
+#pragma omp simd
+      for (BIGINT i = brk[t]; i < brk[t + 1]; i++) {
+        // find the bin index in however many dims are needed
+        BIGINT i1 = FOLDRESCALE(kx[i], N1, pirange) * inv_bin_size_x;
+        BIGINT i2 = FOLDRESCALE(ky[i], N2, pirange) * inv_bin_size_y;
+        BIGINT bin = i1 + nbins1 * i2;
+        ++my_counts[bin];               // no clash btw threads
+      }
+    } else {
+#pragma omp simd
+        for (BIGINT i = brk[t]; i < brk[t + 1]; i++) {
+          // find the bin index in however many dims are needed
+          BIGINT i1 = FOLDRESCALE(kx[i], N1, pirange) * inv_bin_size_x;
+          BIGINT bin = i1 + nbins1;
+          ++my_counts[bin];               // no clash btw threads
+        }
     }
     counts[t] = std::move(my_counts);
   }
@@ -1356,19 +1376,41 @@ void bin_sort_multithread(BIGINT *ret, BIGINT M, FLT *kx, FLT *ky, FLT *kz,
     }   // counts[t][b] is now the index offset as if t ordered fast, b slow
 
 #pragma omp parallel num_threads(nt)
-  {
-    int t = MY_OMP_GET_THREAD_NUM();
-    auto &my_counts(counts[t]);
-    for (BIGINT i=brk[t]; i<brk[t+1]; i++) {
-      // find the bin index (again! but better than using RAM)
-      BIGINT i1=FOLDRESCALE(kx[i],N1,pirange)/bin_size_x, i2=0, i3=0;
-      if (isky) i2 = FOLDRESCALE(ky[i],N2,pirange)/bin_size_y;
-      if (iskz) i3 = FOLDRESCALE(kz[i],N3,pirange)/bin_size_z;
-      BIGINT bin = i1+nbins1*(i2+nbins2*i3);
-      ret[my_counts[bin]] = i;   // inverse is offset for this NU pt and thread
-      ++my_counts[bin];          // update the offsets; no thread clash
-    }
-  }
+      {
+        const auto t = MY_OMP_GET_THREAD_NUM();
+        auto &my_counts(counts[t]);
+        if (iskz) {
+#pragma omp simd
+          for (BIGINT i = brk[t]; i < brk[t + 1]; i++) {
+            // find the bin index in however many dims are needed
+            const BIGINT i1 = FOLDRESCALE(kx[i], N1, pirange) * inv_bin_size_x;
+            const BIGINT i2 = FOLDRESCALE(ky[i], N2, pirange) * inv_bin_size_y;
+            const BIGINT i3 = FOLDRESCALE(kz[i], N3, pirange) * inv_bin_size_z;
+            const BIGINT bin = i1 + nbins1 * (i2 + nbins2 * i3);
+            ret[my_counts[bin]] = i;   // inverse is offset for this NU pt and thread
+            ++my_counts[bin];          // update the offsets; no thread clash
+          }
+        } else if (isky) {
+#pragma omp simd
+          for (BIGINT i = brk[t]; i < brk[t + 1]; i++) {
+            // find the bin index in however many dims are needed
+            const BIGINT i1 = FOLDRESCALE(kx[i], N1, pirange) * inv_bin_size_x;
+            const BIGINT i2 = FOLDRESCALE(ky[i], N2, pirange) * inv_bin_size_y;
+            const BIGINT bin = i1 + nbins1 * i2;
+            ret[my_counts[bin]] = i;   // inverse is offset for this NU pt and thread
+            ++my_counts[bin];          // update the offsets; no thread clash
+          }
+        } else {
+#pragma omp simd
+          for (BIGINT i = brk[t]; i < brk[t + 1]; i++) {
+            // find the bin index in however many dims are needed
+            BIGINT i1 = FOLDRESCALE(kx[i], N1, pirange) * inv_bin_size_x;
+            BIGINT bin = i1 + nbins1;
+            ret[my_counts[bin]] = i;   // inverse is offset for this NU pt and thread
+            ++my_counts[bin];          // update the offsets; no thread clash
+          }
+        }
+      }
 }
 
 void get_subgrid(BIGINT &offset1,BIGINT &offset2,BIGINT &offset3,BIGINT &size1,BIGINT &size2,BIGINT &size3,BIGINT M,FLT* kx,FLT* ky,FLT* kz,int ns,int ndims)
