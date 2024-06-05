@@ -731,14 +731,11 @@ Two upsampfacs implemented. Params must match ref formula. Barnett 4/24/18 */
     static constexpr const auto padded_ns = (w + avx_size - 1) & ~(avx_size - 1);
     alignas(alignment) static constexpr const auto ci = pad_2D_array_with_zeros<FLT, nc, w, padded_ns>(get_horner_coeffs<FLT, w, nc>());
     alignas(alignment) const std::array<batch_t, nc-1> zs = [](const FLT z) noexcept {
-      std::array<FLT, nc-1> zs{};
-      zs[0] = z;
-      for (uint8_t i = 1; i < nc - 1; ++i) {
-        zs[i] = zs[i - 1] * z;
-      }
       std::array<batch_t, nc-1> zs_v{};
+      auto sz = z;
       for (uint8_t i = 0; i < nc - 1; ++i) {
-        zs_v[i] = batch_t(zs[i]);
+        zs_v[i] = batch_t(sz);
+        sz *= z;
       }
       return zs_v;
     }(z);
