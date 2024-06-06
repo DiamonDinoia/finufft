@@ -5,19 +5,18 @@
 #ifndef FINUFFT_OPTS_H
 #define FINUFFT_OPTS_H
 
-
-typedef struct finufft_opts{  // defaults see finufft.cpp:finufft_default_opts()
+typedef struct finufft_opts { // defaults see finufft.cpp:finufft_default_opts()
   // sphinx tag (don't remove): @opts_start
   // FINUFFT options:
   // data handling opts...
-  int modeord;            // (type 1,2 only): 0 CMCL-style increasing mode order
-                          //                  1 FFT-style mode order
-  int chkbnds;            // [DEPRECATED] 0 don't check NU pts in [-3pi,3pi), 1 do (<few % slower)
-  
+  int modeord; // (type 1,2 only): 0 CMCL-style increasing mode order
+               //                  1 FFT-style mode order
+  int chkbnds; // [DEPRECATED] 0 don't check NU pts in [-3pi,3pi), 1 do (<few % slower)
+
   // diagnostic opts...
-  int debug;              // 0 silent, 1 some timing/debug, or 2 more
-  int spread_debug;       // spreader: 0 silent, 1 some timing/debug, or 2 tonnes
-  int showwarn;           // 0 don't print warnings to stderr, 1 do
+  int debug;        // 0 silent, 1 some timing/debug, or 2 more
+  int spread_debug; // spreader: 0 silent, 1 some timing/debug, or 2 tonnes
+  int showwarn;     // 0 don't print warnings to stderr, 1 do
 
   // algorithm performance opts...
   int nthreads;           // number of threads to use, or 0 uses all available
@@ -38,14 +37,20 @@ typedef struct finufft_opts{  // defaults see finufft.cpp:finufft_default_opts()
 
 // define deprecated opts macro
 #if defined(__cplusplus) && (__cplusplus >= 201402L)
-#define DEPRECATED_OPTS [[deprecated ("as of v2.1.0, nufft_opts is obsolete and renamed finufft_opts; please use this instead.")]]
+#define DEPRECATED_OPTS                                                                 \
+  [[deprecated("as of v2.1.0, nufft_opts is obsolete and renamed finufft_opts; please " \
+               "use this instead.")]]
 #elif defined(_MSC_VER)
-#define DEPRECATED_OPTS __declspec(deprecated("as of v2.1.0, nufft_opts is obsolete and renamed finufft_opts; please use this instead."))
+#define DEPRECATED_OPTS                                                     \
+  __declspec(deprecated("as of v2.1.0, nufft_opts is obsolete and renamed " \
+                        "finufft_opts; please use this instead."))
 #else
-#define DEPRECATED_OPTS __attribute__((deprecated("as of v2.1.0, nufft_opts is obsolete and renamed finufft_opts; please use this instead.")))
+#define DEPRECATED_OPTS                                                         \
+  __attribute__((deprecated("as of v2.1.0, nufft_opts is obsolete and renamed " \
+                            "finufft_opts; please use this instead.")))
 #endif
 
 // Backwards-compatibility
 DEPRECATED_OPTS typedef finufft_opts nufft_opts;
 
-#endif  // FINUFFT_OPTS_H
+#endif // FINUFFT_OPTS_H

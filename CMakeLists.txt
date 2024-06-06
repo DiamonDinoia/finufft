@@ -5,22 +5,22 @@ project(finufft VERSION 2.2.0 LANGUAGES C CXX)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(GNU_LIKE_FRONTENDS AppleClang Clang GNU)
-if(CMAKE_CXX_COMPILER_ID IN_LIST GNU_LIKE_FRONTENDS)
+if (CMAKE_CXX_COMPILER_ID IN_LIST GNU_LIKE_FRONTENDS)
     # Set custom compiler flags for gcc-compatible compilers
     set(FINUFFT_CXX_FLAGS_RELEASE -funroll-loops -ffp-contract=fast)
     set(FINUFFT_CXX_FLAGS_RELWITHDEBINFO -O3 -g -DNDEBUG ${FINUFFT_CXX_FLAGS_RELEASE})
-endif()
+endif ()
 
 include(CTest)
 
 if (CMAKE_CXX_COMPILER_ID IN_LIST GNU_LIKE_FRONTENDS)
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc|ppc64|powerpc|powerpc64" OR (APPLE AND CMAKE_OSX_ARCHITECTURES MATCHES "ppc|ppc64"))
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "ppc|ppc64|powerpc|powerpc64" OR (APPLE AND CMAKE_OSX_ARCHITECTURES MATCHES "ppc|ppc64"))
         # PowerPC arch does not have -march flag.
         set(FINUFFT_ARCH_FLAGS "-mtune=native" CACHE STRING "Compiler flags for specifying target architecture.")
-    else()
+    else ()
         set(FINUFFT_ARCH_FLAGS "-march=native" CACHE STRING "Compiler flags for specifying target architecture.")
-    endif()
-endif()
+    endif ()
+endif ()
 set(FINUFFT_FFTW_SUFFIX "OpenMP" CACHE STRING "Suffix for FFTW libraries (e.g. OpenMP, Threads etc.)")
 set(FINUFFT_FFTW_LIBRARIES "DEFAULT" CACHE STRING "Specify a custom FFTW library")
 
@@ -38,16 +38,16 @@ option(FINUFFT_STATIC_LINKING "Whether to link the static FINUFFT library (libfi
 option(FINUFFT_BUILD_DEVEL "Whether to build development executables" OFF)
 # sphinx tag (don't remove): @cmake_opts_end
 
-if(FINUFFT_USE_CPU)
+if (FINUFFT_USE_CPU)
     # suppress Windows warnings about "unsafe" functions
-    if(WIN32)
+    if (WIN32)
         add_definitions(-D_CRT_SECURE_NO_WARNINGS)
-    endif()
+    endif ()
 
     # make apple with gnu use old linker, new linker breaks, see issue #360
-    if((APPLE) AND (CMAKE_CXX_COMPILER_ID STREQUAL "GNU"))
+    if ((APPLE) AND (CMAKE_CXX_COMPILER_ID STREQUAL "GNU"))
         add_link_options("-ld64")
-    endif()
+    endif ()
 
     set(CPM_DOWNLOAD_VERSION 0.38.0)
     set(FFTW_VERSION 3.3.10)
@@ -56,7 +56,7 @@ if(FINUFFT_USE_CPU)
     include(cmake/setupCPM.cmake)
     include(cmake/setupFFTW.cmake)
     include(cmake/setupXSIMD.cmake)
-endif()
+endif ()
 
 if (FINUFFT_BUILD_MATLAB)
     # When building for matlab, we will fetch the OpenMP library used by matlab
@@ -104,20 +104,20 @@ endfunction()
 
 # Utility function to link static/dynamic lib
 function(finufft_link_test target)
-    if(FINUFFT_STATIC_LINKING)
+    if (FINUFFT_STATIC_LINKING)
         target_link_libraries(${target} PRIVATE finufft_static)
-        if(FINUFFT_USE_OPENMP)
+        if (FINUFFT_USE_OPENMP)
             target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX)
-            if(WIN32)
+            if (WIN32)
                 target_link_options(${target} PRIVATE ${OpenMP_CXX_FLAGS})
-            endif()
-        endif()
-    else()
+            endif ()
+        endif ()
+    else ()
         target_link_libraries(${target} PRIVATE finufft)
-        if(WIN32)
+        if (WIN32)
             target_compile_definitions(${target} PRIVATE FINUFFT_DLL)
-        endif()
-    endif()
+        endif ()
+    endif ()
     enable_asan(${target})
 endfunction()
 
@@ -140,9 +140,9 @@ function(set_finufft_options target)
         target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX)
         # there are issues on windows with OpenMP and CMake, so we need to manually add the flags
         # otherwise there are link errors
-        if(WIN32)
+        if (WIN32)
             target_link_options(${target} PRIVATE ${OpenMP_CXX_FLAGS})
-        endif()
+        endif ()
     else ()
         if (CMAKE_CXX_COMPILER_ID IN_LIST FINUFFT_GNU_LIKE_COMPILERS)
             # OpenMP disabled, suppress unknown pragma warnings to avoid spam.
@@ -154,16 +154,16 @@ function(set_finufft_options target)
     # include them since we need them for build not for install
     # trying to include them directly into the fftw and fftwf targets causes issues with
     # the latest version of cmake, so we do it here instead.
-    if ( (NOT FFTW_FOUND ) OR (FINUFFT_FFTW_LIBRARIES STREQUAL DOWNLOAD))
-        list (GET FINUFFT_FFTW_LIBRARIES 0 element)
+    if ((NOT FFTW_FOUND) OR (FINUFFT_FFTW_LIBRARIES STREQUAL DOWNLOAD))
+        list(GET FINUFFT_FFTW_LIBRARIES 0 element)
         get_property(FFTW_SOURCE_DIR TARGET ${element} PROPERTY SOURCE_DIR)
         set(FFTW_INCLUDE_DIR ${FFTW_SOURCE_DIR}/api)
         target_include_directories(${target} PUBLIC ${FFTW_INCLUDE_DIR})
-    endif()
+    endif ()
 
 endfunction()
 
-if(FINUFFT_USE_CPU)
+if (FINUFFT_USE_CPU)
     # Main finufft libraries
     add_library(finufft_f32 OBJECT ${FINUFFT_PRECISION_DEPENDENT_SOURCES})
     target_compile_definitions(finufft_f32 PRIVATE SINGLE)
@@ -176,7 +176,7 @@ if(FINUFFT_USE_CPU)
     set_finufft_options(finufft_f64)
     target_link_libraries(finufft_f64 PUBLIC ${FINUFFT_FFTW_LIBRARIES})
     target_link_libraries(finufft_f64 PRIVATE xsimd)
-    if(WIN32)
+    if (WIN32)
         add_library(finufft_f32_dll OBJECT ${FINUFFT_PRECISION_DEPENDENT_SOURCES})
         target_compile_definitions(finufft_f32_dll PRIVATE SINGLE dll_EXPORTS FINUFFT_DLL)
         set_finufft_options(finufft_f32_dll)
@@ -186,43 +186,43 @@ if(FINUFFT_USE_CPU)
         target_compile_definitions(finufft_f64_dll PRIVATE dll_EXPORTS FINUFFT_DLL)
         set_finufft_options(finufft_f64_dll)
         target_link_libraries(finufft_f64_dll PUBLIC ${FINUFFT_FFTW_LIBRARIES})
-    endif()
+    endif ()
 
     add_library(finufft SHARED src/utils_precindep.cpp contrib/legendre_rule_fast.cpp)
     target_compile_definitions(finufft PRIVATE dll_EXPORTS FINUFFT_DLL)
     set_finufft_options(finufft)
-    if(NOT WIN32)
+    if (NOT WIN32)
         target_link_libraries(finufft PUBLIC finufft_f32 finufft_f64)
-    else()
+    else ()
         target_link_libraries(finufft PUBLIC finufft_f32_dll finufft_f64_dll)
-    endif()
+    endif ()
     # windows does not have a math library, so we need to exclude it
-    if(NOT WIN32)
+    if (NOT WIN32)
         target_link_libraries(finufft PUBLIC m)
-    endif()
+    endif ()
     target_include_directories(finufft PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
     add_library(finufft_static STATIC src/utils_precindep.cpp contrib/legendre_rule_fast.cpp)
     set_finufft_options(finufft_static)
     target_link_libraries(finufft_static PUBLIC finufft_f32 finufft_f64)
     # windows does not have a math library, so we need to exclude it
-    if(NOT WIN32)
+    if (NOT WIN32)
         target_link_libraries(finufft_static PUBLIC m)
-    endif()
+    endif ()
     target_include_directories(finufft_static PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
     file(GLOB FINUFFT_PUBLIC_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include/finufft*.h")
     set_target_properties(finufft PROPERTIES PUBLIC_HEADER "${FINUFFT_PUBLIC_HEADERS}")
 
     list(APPEND INSTALL_TARGETS finufft finufft_static)
-endif()
+endif ()
 
-if(FINUFFT_USE_CUDA)
-    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+if (FINUFFT_USE_CUDA)
+    if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
         message("FINUFFT WARNING: No CUDA architecture supplied via '-DCMAKE_CUDA_ARCHITECTURES=...', defaulting to '60;70;75;'")
         message("See: https://developer.nvidia.com/cuda-gpus for more details on what architecture to supply.")
         set(CMAKE_CUDA_ARCHITECTURES "60;70;75" CACHE STRING "" FORCE)
-    endif()
+    endif ()
     enable_language(CUDA)
     find_package(CUDAToolkit REQUIRED)
     add_subdirectory(src/cuda)
@@ -231,7 +231,7 @@ if(FINUFFT_USE_CUDA)
     endif ()
 
     list(APPEND INSTALL_TARGETS cufinufft cufinufft_static)
-endif()
+endif ()
 
 # Add tests defined in their own directory
 if (BUILD_TESTING AND FINUFFT_BUILD_TESTS AND FINUFFT_USE_CPU)
@@ -278,7 +278,7 @@ if (FINUFFT_USE_CPU)
         install(FILES ${PROJECT_SOURCE_DIR}/include/finufft.fh
                 DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         )
-    endif()
+    endif ()
 endif ()
 if (FINUFFT_USE_CUDA)
     install(DIRECTORY ${PROJECT_SOURCE_DIR}/examples/cuda
@@ -286,4 +286,4 @@ if (FINUFFT_USE_CUDA)
             PATTERN "README" EXCLUDE
             PATTERN "CMakeLists.txt" EXCLUDE
     )
-endif()
+endif ()
