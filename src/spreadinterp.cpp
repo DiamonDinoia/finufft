@@ -817,64 +817,50 @@ void interp_line(FLT *FINUFFT_RESTRICT target, const FLT *du, const FLT *ker,
    Barnett 6/16/17.
 */
 {
+  using arch_t                       = typename simd_type::arch_type;
+  static constexpr auto padding      = get_padding<FLT, 2 * ns>();
+  static constexpr auto alignment    = arch_t::alignment();
+  static constexpr auto simd_size    = simd_type::size;
+  static constexpr auto regular_part = (2 * ns + padding) & (-(2 * simd_size));
   std::array<FLT, 2> out{0};
-  BIGINT j = i1;
-  if (FINUFFT_UNLIKELY(i1 < 0)) { // wraps at left
-    j += N1;
-    for (UBIGINT dx = 0; dx < -i1; ++dx, ++j) {
-      out[0] = xsimd::fma(du[2 * j], ker[dx], out[0]);
-      out[1] = xsimd::fma(du[2 * j + 1], ker[dx], out[1]);
-    }
-    j -= N1;
-    for (UBIGINT dx = -i1; dx < ns; ++dx, ++j) {
-      out[0] = xsimd::fma(du[2 * j], ker[dx], out[0]);
-      out[1] = xsimd::fma(du[2 * j + 1], ker[dx], out[1]);
-    }
-  } else if (FINUFFT_UNLIKELY(i1 + ns >= N1)) { // wraps at right
-    for (UBIGINT dx = 0; dx < N1 - i1; ++dx, ++j) {
-      out[0] = xsimd::fma(du[2 * j], ker[dx], out[0]);
-      out[1] = xsimd::fma(du[2 * j + 1], ker[dx], out[1]);
-    }
-    j -= N1;
-    for (UBIGINT dx = N1 - i1; dx < ns; ++dx, ++j) {
-      out[0] = xsimd::fma(du[2 * j], ker[dx], out[0]);
-      out[1] = xsimd::fma(du[2 * j + 1], ker[dx], out[1]);
-    }
-  } else { // doesn't wrap
-    using arch_t                       = typename simd_type::arch_type;
-    static constexpr auto padding      = get_padding<FLT, 2 * ns>();
-    static constexpr auto alignment    = arch_t::alignment();
-    static constexpr auto simd_size    = simd_type::size;
-    static constexpr auto regular_part = (2 * ns + padding) & (-(2 * simd_size));
-    simd_type res_low{0}, res_hi{0};
-    for (uint8_t dx{0}; dx < regular_part; dx += 2 * simd_size) {
-      const auto ker_v   = simd_type::load_aligned(ker + dx / 2);
-      const auto du_pt0  = simd_type::load_unaligned(du + dx);
-      const auto du_pt1  = simd_type::load_unaligned(du + dx + simd_size);
-      const auto ker0low = xsimd::swizzle(ker_v, zip_low_index<arch_t>);
-      const auto ker0hi  = xsimd::swizzle(ker_v, zip_hi_index<arch_t>);
-      res_low            = xsimd::fma(ker0low, du_pt0, res_low);
-      res_hi             = xsimd::fma(ker0hi, du_pt1, res_hi);
-    }
-    if constexpr (regular_part < 2 * ns) {
-      const auto ker0    = simd_type::load_unaligned(ker + (regular_part / 2));
-      const auto du_pt   = simd_type::load_unaligned(du + regular_part);
-      const auto ker0low = xsimd::swizzle(ker0, zip_low_index<arch_t>);
-      res_low            = xsimd::fma(ker0low, du_pt, res_low);
-    }
-    // This is slower than summing and looping
-    //     const auto res_real = xsimd::shuffle(res_low, res_hi,
-    //     select_even_mask<arch_t>); const auto res_imag = xsimd::shuffle(res_low,
-    //     res_hi, select_odd_mask<arch_t>); out[0] = xsimd::reduce_add(res_real); out[1]
-    //     = xsimd::reduce_add(res_imag);
+  BIGINT j               = i1;
+  const auto rotated_ker = [ker, i1, N1]() constexpr noexcept {
+    std::array<FLT, ns> ker_array{};
+    std::copy(ker, ker + ns, ker_array.begin());
+    const auto shift_amount = (i1 < 0) ? -i1 : ((i1 + ns > N1) ? N1 - i1 : 0);
+    std::rotate(ker_array.begin(), ker_array.begin() + shift_amount, ker_array.end());
+    std::array<FLT, MAX_NSPREAD> padded_ker{0};
+    std::copy(ker_array.begin(), ker_array.end(), padded_ker.begin());
+    return padded_ker;
+  }();
+  simd_type res_low{0}, res_hi{0};
+  for (uint8_t dx{0}; dx < regular_part; dx += 2 * simd_size) {
+    const auto ker_v   = simd_type::load_aligned(rotated_ker.data() + dx / 2);
+    const auto du_pt0  = simd_type::load_unaligned(du + dx);
+    const auto du_pt1  = simd_type::load_unaligned(du + dx + simd_size);
+    const auto ker0low = xsimd::swizzle(ker_v, zip_low_index<arch_t>);
+    const auto ker0hi  = xsimd::swizzle(ker_v, zip_hi_index<arch_t>);
+    res_low            = xsimd::fma(ker0low, du_pt0, res_low);
+    res_hi             = xsimd::fma(ker0hi, du_pt1, res_hi);
+  }
+  if constexpr (regular_part < 2 * ns) {
+    const auto ker0  = simd_type::load_unaligned(rotated_ker.data() + (regular_part / 2));
+    const auto du_pt = simd_type::load_unaligned(du + regular_part);
+    const auto ker0low = xsimd::swizzle(ker0, zip_low_index<arch_t>);
+    res_low            = xsimd::fma(ker0low, du_pt, res_low);
+  }
+  // This is slower than summing and looping
+  //     const auto res_real = xsimd::shuffle(res_low, res_hi, select_even_mask<arch_t>);
+  //     const auto res_imag = xsimd::shuffle(res_low, res_hi, select_odd_mask<arch_t>);
+  //     out[0] = xsimd::reduce_add(res_real);
+  //     out[1] = xsimd::reduce_add(res_imag);
 
-    const auto res = res_low + res_hi;
-    alignas(alignment) std::array<FLT, simd_size> res_array{};
-    res.store_aligned(res_array.data());
-    for (uint8_t i{0}; i < simd_size; i += 2) {
-      out[0] += res_array[i];
-      out[1] += res_array[i + 1];
-    }
+  const auto res = res_low + res_hi;
+  alignas(alignment) std::array<FLT, simd_size> res_array{};
+  res.store_aligned(res_array.data());
+  for (uint8_t i{0}; i < simd_size; i += 2) {
+    out[0] += res_array[i];
+    out[1] += res_array[i + 1];
   }
   target[0] = out[0];
   target[1] = out[1];
