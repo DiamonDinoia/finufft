@@ -262,6 +262,7 @@ if(FINUFFT_USE_CPU)
   if(MATH_LIBRARY)
     target_link_libraries(finufft PRIVATE ${MATH_LIBRARY})
   endif()
+  mark_as_advanced(MATH_LIBRARY)
   target_include_directories(
     finufft PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
   target_include_directories(
