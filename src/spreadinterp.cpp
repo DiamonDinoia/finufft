@@ -984,24 +984,23 @@ void interp_line(FLT *FINUFFT_RESTRICT target, const FLT *du, const FLT *ker,
 
     // This does a horizontal sum using vector instruction,
     // is slower than summing and looping
-    // clang-format off
     using half_simd = xsimd::make_sized_batch_t<FLT, simd_size / 2>;
     if constexpr (!std::is_void_v<half_simd>) {
-      const auto split = xsimd::swizzle(res, low_high_index<typename simd_type::arch_type>);
-      std::cout << "res: " << res;
-      std::cout << " split: " << split;
-      const auto split_array = xsimd_to_array(split);
-      const auto low = half_simd::load_aligned(split_array.data());
-      const auto high = half_simd::load_aligned(split_array.data() + simd_size / 2);
-      std::cout << " low: " << low << " high: " << high << std::endl;
-      out[0] = xsimd::reduce_add(low);
-      out[1] = xsimd::reduce_add(high);
-      // const auto res_array = xsimd_to_array(res);
-      // std::cout << "res: " << res << std::endl;
-      // for (uint8_t i{0}; i < simd_size; i += 2) {
-      //   out[0] += res_array[i];
-      //   out[1] += res_array[i + 1];
-      // }
+      const auto split = xsimd::swizzle(res, low_high_index<arch_t>);
+      union {
+        simd_type full;
+        struct {
+          half_simd high;
+          half_simd low;
+        };
+      } split_union{split};
+      out[0] = xsimd::reduce_add(split_union.low);
+      out[1] = xsimd::reduce_add(split_union.high);
+      //      const auto res_array = xsimd_to_array(res);
+      //      for (uint8_t i{0}; i < simd_size; i += 2) {
+      //        out[0] += res_array[i];
+      //        out[1] += res_array[i + 1];
+      //      }
     } else {
       const auto res_array = xsimd_to_array(res);
       for (uint8_t i{0}; i < simd_size; i += 2) {
@@ -1009,7 +1008,6 @@ void interp_line(FLT *FINUFFT_RESTRICT target, const FLT *du, const FLT *ker,
         out[1] += res_array[i + 1];
       }
     }
-    // clang-format on
   }
   target[0] = out[0];
   target[1] = out[1];
@@ -2271,10 +2269,10 @@ template<unsigned cap> struct shuffle_index {
 };
 
 struct low_high {
-  // helper struct to get the upper half of a SIMD register and zip it with itself
-  // it returns index N/2, N/2, N/2+1, N/2+1, ... N, N
+  // given a SIMD register it returns the even elements from size/2 to size-1
+  // and the odd elements from 0 to size/2-1
   static constexpr unsigned get(unsigned index, unsigned size) {
-    return index % 2 ? size / 2 + index / 2 : index / 2;
+    return index < size / 2 ? index * 2 + 1 : (index - size / 2) * 2;
   }
 };
 
