@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <iostream>
 #include <vector>
 
 using namespace std;
@@ -29,6 +30,7 @@ template<unsigned cap> struct reverse_index;
 template<unsigned cap> struct shuffle_index;
 struct select_even;
 struct select_odd;
+struct low_high;
 // forward declaration to clean up the code and be able to use this everywhere in the file
 template<class T, uint8_t N, uint8_t K = N> static constexpr auto BestSIMDHelper();
 template<class T, uint8_t N> constexpr auto GetPaddedSIMDWidth();
@@ -54,6 +56,10 @@ constexpr auto select_even_mask =
 template<class arch_t>
 constexpr auto select_odd_mask =
     xsimd::make_batch_constant<xsimd::as_unsigned_integer_t<FLT>, arch_t, select_odd>();
+template<class arch_t>
+constexpr auto low_high_index =
+    xsimd::make_batch_constant<xsimd::as_unsigned_integer_t<FLT>, arch_t, low_high>();
+
 template<typename T, std::size_t N, std::size_t M, std::size_t PaddedM>
 constexpr std::array<std::array<T, PaddedM>, N> pad_2D_array_with_zeros(
     const std::array<std::array<T, M>, N> &input) noexcept;
@@ -972,11 +978,6 @@ void interp_line(FLT *FINUFFT_RESTRICT target, const FLT *du, const FLT *ker,
       // optimize the code better
       return res_low + res_hi;
     }();
-    const auto res_array = xsimd_to_array(res);
-    for (uint8_t i{0}; i < simd_size; i += 2) {
-      out[0] += res_array[i];
-      out[1] += res_array[i + 1];
-    }
     // this is where the code differs from spread_kernel, the interpolator does an extra
     // reduction step to SIMD elements down to 2 elements
     // This is known as horizontal sum in SIMD terminology
@@ -984,10 +985,30 @@ void interp_line(FLT *FINUFFT_RESTRICT target, const FLT *du, const FLT *ker,
     // This does a horizontal sum using vector instruction,
     // is slower than summing and looping
     // clang-format off
-    // const auto res_real = xsimd::shuffle(res_low, res_hi, select_even_mask<arch_t>);
-    // const auto res_imag = xsimd::shuffle(res_low, res_hi, select_odd_mask<arch_t>);
-    // out[0]              = xsimd::reduce_add(res_real);
-    // out[1]              = xsimd::reduce_add(res_imag);
+    using half_simd = xsimd::make_sized_batch_t<FLT, simd_size / 2>;
+    if constexpr (!std::is_void_v<half_simd>) {
+      const auto split = xsimd::swizzle(res, low_high_index<typename simd_type::arch_type>);
+      std::cout << "res: " << res;
+      std::cout << " split: " << split;
+      const auto split_array = xsimd_to_array(split);
+      const auto low = half_simd::load_aligned(split_array.data());
+      const auto high = half_simd::load_aligned(split_array.data() + simd_size / 2);
+      std::cout << " low: " << low << " high: " << high << std::endl;
+      out[0] = xsimd::reduce_add(low);
+      out[1] = xsimd::reduce_add(high);
+      // const auto res_array = xsimd_to_array(res);
+      // std::cout << "res: " << res << std::endl;
+      // for (uint8_t i{0}; i < simd_size; i += 2) {
+      //   out[0] += res_array[i];
+      //   out[1] += res_array[i + 1];
+      // }
+    } else {
+      const auto res_array = xsimd_to_array(res);
+      for (uint8_t i{0}; i < simd_size; i += 2) {
+        out[0] += res_array[i];
+        out[1] += res_array[i + 1];
+      }
+    }
     // clang-format on
   }
   target[0] = out[0];
@@ -2246,6 +2267,14 @@ template<unsigned cap> struct reverse_index {
 template<unsigned cap> struct shuffle_index {
   static constexpr unsigned get(unsigned index, const unsigned size) {
     return index < cap ? (cap - 1 - index) : size + size + cap - 1 - index;
+  }
+};
+
+struct low_high {
+  // helper struct to get the upper half of a SIMD register and zip it with itself
+  // it returns index N/2, N/2, N/2+1, N/2+1, ... N, N
+  static constexpr unsigned get(unsigned index, unsigned size) {
+    return index % 2 ? size / 2 + index / 2 : index / 2;
   }
 };
 
