@@ -145,7 +145,7 @@ endfunction()
 
 set(CPM_DOWNLOAD_VERSION 0.40.2)
 include(cmake/setupCPM.cmake)
-
+include(cmake/setupVCL.cmake)
 if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
   include(CTest)
   if(FINUFFT_BUILD_TESTS)
@@ -240,7 +240,7 @@ function(set_finufft_options target)
   if(FINUFFT_USE_DUCC0)
     target_compile_definitions(${target} PRIVATE FINUFFT_USE_DUCC0)
   endif()
-  target_link_libraries(${target} PRIVATE xsimd)
+  target_link_libraries(${target} PRIVATE xsimd vcl)
   target_link_libraries(${target} PRIVATE ${FINUFFT_FFTLIBS})
 endfunction()
 

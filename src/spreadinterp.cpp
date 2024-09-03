@@ -9,13 +9,13 @@
 #include "ker_horner_allw_loop_constexpr.h"
 #include "ker_lowupsampfac_horner_allw_loop_constexpr.h"
 
-#include <xsimd/xsimd.hpp>
-
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <vector>
+#include <vectorclass.h>
+#include <xsimd/xsimd.hpp>
 
 using namespace std;
 using namespace finufft::utils; // access to timer
@@ -993,15 +993,16 @@ void interp_line(FLT *FINUFFT_RESTRICT target, const FLT *du, const FLT *ker,
           half_simd high;
           half_simd low;
         };
-      } split_union{split};
-      out[0] = xsimd::reduce_add(split_union.low);
-      out[1] = xsimd::reduce_add(split_union.high);
-      //      const auto res_array = xsimd_to_array(res);
-      //      for (uint8_t i{0}; i < simd_size; i += 2) {
-      //        out[0] += res_array[i];
-      //        out[1] += res_array[i + 1];
-      //      }
+      } split_vec{split};
+      out[0] = xsimd::reduce_add(split_vec.low);
+      out[1] = xsimd::reduce_add(split_vec.high);
     } else {
+      // if constexpr (simd_size == 8 && std::is_same_v<FLT, double>) {
+      //   const auto split = xsimd::swizzle(res, low_high_index<arch_t>);
+      //   const Vec8d split_vec{split};
+      //   out[0] = horizontal_add(split_vec.get_low());
+      //   out[1] = horizontal_add(split_vec.get_high());
+      // } else {
       const auto res_array = xsimd_to_array(res);
       for (uint8_t i{0}; i < simd_size; i += 2) {
         out[0] += res_array[i];
