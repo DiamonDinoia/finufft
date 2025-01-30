@@ -138,11 +138,6 @@ jobs:
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
           echo "SCCACHE_GHA_VERSION=0" >> $GITHUB_ENV
-      - name: Add sccache to PATH (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          echo "C:\hostedtoolcache\windows\sccache\0.9.1\x64" >> $GITHUB_PATH
       - name: Set min macOS version and install fftw
         if: runner.os == 'macOS'
         run: |
@@ -156,8 +151,8 @@ jobs:
       - name: Configure Cmake
         run: |
           cmake -S . -B ./build -G Ninja \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_C_COMPILER_LAUNCHER=${env.SCCACHE_PATH} \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=${env.SCCACHE_PATH} \
             -DCMAKE_BUILD_TYPE:STRING=${{ matrix.build_type }} \
             -DFINUFFT_ARCH_FLAGS=${{ matrix.arch_flags }} \
             -DFINUFFT_BUILD_TESTS=ON \
@@ -190,15 +185,15 @@ jobs:
           CPM_SOURCE_CACHE: cpm
         shell: bash
         run: |
-          python3 -m pip install --upgrade pip
+          python3 -m pip install --upgrade pipR
           python3 -m pip install -r requirements.txt
           python3 -m pip install \
             --verbose \
             -C cmake.define.CMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -C cmake.define.FINUFFT_ARCH_FLAGS=${{ matrix.arch_flags }} \
             -C cmake.define.FINUFFT_USE_DUCC0=${{ matrix.ducc_fft }} \
-            -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache \
-            -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache \
+            -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=${env.SCCACHE_PATH} \
+            -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=${env.SCCACHE_PATH} \
             -C cmake.define.CMAKE_GENERATOR=Ninja \
             -C cmake.define.CMAKE_GENERATOR_PLATFORM= \
             python/finufft
