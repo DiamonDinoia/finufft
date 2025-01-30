@@ -64,22 +64,16 @@ jobs:
         with:
           cmake : true
       - name: Download dependencies in cache linux
-        if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
         run: |
           cmake -S . -B ./build
           rm -rf build
           cmake -S . -B ./build -DFINUFFT_USE_DUCC0=ON
         env:
           CPM_SOURCE_CACHE: cpm
-      - name: Download dependencies in cache windows
-        if: steps.cache.outputs.cache-hit != 'true' && runner.os != 'Linux'
-        run: |
-          cmake -S . -B build
-          rm build -r -force
-          cmake -S . -B build -DFINUFFT_USE_DUCC0=ON
-        env:
-          CPM_SOURCE_CACHE: cpm
       - name: Cache dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           key: cpm-cache-00-${{ hashFiles('CMakeLists.txt', 'cmake/*') }}
@@ -129,8 +123,16 @@ jobs:
             sudo apt install -y libfftw3-dev
           fi
       - name: Configure Cmake
+        shell: bash
         run: |
-          cmake -S . -B ${{ github.workspace }}/build-G Ninja -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_BUILD_TYPE:STRING=${{matrix.build_type}} -DFINUFFT_ARCH_FLAGS=${{ matrix.arch_flags }} -DFINUFFT_BUILD_TESTS=ON -DFINUFFT_STATIC_LINKING=${{matrix.finufft_static_linking}} -DFINUFFT_USE_DUCC0=${{ matrix.ducc_fft }}
+          cmake -S . -B ${{ github.workspace }}/build -G Ninja \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_BUILD_TYPE:STRING=${{matrix.build_type}} \
+            -DFINUFFT_ARCH_FLAGS=${{ matrix.arch_flags }} \
+            -DFINUFFT_BUILD_TESTS=ON \
+            -DFINUFFT_STATIC_LINKING=${{matrix.finufft_static_linking}} \
+            -DFINUFFT_USE_DUCC0=${{ matrix.ducc_fft }}
         env:
           CPM_SOURCE_CACHE: cpm
       - name: Build
