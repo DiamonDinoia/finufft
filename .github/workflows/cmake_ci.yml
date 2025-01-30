@@ -1,4 +1,4 @@
-name: cmake ci linux macos windows
+R=name: cmake ci linux macos windows
 
 on: [push, pull_request]
 
@@ -92,6 +92,7 @@ jobs:
           CPM_SOURCE_CACHE: cpm
 
       - name: Cache dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           key: cpm-cache-00-${{ hashFiles('CMakeLists.txt', 'cmake/*') }}
@@ -151,8 +152,8 @@ jobs:
       - name: Configure Cmake
         run: |
           cmake -S . -B ./build -G Ninja \
-            -DCMAKE_C_COMPILER_LAUNCHER=${env.SCCACHE_PATH} \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=${env.SCCACHE_PATH} \
+            -DCMAKE_C_COMPILER_LAUNCHER=${{ env.SCCACHE_PATH }}} \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=${{ env.SCCACHE_PATH }}} \
             -DCMAKE_BUILD_TYPE:STRING=${{ matrix.build_type }} \
             -DFINUFFT_ARCH_FLAGS=${{ matrix.arch_flags }} \
             -DFINUFFT_BUILD_TESTS=ON \
@@ -192,8 +193,8 @@ jobs:
             -C cmake.define.CMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -C cmake.define.FINUFFT_ARCH_FLAGS=${{ matrix.arch_flags }} \
             -C cmake.define.FINUFFT_USE_DUCC0=${{ matrix.ducc_fft }} \
-            -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=${env.SCCACHE_PATH} \
-            -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=${env.SCCACHE_PATH} \
+            -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=${{ env.SCCACHE_PATH }}} \
+            -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=${{ env.SCCACHE_PATH }}} \
             -C cmake.define.CMAKE_GENERATOR=Ninja \
             -C cmake.define.CMAKE_GENERATOR_PLATFORM= \
             python/finufft
