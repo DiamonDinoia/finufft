@@ -139,16 +139,17 @@ jobs:
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
           echo "SCCACHE_GHA_VERSION=0" >> $GITHUB_ENV
-      - name: Fix SCCACHE_PATH (Windows)
-        shell: bash
+      - name: Set SCCACHE_BIN Path
         run: |
-          SCCACHE_PATH=${{env.SCCACHE_PATH}}
+          echo "Original SCCACHE_PATH: $SCCACHE_PATH"
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            SCCACHE_BIN=$(echo "$SCCACHE_PATH" | sed 's#/#\\#g')
+            SCCACHE_BIN=$(echo "$SCCACHE_PATH" | sed 's#/#\\\\#g')
           else
             SCCACHE_BIN="$SCCACHE_PATH"
           fi
+          echo "Processed SCCACHE_BIN: $SCCACHE_BIN"
           echo "SCCACHE_BIN=$SCCACHE_BIN" >> $GITHUB_ENV
+        shell: bash
       - name: Set min macOS version and install fftw
         if: runner.os == 'macOS'
         run: |
