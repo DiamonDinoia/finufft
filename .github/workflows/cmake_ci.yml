@@ -134,14 +134,19 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.7
       - name: Set sccache environment variables
         if: github.event_name != 'release' && github.event_name != 'workflow_dispatch'
+        shell: bash
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
           echo "SCCACHE_GHA_VERSION=0" >> $GITHUB_ENV
+      - name: Add sccache to PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "C:\hostedtoolcache\windows\sccache\0.9.1\x64" >> $GITHUB_PATH
       - name: Set min macOS version and install fftw
         if: runner.os == 'macOS'
         run: |
           brew install fftw
-
       - name: Install fftw
         if: runner.os == 'Linux'
         run: |
