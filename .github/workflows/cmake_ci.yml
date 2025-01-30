@@ -144,11 +144,10 @@ jobs:
         run: |
           SCCACHE_PATH=${{env.SCCACHE_PATH}}
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            SCCACHE_BIN=$(echo "$SCCACHE_PATH" | sed 's|/|\\|g')
+            SCCACHE_BIN=$(echo "$SCCACHE_PATH" | sed 's#/#\\#g')
           else
             SCCACHE_BIN="$SCCACHE_PATH"
           fi
-          SCCACHE_BIN=$(echo $SCCACHE_PATH | sed 's|/|\\|g')
           echo "SCCACHE_BIN=$SCCACHE_BIN" >> $GITHUB_ENV
       - name: Set min macOS version and install fftw
         if: runner.os == 'macOS'
