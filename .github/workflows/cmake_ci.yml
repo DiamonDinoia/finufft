@@ -1,4 +1,4 @@
-R=name: cmake ci linux macos windows
+name: cmake ci linux macos windows
 
 on: [push, pull_request]
 
