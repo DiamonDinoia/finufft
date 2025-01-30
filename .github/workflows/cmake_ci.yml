@@ -139,18 +139,6 @@ jobs:
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
           echo "SCCACHE_GHA_VERSION=0" >> $GITHUB_ENV
-      - name: Set SCCACHE_BIN Path
-        run: |
-          echo "Original SCCACHE_PATH: $SCCACHE_PATH"
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            SCCACHE_BIN=$(echo "$SCCACHE_PATH" | sed 's#\([^\\]\)/#\1\\#g')
-            SCCACHE_BIN="${SCCACHE_BIN}.exe"
-          else
-            SCCACHE_BIN="$SCCACHE_PATH"
-          fi
-          echo "Processed SCCACHE_BIN: $SCCACHE_BIN"
-          echo "SCCACHE_BIN=$SCCACHE_BIN" >> $GITHUB_ENV
-        shell: bash
       - name: Set min macOS version and install fftw
         if: runner.os == 'macOS'
         run: |
@@ -165,8 +153,8 @@ jobs:
         shell: bash
         run: |
           cmake -S . -B ./build -G Ninja \
-            -DCMAKE_C_COMPILER_LAUNCHER=${{ env.SCCACHE_BIN }} \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=${{ env.SCCACHE_BIN }} \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_BUILD_TYPE:STRING=${{ matrix.build_type }} \
             -DFINUFFT_ARCH_FLAGS=${{ matrix.arch_flags }} \
             -DFINUFFT_BUILD_TESTS=ON \
@@ -206,8 +194,8 @@ jobs:
             -C cmake.define.CMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -C cmake.define.FINUFFT_ARCH_FLAGS=${{ matrix.arch_flags }} \
             -C cmake.define.FINUFFT_USE_DUCC0=${{ matrix.ducc_fft }} \
-            -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=${{ env.SCCACHE_BIN }} \
-            -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=${{ env.SCCACHE_BIN }} \
+            -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache \
             -C cmake.define.CMAKE_GENERATOR=Ninja \
             -C cmake.define.CMAKE_GENERATOR_PLATFORM= \
             python/finufft
