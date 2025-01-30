@@ -125,7 +125,8 @@ jobs:
         shell: bash
         run: |
           python3 -m pip install \
-            --verbose \
+            --verbose --no-clean \
+            --config-settings=build-dir=build \
             -C cmake.define.CMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -C cmake.define.FINUFFT_ARCH_FLAGS=${{ matrix.arch_flags }} \
             -C cmake.define.FINUFFT_USE_DUCC0=${{ matrix.ducc_fft }} \
