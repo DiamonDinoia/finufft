@@ -143,7 +143,8 @@ jobs:
         run: |
           echo "Original SCCACHE_PATH: $SCCACHE_PATH"
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            SCCACHE_BIN=$(echo "$SCCACHE_PATH" | sed 's#/#\\\\#g')
+            SCCACHE_BIN=$(echo "$SCCACHE_PATH" | sed 's#\([^\\]\)/#\1\\#g')
+            SCCACHE_BIN="${SCCACHE_BIN}.exe"
           else
             SCCACHE_BIN="$SCCACHE_PATH"
           fi
