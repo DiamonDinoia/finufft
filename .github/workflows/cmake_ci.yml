@@ -157,6 +157,7 @@ jobs:
           SKBUILD_BUILD_DIR=: ${{ github.workspace }}/build
         shell: bash
         run: |
+          rm -rf rm -rf ${{ github.workspace }}/build/CMakeCache.txt
           python3 -m pip install --upgrade pip
           python3 -m pip install -r requirements.txt
           python3 -m pip install \
