@@ -137,7 +137,7 @@ jobs:
           CPM_SOURCE_CACHE: cpm
       - name: Build
         run: |
-          cmake --build .${{ github.workspace }}/build --config ${{matrix.build_type}}
+          cmake --build ${{ github.workspace }}/build --config ${{matrix.build_type}}
       - name: Test
         working-directory: ${{ github.workspace }}/build/test
         run: |
