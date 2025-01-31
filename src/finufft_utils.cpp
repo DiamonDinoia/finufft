@@ -9,6 +9,10 @@
 
 using namespace std;
 
+#ifdef FINUFFT_USE_NAMESPACE
+using namespace finufft::internal;
+#endif
+
 namespace finufft::utils {
 
 BIGINT next235even(BIGINT n)

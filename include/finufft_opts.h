@@ -5,6 +5,10 @@
 #ifndef FINUFFT_OPTS_H
 #define FINUFFT_OPTS_H
 
+#ifdef FINUFFT_USE_NAMESPACE
+namespace finufft {
+#endif
+
 typedef struct finufft_opts { // defaults see finufft_core.cpp:finufft_default_opts_t()
   // sphinx tag (don't remove): @opts_start
   // FINUFFT options:
@@ -40,5 +44,9 @@ typedef struct finufft_opts { // defaults see finufft_core.cpp:finufft_default_o
 } finufft_opts;
 
 // Those of the above of the form spread_* indicate pass through to finufft_spread_opts
+
+#ifdef FINUFFT_USE_NAMESPACE
+}
+#endif
 
 #endif // FINUFFT_OPTS_H

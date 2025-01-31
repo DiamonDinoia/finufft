@@ -14,6 +14,9 @@ using namespace finufft;
 using namespace finufft::utils;
 using namespace finufft::spreadinterp;
 using namespace finufft::quadrature;
+#ifdef FINUFFT_USE_NAMESPACE
+using namespace finufft::internal;
+#endif
 
 /* Computational core for FINUFFT.
 

@@ -5,7 +5,8 @@ set(EXAMPLES
     many1d1
     simple1d1
     simple1d1f
-    simulplans1d1)
+    simulplans1d1
+    experimental_simple1d1)
 set(EXAMPLES_OPENMP threadsafe1d1 threadsafe2d2f)
 set(EXAMPLES_C guru1d1c simple1d1c simple1d1cf)
 

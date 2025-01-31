@@ -63,6 +63,14 @@
 #include <memory>
 #include <xsimd/xsimd.hpp>
 
+#include <finufft/fft.h> // (must come after complex.h)
+#include <finufft_opts.h>
+#include <finufft_spread_opts.h>
+
+#ifdef FINUFFT_USE_NAMESPACE
+namespace finufft::internal {
+#endif
+
 // All indexing in library that potentially can exceed 2^31 uses 64-bit signed.
 // This includes all calling arguments (eg M,N) that could be huge someday.
 using BIGINT  = int64_t;
@@ -125,10 +133,6 @@ static inline int MY_OMP_GET_MAX_THREADS [[maybe_unused]] () { return 1; }
 static inline int MY_OMP_GET_THREAD_NUM [[maybe_unused]] () { return 0; }
 static inline void MY_OMP_SET_NUM_THREADS [[maybe_unused]] (int) {}
 #endif
-
-#include <finufft/fft.h> // (must come after complex.h)
-#include <finufft_opts.h>
-#include <finufft_spread_opts.h>
 
 // group together a bunch of type 3 rescaling/centering/phasing parameters:
 template<typename T> struct type3params {
@@ -208,5 +212,9 @@ void finufft_default_opts_t(finufft_opts *o);
 template<typename TF>
 int finufft_makeplan_t(int type, int dim, const BIGINT *n_modes, int iflag, int ntrans,
                        TF tol, FINUFFT_PLAN_T<TF> **pp, finufft_opts *opts);
+
+#ifdef FINUFFT_USE_NAMESPACE
+} // namespace finufft
+#endif
 
 #endif // FINUFFT_CORE_H

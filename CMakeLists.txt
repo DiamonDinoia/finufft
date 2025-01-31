@@ -259,7 +259,7 @@ function(set_finufft_options target)
   if(FINUFFT_USE_DUCC0)
     target_compile_definitions(${target} PRIVATE FINUFFT_USE_DUCC0)
   endif()
-  target_link_libraries(${target} PRIVATE xsimd)
+  target_link_libraries(${target} PUBLIC xsimd)
   target_link_libraries(${target} PRIVATE ${FINUFFT_FFTLIBS})
 endfunction()
 

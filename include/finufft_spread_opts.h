@@ -7,6 +7,10 @@
 // headers since finufft_plan has an instance of this spread_opts struct.
 // 2) Deliberately uses fixed types (no macro precision-switching).
 
+#ifdef FINUFFT_USE_NAMESPACE
+namespace finufft::internal {
+#endif
+
 typedef struct finufft_spread_opts {
   // See spreadinterp:setup_spreader for default values of the following fields.
   // This is the main documentation for these options...
@@ -29,5 +33,9 @@ typedef struct finufft_spread_opts {
   double ES_halfwidth;
   double ES_c;
 } finufft_spread_opts;
+
+#ifdef FINUFFT_USE_NAMESPACE
+}
+#endif
 
 #endif // FINUFFT_SPREAD_OPTS_H

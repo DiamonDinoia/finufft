@@ -6,6 +6,10 @@
 #ifdef FINUFFT_USE_DUCC0
 #include <complex>
 
+#ifdef FINUFFT_USE_NAMESPACE
+namespace finufft::internal {
+#endif
+
 template<typename T> class Finufft_FFT_plan {
 public:
   [[maybe_unused]] Finufft_FFT_plan(void (*)(void *) = nullptr,
@@ -22,6 +26,10 @@ public:
   [[maybe_unused]] static void cleanup_threads() {}
 };
 
+#ifdef FINUFFT_USE_NAMESPACE
+} // namespace finufft::internal
+#endif
+
 #else
 
 //clang-format off
@@ -29,6 +37,10 @@ public:
 #include <fftw3.h> // (after complex) needed so can typedef FFTW_CPX
 //clang-format on
 #include <mutex>
+
+#ifdef FINUFFT_USE_NAMESPACE
+namespace finufft::internal {
+#endif
 
 template<typename T> class Finufft_FFT_plan {};
 
@@ -162,9 +174,15 @@ public:
   }
 };
 
+#ifdef FINUFFT_USE_NAMESPACE
+} // namespace finufft::internal
 #endif
 
 #include <finufft/finufft_core.h>
+
+#ifdef FINUFFT_USE_NAMESPACE
+namespace finufft::internal {
+#endif
 
 static inline void finufft_fft_forget_wisdom [[maybe_unused]] () {
   Finufft_FFT_plan<float>::forget_wisdom();
@@ -181,5 +199,11 @@ static inline void finufft_fft_cleanup_threads [[maybe_unused]] () {
 template<typename TF> struct FINUFFT_PLAN_T;
 template<typename TF> std::vector<int> gridsize_for_fft(FINUFFT_PLAN_T<TF> *p);
 template<typename TF> void do_fft(FINUFFT_PLAN_T<TF> *p);
+
+#ifdef FINUFFT_USE_NAMESPACE
+} // namespace finufft::internal
+#endif
+
+#endif
 
 #endif // FINUFFT_INCLUDE_FINUFFT_FFT_H

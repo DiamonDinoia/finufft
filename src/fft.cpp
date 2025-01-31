@@ -7,6 +7,10 @@ using namespace std;
 #include "ducc0/fft/fftnd_impl.h"
 #endif
 
+#ifdef FINUFFT_USE_NAMESPACE
+using namespace finufft::internal;
+#endif
+
 template<typename TF> std::vector<int> gridsize_for_fft(FINUFFT_PLAN_T<TF> *p) {
   // local helper func returns a new int array of length dim, extracted from
   // the finufft plan, that fftw_plan_many_dft needs as its 2nd argument.

@@ -44,4 +44,11 @@
 // clean up any purely local defs that are not in finufft_eitherprec.h...
 #undef FINUFFT_BIGINT
 
+#undef FINUFFT_ALWAYS_INLINE
+#undef FINUFFT_NEVER_INLINE
+#undef FINUFFT_RESTRICT
+#undef FINUFFT_UNREACHABLE
+#undef FINUFFT_UNLIKELY
+#undef FINUFFT_LIKELY
+
 #endif // FINUFFT_H
