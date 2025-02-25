@@ -21,7 +21,7 @@ MaxEmptyLinesToKeep: 1
 NamespaceIndentation: None
 ReflowComments: true
 PenaltyBreakComment: 1
-PenaltyBreakOpenParenthesis: 1  # modified; was 0
+PenaltyBreakOpenParenthesis: 1
 SortIncludes: CaseSensitive
 SortUsingDeclarations: true
 SpacesBeforeTrailingComments: 1
@@ -30,4 +30,5 @@ SpaceAfterLogicalNot: false
 SpaceAfterTemplateKeyword: false
 TabWidth: 2
 UseTab: Never
+AttributeMacros: ['__host__', '__device__', '__global__', '__forceinline__']
 ...

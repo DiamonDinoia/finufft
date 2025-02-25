@@ -11,11 +11,12 @@ cpmaddpackage(
   VERSION
   1.8.3
   OPTIONS
-  "BENCHMARK_ENABLE_TESTING OFF")
+  "BENCHMARK_ENABLE_TESTING OFF"
+)
 
 if(benchmark_ADDED)
-  # patch benchmark target
-  set_target_properties(benchmark PROPERTIES CXX_STANDARD 17)
+    # patch benchmark target
+    set_target_properties(benchmark PROPERTIES CXX_STANDARD 17)
 endif()
 
 add_executable(foldrescale foldrescale.cpp)
