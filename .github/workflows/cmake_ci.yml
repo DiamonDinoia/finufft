@@ -124,6 +124,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install fftw libomp
+          echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH;/opt/homebrew;/opt/homebrew/opt/libomp/" >> $GITHUB_ENV
       - name: Install fftw
         if: runner.os == 'linux'
         run: |
