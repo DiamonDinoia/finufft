@@ -132,7 +132,7 @@ jobs:
           sudo apt install -y libfftw3-dev
       - name: Configure Cmake
         run: |
-          cmake -S . -B ./build -G Ninja -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_BUILD_TYPE:STRING=${{matrix.build_type}} -DFINUFFT_ARCH_FLAGS=${{ matrix.arch_flags }} -DFINUFFT_BUILD_TESTS=ON -DFINUFFT_STATIC_LINKING=${{matrix.finufft_static_linking}} -DFINUFFT_USE_DUCC0=${{ matrix.ducc_fft }} -DFINUFFT_ENABLE_SANITIZERS=${{matrix.build_type == 'Debug'}}
+          cmake -S . -B ./build -G Ninja -DCMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_BUILD_TYPE:STRING=${{matrix.build_type}} -DFINUFFT_ARCH_FLAGS=${{ matrix.arch_flags }} -DFINUFFT_BUILD_TESTS=ON -DFINUFFT_STATIC_LINKING=${{matrix.finufft_static_linking}} -DFINUFFT_USE_DUCC0=${{ matrix.ducc_fft }} -DFINUFFT_ENABLE_SANITIZERS=${{matrix.build_type == 'Debug'}}
         env:
           CPM_SOURCE_CACHE: cpm
       - name: Build
@@ -167,6 +167,7 @@ jobs:
             -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache \
             -C cmake.define.CMAKE_GENERATOR=Ninja \
             -C cmake.define.CMAKE_GENERATOR_PLATFORM= \
+            -C cmake.define.CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH
             python/finufft
       - name: Test Python package
         if: matrix.finufft_static_linking == 'off'
