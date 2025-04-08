@@ -288,7 +288,7 @@ static void evaluate_kernel_vector(T *ker, T *args,
 // A helper to unroll a compile‐time loop. This helper accepts a callable f
 // which is invoked with an std::integral_constant holding each index.
 template<typename F, std::size_t... I>
-constexpr void unroll_helper(std::index_sequence<I...>, F &&f) {
+FINUFFT_ALWAYS_INLINE constexpr void unroll_helper(std::index_sequence<I...>, F &&f) {
   (void)std::initializer_list<int>{(f(std::integral_constant<std::size_t, I>{}), 0)...};
 }
 
@@ -346,14 +346,14 @@ static FINUFFT_ALWAYS_INLINE void eval_kernel_vec_Horner(
     // Unroll the outer symmetric loop.
     // Number of iterations is determined by stepping from 0 to end_idx in steps of
     // simd_size.
-    constexpr uint8_t sym_iters = (end_idx + simd_size - 1) / simd_size;
+    static constexpr uint8_t sym_iters = (end_idx + simd_size - 1) / simd_size;
     unroll_helper(std::make_index_sequence<sym_iters>{}, [&](auto I) {
-      constexpr std::size_t idx = I.value;
-      constexpr auto i          = static_cast<uint8_t>(idx * simd_size);
-      constexpr auto offset     = static_cast<uint8_t>(offset_start - idx * simd_size);
+      static constexpr std::size_t idx = I.value;
+      static constexpr auto i          = static_cast<uint8_t>(idx * simd_size);
+      static constexpr auto offset = static_cast<uint8_t>(offset_start - idx * simd_size);
 
       // Load initial coefficients for odd and even parts.
-      auto k_odd = [&]() constexpr {
+      auto k_odd = [&]() constexpr noexcept {
         if constexpr (if_odd_degree)
           return simd_type::load_aligned(padded_coeffs[0].data() + i);
         else
@@ -362,21 +362,23 @@ static FINUFFT_ALWAYS_INLINE void eval_kernel_vec_Horner(
       auto k_even = simd_type::load_aligned(padded_coeffs[if_odd_degree].data() + i);
 
       // Unroll the inner Horner evaluation loop.
-      constexpr std::size_t inner_iters = (nc - 1 - if_odd_degree) / 2;
-      unroll_helper(std::make_index_sequence<inner_iters>{}, [&](auto J) {
-        constexpr std::size_t j_val = J.value;
-        k_odd                       = xsimd::fma(k_odd, z2v,
-                                                 simd_type::load_aligned(
+      static constexpr auto inner_iters = (nc - 1 - if_odd_degree) / 2;
+      unroll_helper(
+          std::make_index_sequence<inner_iters>{}, [&](const auto J) constexpr noexcept {
+            constexpr auto j_val = J.value;
+            k_odd =
+                xsimd::fma(k_odd, z2v,
+                           simd_type::load_aligned(
                                padded_coeffs[2 * j_val + 1 + if_odd_degree].data() + i));
-        k_even                      = xsimd::fma(k_even, z2v,
-                                                 simd_type::load_aligned(
-                                padded_coeffs[2 * j_val + 2 + if_odd_degree].data() + i));
-      });
+            k_even =
+                xsimd::fma(k_even, z2v,
+                           simd_type::load_aligned(
+                               padded_coeffs[2 * j_val + 2 + if_odd_degree].data() + i));
+          });
 
       // Compute and store the left (and possibly right) kernel values.
       xsimd::fma(k_odd, zv, k_even).store_aligned(ker + i);
-
-      if (offset >= end_idx) {
+      if constexpr (offset >= end_idx) {
         if constexpr (tail) {
           k_prev = k_sym;
           k_sym  = xsimd::fnma(k_odd, zv, k_even);
@@ -391,20 +393,23 @@ static FINUFFT_ALWAYS_INLINE void eval_kernel_vec_Horner(
     // Non-symmetric branch.
     const simd_type zv(z);
     // Unroll the outer loop which steps by simd_size over w.
-    constexpr uint8_t num_iters = (w + simd_size - 1) / simd_size;
-    unroll_helper(std::make_index_sequence<num_iters>{}, [&](auto I) {
-      constexpr std::size_t idx = I.value;
-      uint8_t i                 = static_cast<uint8_t>(idx * simd_size);
-      simd_type k               = simd_type::load_aligned(padded_coeffs[0].data() + i);
+    static constexpr uint8_t num_iters = (w + simd_size - 1) / simd_size;
+    unroll_helper(
+        std::make_index_sequence<num_iters>{}, [&](const auto I) constexpr noexcept {
+          constexpr auto idx = I.value;
+          constexpr auto i   = static_cast<uint8_t>(idx * simd_size);
+          simd_type k        = simd_type::load_aligned(padded_coeffs[0].data() + i);
 
-      // Unroll the Horner evaluation loop.
-      unroll_helper(std::make_index_sequence<nc - 1>{}, [&](auto J) {
-        constexpr std::size_t j = J.value;
-        k = xsimd::fma(k, zv, simd_type::load_aligned(padded_coeffs[j + 1].data() + i));
-      });
+          // Unroll the Horner evaluation loop.
+          unroll_helper(
+              std::make_index_sequence<nc - 1>{}, [&](const auto J) constexpr noexcept {
+                k = xsimd::fma(
+                    k, zv,
+                    simd_type::load_aligned(padded_coeffs[J.value + 1].data() + i));
+              });
 
-      k.store_aligned(ker + i);
-    });
+          k.store_aligned(ker + i);
+        });
   }
 }
 
