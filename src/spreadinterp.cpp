@@ -176,6 +176,15 @@ constexpr std::array<std::array<T, PaddedM>, N> pad_2D_array_with_zeros(
   return output;
 }
 
+template<typename T, int... i>
+FINUFFT_ALWAYS_INLINE constexpr auto chsum(const T v,
+                                           std::integer_sequence<int, i...>) noexcept {
+  return std::array{(v.get(i * 2) + ...), (v.get(i * 2 + 1) + ...)};
+}
+template<typename T> FINUFFT_ALWAYS_INLINE constexpr auto chsum(const T v) noexcept {
+  return chsum(v, std::make_integer_sequence<int, T::size / 2>{});
+}
+
 template<typename T> FINUFFT_ALWAYS_INLINE auto xsimd_to_array(const T &vec) noexcept {
   constexpr auto alignment = T::arch_type::alignment();
   alignas(alignment) std::array<typename T::value_type, T::size> array{};
@@ -276,23 +285,27 @@ static void evaluate_kernel_vector(T *ker, T *args,
     if (abs(args[i]) >= (T)opts.ES_halfwidth) ker[i] = 0.0;
 }
 
+// A helper to unroll a compile‐time loop. This helper accepts a callable f
+// which is invoked with an std::integral_constant holding each index.
+template<typename F, std::size_t... I>
+constexpr void unroll_helper(std::index_sequence<I...>, F &&f) {
+  (void)std::initializer_list<int>{(f(std::integral_constant<std::size_t, I>{}), 0)...};
+}
+
+// The main function
 template<typename T, uint8_t w, uint8_t upsampfact,
          class simd_type =
              xsimd::make_sized_batch_t<T, find_optimal_simd_width<T, w>()>> // aka ns
 static FINUFFT_ALWAYS_INLINE void eval_kernel_vec_Horner(
-    T *FINUFFT_RESTRICT ker, T x, const finufft_spread_opts &opts) noexcept
-/* Fill ker[] with Horner piecewise poly approx to [-w/2,w/2] ES kernel eval at
-x_j = x + j,  for j=0,..,w-1.  Thus x in [-w/2,-w/2+1].   w is aka ns.
-This is the current evaluation method, since it's faster (except i7 w=16).
-Two upsampfacs implemented. Params must match ref formula. Barnett 4/24/18 */
+    T *FINUFFT_RESTRICT ker, T x, const finufft_spread_opts &opts) noexcept {
+  // scale so local grid offset z in [-1,1]
+  const T z                       = std::fma(T(2.0), x, T(w - 1));
+  using arch_t                    = typename simd_type::arch_type;
+  static constexpr auto alignment = arch_t::alignment();
+  static constexpr auto simd_size = simd_type::size;
+  static constexpr auto padded_ns = (w + simd_size - 1) & ~(simd_size - 1);
 
-{
-  // scale so local grid offset z in[-1,1]
-  const T z                           = std::fma(T(2.0), x, T(w - 1));
-  using arch_t                        = typename simd_type::arch_type;
-  static constexpr auto alignment     = arch_t::alignment();
-  static constexpr auto simd_size     = simd_type::size;
-  static constexpr auto padded_ns     = (w + simd_size - 1) & ~(simd_size - 1);
+  // Choose Horner coeffs based on upsampfact (assumed to be constexpr)
   static constexpr auto horner_coeffs = []() constexpr noexcept {
     if constexpr (upsampfact == 200) {
       return get_horner_coeffs_200<T, w>();
@@ -303,19 +316,21 @@ Two upsampfacs implemented. Params must match ref formula. Barnett 4/24/18 */
   static constexpr auto nc          = horner_coeffs.size();
   static constexpr auto use_ker_sym = (simd_size < w);
 
+  // Pad coefficients (padded to padded_ns)
   alignas(alignment) static constexpr auto padded_coeffs =
       pad_2D_array_with_zeros<T, nc, w, padded_ns>(horner_coeffs);
 
-  // use kernel symmetry trick if w > simd_size
   if constexpr (use_ker_sym) {
+    // These constants are all known at compile time.
     static constexpr uint8_t tail          = w % simd_size;
     static constexpr uint8_t if_odd_degree = ((nc + 1) % 2);
     static constexpr uint8_t offset_start  = tail ? w - tail : w - simd_size;
     static constexpr uint8_t end_idx       = (w + (tail > 0)) / 2;
+
     const simd_type zv{z};
     const auto z2v = zv * zv;
 
-    // some xsimd constant for shuffle or inverse
+    // Some xsimd constant for shuffle or inverse.
     static constexpr auto shuffle_batch = []() constexpr noexcept {
       if constexpr (tail) {
         return xsimd::make_batch_constant<xsimd::as_unsigned_integer_t<T>, arch_t,
@@ -326,30 +341,43 @@ Two upsampfacs implemented. Params must match ref formula. Barnett 4/24/18 */
       }
     }();
 
-    // process simd vecs
     simd_type k_prev, k_sym{0};
-    for (uint8_t i{0}, offset = offset_start; i < end_idx;
-         i += simd_size, offset -= simd_size) {
-      auto k_odd = [i]() constexpr noexcept {
-        if constexpr (if_odd_degree) {
+
+    // Unroll the outer symmetric loop.
+    // Number of iterations is determined by stepping from 0 to end_idx in steps of
+    // simd_size.
+    constexpr uint8_t sym_iters = (end_idx + simd_size - 1) / simd_size;
+    unroll_helper(std::make_index_sequence<sym_iters>{}, [&](auto I) {
+      constexpr std::size_t idx = I.value;
+      constexpr auto i          = static_cast<uint8_t>(idx * simd_size);
+      constexpr auto offset     = static_cast<uint8_t>(offset_start - idx * simd_size);
+
+      // Load initial coefficients for odd and even parts.
+      auto k_odd = [&]() constexpr {
+        if constexpr (if_odd_degree)
           return simd_type::load_aligned(padded_coeffs[0].data() + i);
-        } else {
+        else
           return simd_type{0};
-        }
       }();
       auto k_even = simd_type::load_aligned(padded_coeffs[if_odd_degree].data() + i);
-      for (uint8_t j{1 + if_odd_degree}; j < nc; j += 2) {
-        const auto cji_odd  = simd_type::load_aligned(padded_coeffs[j].data() + i);
-        const auto cji_even = simd_type::load_aligned(padded_coeffs[j + 1].data() + i);
-        k_odd               = xsimd::fma(k_odd, z2v, cji_odd);
-        k_even              = xsimd::fma(k_even, z2v, cji_even);
-      }
-      // left part
+
+      // Unroll the inner Horner evaluation loop.
+      constexpr std::size_t inner_iters = (nc - 1 - if_odd_degree) / 2;
+      unroll_helper(std::make_index_sequence<inner_iters>{}, [&](auto J) {
+        constexpr std::size_t j_val = J.value;
+        k_odd                       = xsimd::fma(k_odd, z2v,
+                                                 simd_type::load_aligned(
+                               padded_coeffs[2 * j_val + 1 + if_odd_degree].data() + i));
+        k_even                      = xsimd::fma(k_even, z2v,
+                                                 simd_type::load_aligned(
+                                padded_coeffs[2 * j_val + 2 + if_odd_degree].data() + i));
+      });
+
+      // Compute and store the left (and possibly right) kernel values.
       xsimd::fma(k_odd, zv, k_even).store_aligned(ker + i);
-      // right part symmetric to the left part
+
       if (offset >= end_idx) {
         if constexpr (tail) {
-          // to use aligned store, we need shuffle the previous k_sym and current k_sym
           k_prev = k_sym;
           k_sym  = xsimd::fnma(k_odd, zv, k_even);
           xsimd::shuffle(k_sym, k_prev, shuffle_batch).store_aligned(ker + offset);
@@ -358,17 +386,25 @@ Two upsampfacs implemented. Params must match ref formula. Barnett 4/24/18 */
               .store_aligned(ker + offset);
         }
       }
-    }
+    });
   } else {
+    // Non-symmetric branch.
     const simd_type zv(z);
-    for (uint8_t i = 0; i < w; i += simd_size) {
-      auto k = simd_type::load_aligned(padded_coeffs[0].data() + i);
-      for (uint8_t j = 1; j < nc; ++j) {
-        const auto cji = simd_type::load_aligned(padded_coeffs[j].data() + i);
-        k              = xsimd::fma(k, zv, cji);
-      }
+    // Unroll the outer loop which steps by simd_size over w.
+    constexpr uint8_t num_iters = (w + simd_size - 1) / simd_size;
+    unroll_helper(std::make_index_sequence<num_iters>{}, [&](auto I) {
+      constexpr std::size_t idx = I.value;
+      uint8_t i                 = static_cast<uint8_t>(idx * simd_size);
+      simd_type k               = simd_type::load_aligned(padded_coeffs[0].data() + i);
+
+      // Unroll the Horner evaluation loop.
+      unroll_helper(std::make_index_sequence<nc - 1>{}, [&](auto J) {
+        constexpr std::size_t j = J.value;
+        k = xsimd::fma(k, zv, simd_type::load_aligned(padded_coeffs[j + 1].data() + i));
+      });
+
       k.store_aligned(ker + i);
-    }
+    });
   }
 }
 
@@ -441,61 +477,56 @@ static void interp_line(T *FINUFFT_RESTRICT target, const T *du, const T *ker, B
   static constexpr auto padding      = get_padding<T, 2 * ns>();
   static constexpr auto simd_size    = simd_type::size;
   static constexpr auto regular_part = (2 * ns + padding) & (-(2 * simd_size));
-  std::array<T, 2> out{0};
+
   const auto j = i1;
   // removing the wrapping leads up to 10% speedup in certain cases
   // moved the wrapping to another function to reduce instruction cache pressure
   if (i1 < 0 || i1 + ns >= BIGINT(N1) || i1 + ns + (padding + 1) / 2 >= BIGINT(N1)) {
     return interp_line_wrap<T, ns>(target, du, ker, i1, N1);
-  } else { // doesn't wrap
-    // logic largely similar to spread 1D kernel, please see the explanation there
-    // for the first part of this code
-    const auto res = [du, j, ker]() constexpr noexcept {
-      const auto du_ptr = du + 2 * j;
-      simd_type res_low{0}, res_hi{0};
-      for (uint8_t dx{0}; dx < regular_part; dx += 2 * simd_size) {
-        const auto ker_v   = simd_type::load_aligned(ker + dx / 2);
-        const auto du_pt0  = simd_type::load_unaligned(du_ptr + dx);
-        const auto du_pt1  = simd_type::load_unaligned(du_ptr + dx + simd_size);
-        const auto ker0low = xsimd::swizzle(ker_v, zip_low_index<arch_t, T>);
-        const auto ker0hi  = xsimd::swizzle(ker_v, zip_hi_index<arch_t, T>);
-        res_low            = xsimd::fma(ker0low, du_pt0, res_low);
-        res_hi             = xsimd::fma(ker0hi, du_pt1, res_hi);
-      }
-
-      if constexpr (regular_part < 2 * ns) {
-        const auto ker0    = simd_type::load_unaligned(ker + (regular_part / 2));
-        const auto du_pt   = simd_type::load_unaligned(du_ptr + regular_part);
-        const auto ker0low = xsimd::swizzle(ker0, zip_low_index<arch_t, T>);
-        res_low            = xsimd::fma(ker0low, du_pt, res_low);
-      }
-
-      // This does a horizontal sum using a loop instead of relying on SIMD instructions
-      // this is faster than the code below but less elegant.
-      // lambdas here to limit the scope of temporary variables and have the compiler
-      // optimize the code better
-      return res_low + res_hi;
-    }();
-    const auto res_array = xsimd_to_array(res);
-    for (uint8_t i{0}; i < simd_size; i += 2) {
-      out[0] += res_array[i];
-      out[1] += res_array[i + 1];
+  } // doesn't wrap
+  // logic largely similar to spread 1D kernel, please see the explanation there
+  // for the first part of this code
+  const auto res = [du, j, ker]() constexpr noexcept {
+    const auto du_ptr = du + 2 * j;
+    simd_type res_low{0}, res_hi{0};
+    for (uint8_t dx{0}; dx < regular_part; dx += 2 * simd_size) {
+      const auto ker_v   = simd_type::load_aligned(ker + dx / 2);
+      const auto du_pt0  = simd_type::load_unaligned(du_ptr + dx);
+      const auto du_pt1  = simd_type::load_unaligned(du_ptr + dx + simd_size);
+      const auto ker0low = xsimd::swizzle(ker_v, zip_low_index<arch_t, T>);
+      const auto ker0hi  = xsimd::swizzle(ker_v, zip_hi_index<arch_t, T>);
+      res_low            = xsimd::fma(ker0low, du_pt0, res_low);
+      res_hi             = xsimd::fma(ker0hi, du_pt1, res_hi);
     }
-    // this is where the code differs from spread_kernel, the interpolator does an extra
-    // reduction step to SIMD elements down to 2 elements
-    // This is known as horizontal sum in SIMD terminology
 
-    // This does a horizontal sum using vector instruction,
-    // is slower than summing and looping
-    // clang-format off
+    if constexpr (regular_part < 2 * ns) {
+      const auto ker0    = simd_type::load_unaligned(ker + (regular_part / 2));
+      const auto du_pt   = simd_type::load_unaligned(du_ptr + regular_part);
+      const auto ker0low = xsimd::swizzle(ker0, zip_low_index<arch_t, T>);
+      res_low            = xsimd::fma(ker0low, du_pt, res_low);
+    }
+
+    // This does a horizontal sum using a loop instead of relying on SIMD instructions
+    // this is faster than the code below but less elegant.
+    // lambdas here to limit the scope of temporary variables and have the compiler
+    // optimize the code better
+    return res_low + res_hi;
+  }();
+  const auto out = chsum(res);
+  target[0]      = out[0];
+  target[1]      = out[1];
+  // this is where the code differs from spread_kernel, the interpolator does an extra
+  // reduction step to SIMD elements down to 2 elements
+  // This is known as horizontal sum in SIMD terminology
+
+  // This does a horizontal sum using vector instruction,
+  // is slower than summing and looping
+  // clang-format off
     // const auto res_real = xsimd::shuffle(res_low, res_hi, select_even_mask<arch_t>);
     // const auto res_imag = xsimd::shuffle(res_low, res_hi, select_odd_mask<arch_t>);
     // out[0]              = xsimd::reduce_add(res_real);
     // out[1]              = xsimd::reduce_add(res_imag);
-    // clang-format on
-  }
-  target[0] = out[0];
-  target[1] = out[1];
+  // clang-format on
 }
 
 template<typename T, uint8_t ns, class simd_type>
@@ -586,7 +617,6 @@ static void interp_square(T *FINUFFT_RESTRICT target, const T *du, const T *ker1
    The code is largely similar to 1D interpolation, please see the explanation there
 */
 {
-  std::array<T, 2> out{0};
   // no wrapping: avoid ptrs
   using arch_t                          = typename simd_type::arch_type;
   static constexpr auto padding         = get_padding<T, 2 * ns>();
@@ -632,18 +662,14 @@ static void interp_square(T *FINUFFT_RESTRICT target, const T *du, const T *ker1
       }
       return res_low + res_hi;
     }();
-    const auto res_array = xsimd_to_array(res);
-    for (uint8_t i{0}; i < simd_size; i += 2) {
-      out[0] += res_array[i];
-      out[1] += res_array[i + 1];
-    }
+    const auto out = chsum(res);
+    target[0]      = out[0];
+    target[1]      = out[1];
   } else { // wraps somewhere: use ptr list
     // this is slower than above, but occurs much less often, with fractional
     // rate O(ns/min(N1,N2)). Thus this code doesn't need to be so optimized.
     return interp_square_wrap<T, ns, simd_type>(target, du, ker1, ker2, i1, i2, N1, N2);
   }
-  target[0] = out[0];
-  target[1] = out[1];
 }
 
 template<typename T, uint8_t ns, class simd_type>
@@ -759,7 +785,6 @@ static void interp_cube(T *FINUFFT_RESTRICT target, const T *du, const T *ker1,
   const auto in_bounds_1                = (i1 >= 0) & (i1 + ns <= BIGINT(N1));
   const auto in_bounds_2                = (i2 >= 0) & (i2 + ns <= BIGINT(N2));
   const auto in_bounds_3                = (i3 >= 0) & (i3 + ns <= BIGINT(N3));
-  std::array<T, 2> out{0};
   if (in_bounds_1 && in_bounds_2 && in_bounds_3 &&
       (i1 + ns + (padding + 1) / 2 < BIGINT(N1))) {
     const auto line = [N1, N2, i1 = UBIGINT(i1), i2 = UBIGINT(i2), i3 = UBIGINT(i3), ker2,
@@ -798,17 +823,13 @@ static void interp_cube(T *FINUFFT_RESTRICT target, const T *du, const T *ker1,
       }
       return res_low + res_hi;
     }();
-    const auto res_array = xsimd_to_array(res);
-    for (uint8_t i{0}; i < simd_size; i += 2) {
-      out[0] += res_array[i];
-      out[1] += res_array[i + 1];
-    }
+    const auto out = chsum(res);
+    target[0]      = out[0];
+    target[1]      = out[1];
   } else {
     return interp_cube_wrapped<T, ns, simd_type>(target, du, ker1, ker2, ker3, i1, i2, i3,
                                                  N1, N2, N3);
   }
-  target[0] = out[0];
-  target[1] = out[1];
 }
 
 template<uint8_t ns, uint8_t kerevalmeth, class T,
