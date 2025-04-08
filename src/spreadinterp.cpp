@@ -176,20 +176,21 @@ constexpr std::array<std::array<T, PaddedM>, N> pad_2D_array_with_zeros(
   return output;
 }
 
-template<typename T, int... i>
-FINUFFT_ALWAYS_INLINE constexpr auto chsum(const T v,
-                                           std::integer_sequence<int, i...>) noexcept {
-  return std::array{(v.get(i * 2) + ...), (v.get(i * 2 + 1) + ...)};
-}
-template<typename T> FINUFFT_ALWAYS_INLINE constexpr auto chsum(const T v) noexcept {
-  return chsum(v, std::make_integer_sequence<int, T::size / 2>{});
-}
-
 template<typename T> FINUFFT_ALWAYS_INLINE auto xsimd_to_array(const T &vec) noexcept {
   constexpr auto alignment = T::arch_type::alignment();
   alignas(alignment) std::array<typename T::value_type, T::size> array{};
   vec.store_aligned(array.data());
   return array;
+}
+
+template<typename T, int... i>
+FINUFFT_ALWAYS_INLINE constexpr auto chsum(const T &v,
+                                           std::integer_sequence<int, i...>) noexcept {
+  const auto vec = xsimd_to_array(v);
+  return std::array{(vec[i * 2] + ...), (vec[i * 2 + 1] + ...)};
+}
+template<typename T> FINUFFT_ALWAYS_INLINE constexpr auto chsum(const T &v) noexcept {
+  return chsum(v, std::make_integer_sequence<int, T::size / 2>{});
 }
 
 FINUFFT_NEVER_INLINE
