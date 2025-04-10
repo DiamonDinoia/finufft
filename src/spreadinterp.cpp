@@ -186,8 +186,7 @@ template<typename T> FINUFFT_ALWAYS_INLINE auto xsimd_to_array(const T &vec) noe
 template<typename T, int... i>
 FINUFFT_ALWAYS_INLINE constexpr auto chsum_fallback(
     const T &v, std::integer_sequence<int, i...>) noexcept {
-  const auto vec = xsimd_to_array(v);
-  return std::array{(vec[i * 2] + ...), (vec[i * 2 + 1] + ...)};
+  return std::array{(v.data[i * 2] + ...), (v.data[i * 2 + 1] + ...)};
 }
 template<typename T>
 FINUFFT_ALWAYS_INLINE constexpr auto chsum_fallback(const T &v) noexcept {
