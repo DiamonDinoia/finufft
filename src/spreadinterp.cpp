@@ -203,14 +203,17 @@ template<typename T> FINUFFT_ALWAYS_INLINE constexpr auto chsum(const T &res) no
     if constexpr (std::is_void_v<half_t>) {
       return chsum_fallback(res);
     } else {
-      union {
-        struct {
+      union punion_t {
+        T all;
+        struct halves_t {
           half_t low;
           half_t high;
-        };
-        T all;
-      } pun = {.all = res};
-      return chsum(pun.low + pun.high);
+        } halves;
+        constexpr explicit punion_t(const T &val) : all(val) {}
+        punion_t() = delete;
+      };
+      const punion_t pun{res};
+      return chsum(pun.halves.low + pun.halves.high);
     }
   }
 }
