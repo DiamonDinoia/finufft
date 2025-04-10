@@ -184,13 +184,35 @@ template<typename T> FINUFFT_ALWAYS_INLINE auto xsimd_to_array(const T &vec) noe
 }
 
 template<typename T, int... i>
-FINUFFT_ALWAYS_INLINE constexpr auto chsum(const T &v,
-                                           std::integer_sequence<int, i...>) noexcept {
+FINUFFT_ALWAYS_INLINE constexpr auto chsum_fallback(
+    const T &v, std::integer_sequence<int, i...>) noexcept {
   const auto vec = xsimd_to_array(v);
   return std::array{(vec[i * 2] + ...), (vec[i * 2 + 1] + ...)};
 }
-template<typename T> FINUFFT_ALWAYS_INLINE constexpr auto chsum(const T &v) noexcept {
-  return chsum(v, std::make_integer_sequence<int, T::size / 2>{});
+template<typename T>
+FINUFFT_ALWAYS_INLINE constexpr auto chsum_fallback(const T &v) noexcept {
+  return chsum_fallback(v, std::make_integer_sequence<int, T::size / 2>{});
+}
+
+template<typename T> FINUFFT_ALWAYS_INLINE constexpr auto chsum(const T &res) noexcept {
+  constexpr auto size = T::size;
+  if constexpr (size == 2) {
+    return xsimd_to_array(res);
+  } else {
+    using half_t = xsimd::make_sized_batch_t<typename T::value_type, size / 2>;
+    if constexpr (std::is_void_v<half_t>) {
+      return chsum_fallback(res);
+    } else {
+      union {
+        struct {
+          half_t low;
+          half_t high;
+        };
+        T all;
+      } pun = {.all = res};
+      return chsum(pun.low + pun.high);
+    }
+  }
 }
 
 FINUFFT_NEVER_INLINE
