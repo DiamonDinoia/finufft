@@ -208,8 +208,6 @@ template<typename T> FINUFFT_ALWAYS_INLINE constexpr auto chsum(const T &res) no
           half_t low;
           half_t high;
         } halves;
-        constexpr explicit punion_t(const T &val) : all(val) {}
-        punion_t() = delete;
       };
       const punion_t pun{res};
       return chsum(pun.halves.low + pun.halves.high);
