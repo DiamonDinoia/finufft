@@ -330,6 +330,10 @@ static FINUFFT_ALWAYS_INLINE void eval_kernel_vec_Horner(
   static constexpr auto use_ker_sym = (simd_size < w);
   static constexpr auto padded_ns   = []() constexpr noexcept {
     if constexpr (use_ker_sym) {
+      // padding = k*simd_size or truncation since we only need half of the coefficients
+      // k*simd_size >= ns/2
+      // k = ceil(ns/(2*simd_size))
+      // k = (ns + 2*simd_size - 1)/ (2*simd_size)
       return ((w + 2 * simd_size - 1) / (2 * simd_size)) * simd_size;
     }
     return (w + simd_size - 1) & ~(simd_size - 1);
