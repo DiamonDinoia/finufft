@@ -334,9 +334,7 @@ static FINUFFT_ALWAYS_INLINE void eval_kernel_vec_Horner(
     }
     return (w + simd_size - 1) & ~(simd_size - 1);
   }();
-  static_assert(padded_ns <= ((w + simd_size - 1) & ~(simd_size - 1)),
-                "with ker_sym padding should be
-                "less than or equal original worst case");
+  static_assert(padded_ns <= ((w + simd_size - 1) & ~(simd_size - 1)));
   // Choose Horner coeffs based on upsampfact (assumed to be constexpr)
   static constexpr auto horner_coeffs = []() constexpr noexcept {
     if constexpr (upsampfact == 200) {
