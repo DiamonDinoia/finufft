@@ -164,7 +164,7 @@ constexpr std::array<std::array<T, PaddedM>, N> pad_2D_array_with_zeros(
     const std::array<std::array<T, M>, N> &input) noexcept {
   constexpr auto pad_with_zeros = [](const auto &input) constexpr noexcept {
     std::array<T, PaddedM> padded{0};
-    for (size_t i = 0; i < input.size(); ++i) {
+    for (size_t i = 0; i < std::min(input.size(), PaddedM); ++i) {
       padded[i] = input[i];
     }
     return padded;
@@ -326,8 +326,17 @@ static FINUFFT_ALWAYS_INLINE void eval_kernel_vec_Horner(
   using arch_t                    = typename simd_type::arch_type;
   static constexpr auto alignment = arch_t::alignment();
   static constexpr auto simd_size = simd_type::size;
-  static constexpr auto padded_ns = (w + simd_size - 1) & ~(simd_size - 1);
 
+  static constexpr auto use_ker_sym = (simd_size < w);
+  static constexpr auto padded_ns   = []() constexpr noexcept {
+    if constexpr (use_ker_sym) {
+      return ((w + 2 * simd_size - 1) / (2 * simd_size)) * simd_size;
+    }
+    return (w + simd_size - 1) & ~(simd_size - 1);
+  }();
+  static_assert(padded_ns <= ((w + simd_size - 1) & ~(simd_size - 1)),
+                "with ker_sym padding should be
+                "less than or equal original worst case");
   // Choose Horner coeffs based on upsampfact (assumed to be constexpr)
   static constexpr auto horner_coeffs = []() constexpr noexcept {
     if constexpr (upsampfact == 200) {
@@ -336,8 +345,7 @@ static FINUFFT_ALWAYS_INLINE void eval_kernel_vec_Horner(
       return get_horner_coeffs_125<T, w>();
     }
   }();
-  static constexpr auto nc          = horner_coeffs.size();
-  static constexpr auto use_ker_sym = (simd_size < w);
+  static constexpr auto nc = horner_coeffs.size();
 
   // Pad coefficients (padded to padded_ns)
   alignas(alignment) static constexpr auto padded_coeffs =
