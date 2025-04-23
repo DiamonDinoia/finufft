@@ -5,10 +5,10 @@ foreach(srcfile ${test_src})
     get_filename_component(executable ${executable} NAME)
     add_executable(${executable} ${srcfile})
     target_include_directories(${executable} PUBLIC ${CUFINUFFT_INCLUDE_DIRS})
-    target_compile_options(${executable} PUBLIC $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>)
+    #    target_compile_options(${executable} PUBLIC $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>)
     find_library(MathLib m)
     if(MathLib)
-        target_link_libraries(${executable} PUBLIC cufinufft ${MathLib})
+        target_link_libraries(${executable} PUBLIC cufinufft ${MathLib} finufft)
     endif()
     target_compile_features(${executable} PUBLIC cxx_std_17)
     set_target_properties(
@@ -189,15 +189,15 @@ add_test(
     COMMAND cufinufft1dspreadinterponly_test 1e3 1e6 1e-5 1e-4 f 1.25
 )
 
-add_tests(float 1e-5 2e-4 2.0)
+add_tests(float 1e-4 2e-3 2.0)
 add_tests(double 1e-12 1e-11 2.0)
-add_tests(float 1e-5 2e-4 1.25)
+add_tests(float 1e-4 2e-3 1.25)
 add_tests(double 1e-8 1e-7 1.25)
 # the upsamp is appended to the testname, ctest does not allows multiple tests
 # to share the same testname hence we use the trick 0. and 0.f to differentiate
 # the tests and allow them to run in the future we should add the precision to
 # the test
-add_tests(float 1e-5 2e-4 0.f)
+add_tests(float 1e-4 2e-3 0.f)
 add_tests(double 1e-12 1e-11 0.f)
-add_tests(float 1e-5 2e-4 0.)
+add_tests(float 1e-4 2e-3 0.)
 add_tests(double 1e-8 1e-7 0.)

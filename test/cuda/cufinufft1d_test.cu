@@ -233,7 +233,7 @@ int run_test(int method, int type, int N1, int M, T tol, T checktol, int iflag,
   }
 
   if (rel_error > checktol) {
-    printf("[gpu   ]\t err%.3g > checktol %.3g\n", rel_error, checktol);
+    printf("[gpu   ]\terr %.3g > checktol %.3g\n", rel_error, checktol);
   }
   return std::isnan(rel_error) || rel_error > checktol;
 }

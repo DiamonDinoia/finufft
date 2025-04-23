@@ -29,13 +29,8 @@ set(CUFINUFFT_INCLUDE_DIRS ${CUFINUFFT_INCLUDE_DIRS} PARENT_SCOPE)
 # flush denormals to zero and enable verbose PTXAS output
 set(FINUFFT_CUDA_FLAGS
     $<$<COMPILE_LANGUAGE:CUDA>:
-    --extended-lambda
-    -ftz=true
-    -fmad=true
-    -restrict
-    --extra-device-vectorization
-    -Xnvlink
-    --strip-all>
+    #    --extended-lambda
+    >
 )
 
 if(FINUFFT_SHARED_LINKING)

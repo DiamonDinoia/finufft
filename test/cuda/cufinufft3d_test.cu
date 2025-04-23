@@ -7,6 +7,7 @@
 #include <random>
 
 #include <cufinufft.h>
+#include <finufft.h>
 
 #include <cufinufft/impl.h>
 #include <cufinufft/utils.h>
@@ -121,6 +122,7 @@ int run_test(int method, int type, int N1, int N2, int N3, int M, T tol, T check
   opts.gpu_kerevalmeth  = 1;
   opts.gpu_maxbatchsize = 1;
   opts.upsampfac        = upsampfac;
+  opts.debug            = 2;
   int nmodes[3]         = {N1, N2, N3};
   int ntransf           = 1;
 
@@ -240,10 +242,23 @@ int run_test(int method, int type, int N1, int N2, int N3, int M, T tol, T check
     printf("[gpu   ] one mode: rel err in F[%d] is %.3g\n", jt, rel_error);
     if (static_cast<int64_t>(M) * N1 * N2 * N3 <= TEST_BIGPROB) {
       std::vector<thrust::complex<T>> Ft(N1 * N2 * N3);
-      dirft3d3(M, x, y, z, c, iflag, N1 * N2 * N3, s, t, u, Ft);
-      T err     = relerrtwonorm(N1 * N2 * N3, Ft, fk);
+      std::vector<thrust::complex<T>> ref(N1 * N2 * N3);
+
+      dirft3d3(M, x, y, z, c, iflag, N1 * N2 * N3, s, t, u, ref);
+      if constexpr (std::is_same_v<T, double>) {
+        finufft3d3(M, x.data(), y.data(), z.data(), (std::complex<T> *)c.data(), iflag,
+                   tol, N1 * N2 * N3, s.data(), t.data(), u.data(),
+                   (std::complex<T> *)Ft.data(), nullptr);
+      } else {
+        finufftf3d3(M, x.data(), y.data(), z.data(), (std::complex<T> *)c.data(), iflag,
+                    tol, N1 * N2 * N3, s.data(), t.data(), u.data(),
+                    (std::complex<T> *)Ft.data(), nullptr);
+      }
+      T err     = relerrtwonorm(N1 * N2 * N3, ref, fk);
       rel_error = std::max(err, rel_error);
-      printf("[gpu   ]\tdirft3d: rel l2-err of result F is %.3g\n", err);
+      T cpu_err = relerrtwonorm(N1 * N2 * N3, Ft, ref);
+      printf("[cpu   ]\tdirft3d: rel l2-err of cpu F is %.3g\n", cpu_err);
+      printf("[gpu   ]\tdirft3d: rel l2-err of gpu F is %.3g\n", err);
     }
   }
 
