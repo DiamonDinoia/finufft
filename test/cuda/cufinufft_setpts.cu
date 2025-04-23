@@ -6,11 +6,12 @@
 #include <cassert>
 #endif
 
+#include <finufft.h>
+#include <finufft/finufft_core.h>
+
 #include <cufinufft.h>
 #include <cufinufft/impl.h>
 #include <cufinufft/utils.h>
-#include <finufft.h>
-#include <finufft/finufft_core.h>
 
 #include <thrust/complex.h>
 #include <thrust/device_vector.h>
