@@ -15,7 +15,7 @@
 #define ARRAYWIDCEN_GROWFRAC 0.1
 
 // FIXME: If cufft ever takes N > INT_MAX...
-constexpr int32_t MAX_NF = std::numeric_limits<int32_t>::max();
+#define MAX_NF               std::numeric_limits<int32_t>::max()
 
 // allow compile-time switch off of openmp, so compilation without any openmp
 // is done (Note: _OPENMP is automatically set by -fopenmp compile flag)

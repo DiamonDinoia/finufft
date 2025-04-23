@@ -5,7 +5,6 @@
 #include <cufinufft/contrib/helper_cuda.h>
 #include <thrust/extrema.h>
 
-#include <cufinufft/defs.h>
 #include <cufinufft/spreadinterp.h>
 #include <cufinufft/utils.h>
 using namespace cufinufft::utils;

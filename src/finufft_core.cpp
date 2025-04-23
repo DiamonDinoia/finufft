@@ -197,7 +197,7 @@ static void onedim_fseries_kernel(BIGINT nf, std::vector<T> &fwkerhalf,
   std::complex<T> a[MAX_NQUAD];
   for (int n = 0; n < q; ++n) {      // set up nodes z_n and vals f_n
     z[n] *= J2;                      // rescale nodes
-    f[n] = J2 * (T)w[n] * evaluate_kernel((T)z[n], opts); // vals & quadr wei
+    f[n] = J2 * T(w[n]) * evaluate_kernel(T(z[n]), opts); // vals & quadr wei
     a[n] = -std::exp(2 * PI * std::complex<double>(0, 1) * z[n] / double(nf)); // phase
                                                                                // winding
                                                                                // rates

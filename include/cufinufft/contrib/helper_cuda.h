@@ -28,10 +28,8 @@
 #ifndef COMMON_HELPER_CUDA_H_
 #define COMMON_HELPER_CUDA_H_
 
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <cstdio>
+#include <cuda_runtime_api.h>
 
 #include <finufft_errors.h>
 
@@ -46,15 +44,14 @@ static const char *_cudaGetErrorEnum(cudaError_t error) {
 #define checkCudaErrors(val) check((val), #val, __FILE__, __LINE__)
 
 template<typename T>
-static inline cudaError_t cudaMallocWrapper(T **devPtr, size_t size, cudaStream_t stream,
-                                            int pool_supported) {
+static cudaError_t cudaMallocWrapper(T **devPtr, size_t size, cudaStream_t stream,
+                                     int pool_supported) {
   return pool_supported ? cudaMallocAsync(devPtr, size, stream)
                         : cudaMalloc(devPtr, size);
 }
 
 template<typename T>
-static inline cudaError_t cudaFreeWrapper(T *devPtr, cudaStream_t stream,
-                                          int pool_supported) {
+static cudaError_t cudaFreeWrapper(T *devPtr, cudaStream_t stream, int pool_supported) {
   return pool_supported ? cudaFreeAsync(devPtr, stream) : cudaFree(devPtr);
 }
 

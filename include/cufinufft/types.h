@@ -28,6 +28,7 @@ using cuda_complex = typename std::conditional<
                               void>::type>::type;
 
 template<typename T> struct cufinufft_plan_t {
+  using real_t = T;
   cufinufft_opts opts;
   finufft_spread_opts spopts;
 

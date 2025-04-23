@@ -57,7 +57,7 @@ __global__ void cu_fseries_kernel_compute(int nf1, int nf2, int nf3, T *f, T *ph
     T x = 0.0;
     for (int n = 0; n < q; n++) {
       // in type 1/2 2*PI/nf -> k[i]
-      x += ft[n] * T(2) * std::cos(T(i) * phaset[n]);
+      x += ft[n] * T(2) * cos(T(i) * phaset[n]);
     }
     oarr[i] = x * T(i % 2 ? -1 : 1); // signflip for the kernel origin being at PI
   }
@@ -211,8 +211,8 @@ void onedim_fseries_kernel_precomp(CUFINUFFT_BIGINT nf, T *f, T *phase,
   // eg on (0,1)
   for (int n = 0; n < q; ++n) { // set up nodes z_n and vals f_n
     z[n] *= J2;                 // rescale nodes
-    f[n]     = J2 * w[n] * evaluate_kernel((T)z[n], opts); // vals & quadr wei
-    phase[n] = T(2.0 * M_PI * z[n] / T(nf));               // phase winding rates
+    f[n]     = J2 * T(w[n]) * evaluate_kernel(T(z[n]), opts); // vals & quadr wei
+    phase[n] = T(2.0 * M_PI * z[n] / T(nf));                  // phase winding rates
   }
 }
 

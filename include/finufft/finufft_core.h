@@ -1,7 +1,9 @@
 #ifndef FINUFFT_CORE_H
 #define FINUFFT_CORE_H
 
+#ifndef __CUDACC__
 #include <xsimd/xsimd.hpp>
+#endif
 
 #include <finufft_errors.h>
 #include <memory>
@@ -174,7 +176,11 @@ template<typename TF> struct FINUFFT_PLAN_T { // the main plan class, fully C++
 
   // fwBatch: (batches of) fine working grid(s) for the FFT to plan & act on.
   // Usually the largest internal array. Its allocator is 64-byte (cache-line) aligned:
+#ifndef __CUDACC__
   std::vector<TC, xsimd::aligned_allocator<TC, 64>> fwBatch;
+#else
+  std::vector<TC> fwBatch;
+#endif
 
   std::vector<BIGINT> sortIndices; // precomputed NU pt permutation, speeds spread/interp
   bool didSort;                    // whether binsorting used (false: identity perm used)

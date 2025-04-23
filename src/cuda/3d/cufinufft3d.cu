@@ -143,14 +143,14 @@ int cufinufft3d3_exec(cuda_complex<T> *d_c, cuda_complex<T> *d_fk,
   cuda_complex<T> *d_cstart;
   cuda_complex<T> *d_fkstart;
   const auto stream = d_plan->stream;
+  // setting input for spreader
+  d_plan->c = d_plan->CpBatch;
+  // setting output for spreader
+  d_plan->fk = d_plan->fw;
   for (int i = 0; i * d_plan->batchsize < d_plan->ntransf; i++) {
     int blksize = min(d_plan->ntransf - i * d_plan->batchsize, d_plan->batchsize);
     d_cstart    = d_c + i * d_plan->batchsize * d_plan->M;
     d_fkstart   = d_fk + i * d_plan->batchsize * d_plan->N;
-    // setting input for spreader
-    d_plan->c = d_plan->CpBatch;
-    // setting output for spreader
-    d_plan->fk = d_plan->fw;
     // NOTE: fw might need to be set to 0
     if ((ier = checkCudaErrors(cudaMemsetAsync(
              d_plan->fw, 0, d_plan->batchsize * d_plan->nf * sizeof(cuda_complex<T>),
