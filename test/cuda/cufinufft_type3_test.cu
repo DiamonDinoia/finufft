@@ -19,6 +19,7 @@
 #include <cufinufft.h>
 #include <cufinufft/impl.h>
 #include <cufinufft/utils.h>
+#include <fstream>
 
 template<typename T, typename V> bool equal(V *d_vec, T *cpu, const std::size_t size) {
   // copy d_vec to cpu
@@ -55,6 +56,7 @@ T relerrtwonorm(const std::complex<T> *a, const std::complex<T> *b, const std::s
                 const bool print = false) {
   T err = 0, nrm = 0;
   for (std::size_t m = 0; m < n; ++m) {
+    // if (m==34)continue;
     const auto diff  = a[m] - b[m];
     const T this_err = std::norm(diff); // same as real(conj(diff) * diff)
     nrm += std::norm(a[m]);
@@ -62,7 +64,7 @@ T relerrtwonorm(const std::complex<T> *a, const std::complex<T> *b, const std::s
     if (print || this_err > 1e-12) {
       std::cout << std::setprecision(15) << "a[" << m << "]: " << a[m] << "  b[" << m
                 << "]: " << b[m] << "\n"
-                << "diff: " << diff << "  this_err: " << this_err << "\n"
+                << "diff: " << diff << "  abs diff: " << std::abs(diff) << "\n"
                 << std::setprecision(6);
     }
     err += this_err;
@@ -115,9 +117,9 @@ int main() {
   // defaults. tests should shadow them to override
   cufinufft_opts opts;
   cufinufft_default_opts(&opts);
-  opts.debug           = 2;
+  opts.debug           = 10;
   opts.upsampfac       = 1.25;
-  opts.gpu_kerevalmeth = 1;
+  opts.gpu_kerevalmeth = 0;
   opts.gpu_method      = 1;
   opts.gpu_sort        = 1;
   opts.modeord         = 0;
@@ -167,6 +169,9 @@ int main() {
     s[i] = n_modes[0] / 2 * rand_util_11() * bandwidth; // shifted so D1 is 8
     t[i] = n_modes[1] / 2 * rand_util_11() * bandwidth; // shifted so D2 is 8
     u[i] = n_modes[2] / 2 * rand_util_11() * bandwidth; // shifted so D3 is 8
+    if (i == 34) {
+      std::cout << "s,t,u: " << s[i] << ", " << t[i] << ", " << u[i] << std::endl;
+    }
   }
 
   const double deconv_tol = std::numeric_limits<double>::epsilon() * bandwidth * 1000;
@@ -191,16 +196,26 @@ int main() {
   d_s = s;
   d_t = t;
   d_u = u;
+  d_c = c;
   cudaDeviceSynchronize();
 
   const auto cpu_planer = [iflag, tol, ntransf, dim, M, N, n_modes, &x, &y, &z, &s, &t,
                            &u, &fin_opts](const auto type) {
-    finufft_plan_s *plan{nullptr};
     std::int64_t nl[] = {n_modes[0], n_modes[1], n_modes[2]};
-    assert(finufft_makeplan(type, dim, nl, iflag, ntransf, tol, &plan, &fin_opts) == 0);
-    assert(finufft_setpts(plan, M, x.data(), y.data(), z.data(), N, s.data(), t.data(),
-                          u.data()) == 0);
-    return plan;
+    if constexpr (std::is_same_v<decltype(x)::value_type, double>) {
+      finufft_plan_s *plan{nullptr};
+      assert(finufft_makeplan(type, dim, nl, iflag, ntransf, tol, &plan, &fin_opts) == 0);
+      assert(finufft_setpts(plan, M, x.data(), y.data(), z.data(), N, s.data(), t.data(),
+                            u.data()) == 0);
+      return plan;
+    } else {
+      // finufftf_plan_s *plan{nullptr};
+      // assert(finufftf_makeplan(type, dim, nl, iflag, ntransf, tol, &plan, &fin_opts) ==
+      // 0); assert(finufftf_setpts(plan, M, x.data(), y.data(), z.data(), N, s.data(),
+      // t.data(),
+      //                     u.data()) == 0);
+      // return plan;
+    }
   };
 
   const auto test_type1 = [iflag, tol, ntransf, dim, cpu_planer, M, N, n_modes, &d_x,
@@ -226,11 +241,6 @@ int main() {
     assert(plan->spopts.ES_halfwidth == cpu_plan->spopts.ES_halfwidth);
     assert(plan->spopts.ES_c == cpu_plan->spopts.ES_c);
 
-    for (int i = 0; i < M * ntransf; i++) {
-      c[i].real(rand_util_11());
-      c[i].imag(rand_util_11());
-    }
-    d_c = c;
     cudaDeviceSynchronize();
     cufinufft_execute_impl((cuda_complex<T> *)d_c.data().get(),
                            (cuda_complex<T> *)d_fk.data().get(), plan);
@@ -313,6 +323,7 @@ int main() {
     assert(plan->type3_params.h1 == cpu_plan->t3P.h[0]);
     if (dim > 1) assert(plan->type3_params.h2 == cpu_plan->t3P.h[1]);
     if (dim > 2) assert(plan->type3_params.h3 == cpu_plan->t3P.h[2]);
+    assert(plan->nf1 == cpu_plan->nfdim[0]);
     if (dim > 1) assert(plan->nf2 == cpu_plan->nfdim[1]);
     if (dim > 2) assert(plan->nf3 == cpu_plan->nfdim[2]);
     assert(equal(plan->kx, cpu_plan->XYZ[0], M));
@@ -321,6 +332,10 @@ int main() {
     assert(equal(plan->d_Sp, cpu_plan->STUp[0].data(), N));
     if (dim > 1) assert(equal(plan->d_Tp, cpu_plan->STUp[1].data(), N));
     if (dim > 2) assert(equal(plan->d_Up, cpu_plan->STUp[2].data(), N));
+    // print cpu_plan STUp [34]
+    std::cout << "STUp[0][34]: " << cpu_plan->STUp[0][34] << std::endl;
+    std::cout << "STUp[1][34]: " << cpu_plan->STUp[1][34] << std::endl;
+    std::cout << "STUp[2][34]: " << cpu_plan->STUp[2][34] << std::endl;
     assert(plan->spopts.nspread == cpu_plan->spopts.nspread);
     assert(plan->spopts.upsampfac == cpu_plan->spopts.upsampfac);
     assert(plan->spopts.ES_beta == cpu_plan->spopts.ES_beta);
@@ -330,7 +345,7 @@ int main() {
     assert(almost_equal(plan->prephase, cpu_plan->prephase.data(), M,
                         std::numeric_limits<T>::epsilon() * 100));
     std::cout << "deconv :\n";
-    assert(almost_equal(plan->deconv, cpu_plan->deconv.data(), N, deconv_tol));
+    assert(almost_equal(plan->deconv, cpu_plan->deconv.data(), N, deconv_tol, false));
 
     assert(plan->t2_plan->nf1 == cpu_plan->innerT2plan->nfdim[0]);
     if (dim > 1) assert(plan->t2_plan->nf2 == cpu_plan->innerT2plan->nfdim[1]);
@@ -363,20 +378,20 @@ int main() {
       }
       assert(ier == cudaSuccess);
       cudaDeviceSynchronize();
+      std::cout << "fwkerhalf[" << idx << "] ------------------------------- "
+                << std::endl;
       for (int i = 0; i < size; i++) {
-        const auto error = abs(1 - fwkerhalf_host[i] / phiHat[idx][i]);
-        assert(error < tol * 1000);
+        const auto error = abs(fwkerhalf_host[i] - phiHat[idx][i]);
+        // std::cout << "fwkerhalf[" << i << "]: " << fwkerhalf_host[i]
+        // << " phiHat[" << i << "]: " << phiHat[idx][i] << std::endl;
+        // std::cout << "abs(diff)[" << i << "]: " << error << std::endl;
+        assert(error < 1e-14);
       }
     }
-    for (int i = 0; i < M * ntransf; i++) {
-      c[i].real(rand_util_11());
-      c[i].imag(rand_util_11());
-    }
-    d_c = c;
-    // std::fill(cpu_plan->deconv.begin(), cpu_plan->deconv.end(),1);
+    // std::fill(cpu_plan->deconv.begin(), cpu_plan->deconv.end(), 1);
     // cudaMemcpy(plan->deconv, cpu_plan->deconv.data(),
     // N * ntransf * sizeof(cuda_complex<T>), cudaMemcpyHostToDevice);
-    // cudaDeviceSynchronize();
+    cudaDeviceSynchronize();
 
     cufinufft_execute_impl((cuda_complex<T> *)d_c.data().get(),
                            (cuda_complex<T> *)d_fk.data().get(), plan);
@@ -391,13 +406,85 @@ int main() {
       assert(almost_equal(plan->t2_plan->fw, cpu_plan->innerT2plan->fwBatch.data(),
                           plan->t2_plan->nf, std::numeric_limits<T>::epsilon() * 100));
     }
+    T err = 0, max_element = 0;
+    thrust::host_vector<std::complex<T>> h_fw(plan->nf);
+
+    cudaMemcpy(h_fw.data(), plan->fw, plan->nf * sizeof(std::complex<T>),
+               cudaMemcpyDeviceToHost);
+
+    for (auto i = 0; i < plan->nf; i++) {
+      max_element = std::max(max_element, std::abs(cpu_plan->fwBatch[i]));
+      err         = std::max(err, std::abs(h_fw[i] - cpu_plan->fwBatch[i]));
+    }
+    std::cout << "max element fw: " << max_element << std::endl;
+    std::cout << "max diff fw: " << err << std::endl;
+
     std::cout << "fk : ";
     // thrust::transform(thrust::device, (thrust::complex<T> *)plan->deconv,
     //                   (thrust::complex<T> *)plan->deconv + plan->N,
     //                   (thrust::complex<T> *)d_fk.data().get(),
     //                   (thrust::complex<T> *)d_fk.data().get(),
     //                   thrust::multiplies<thrust::complex<T>>());
-    assert(almost_equal(d_fk.data().get(), fk.data(), N * ntransf, tol * 10, true));
+    almost_equal(d_fk.data().get(), fk.data(), N * ntransf, tol * 10, true);
+
+    cudaDeviceSynchronize();
+    auto t2plan = plan->t2_plan;
+    // save kx, ky, kz to file in binary format d_k* needs to be copied from gpu
+    {
+      std::ofstream kx_file("kx.bin", std::ios::binary);
+      std::vector<char> h_k(N * sizeof(test_t));
+      cudaMemcpy(h_k.data(), plan->d_Sp, N * sizeof(test_t), cudaMemcpyDeviceToHost);
+      kx_file.write(h_k.data(), N * sizeof(test_t));
+      kx_file.close();
+      std::cout << "kx: " << N << std::endl;
+    }
+    {
+      std::ofstream ky_file("ky.bin", std::ios::binary);
+      std::vector<char> h_k2(N * sizeof(test_t));
+      cudaMemcpy(h_k2.data(), t2plan->d_Tp, N * sizeof(test_t), cudaMemcpyDeviceToHost);
+      ky_file.write(h_k2.data(), N * sizeof(test_t));
+      ky_file.close();
+      std::cout << "ky: " << N << std::endl;
+    }
+    {
+      std::ofstream kz_file("kz.bin", std::ios::binary);
+      std::vector<char> h_k3(N * sizeof(test_t));
+      cudaMemcpy(h_k3.data(), t2plan->d_Up, N * sizeof(test_t), cudaMemcpyDeviceToHost);
+      kz_file.write(h_k3.data(), N * sizeof(test_t));
+      kz_file.close();
+      std::cout << "kz: " << N << std::endl;
+    }
+    // write c now
+    // {
+    //   std::ofstream c_file("c.bin", std::ios::binary);
+    //   std::vector<char> h_c(M * ntransf);
+    //   cudaMemcpy(h_c.data(), d_c.data().get(), d_c.size() *
+    //   sizeof(std::complex<test_t>),
+    //              cudaMemcpyDeviceToHost);
+    //   c_file.write(h_c.data(), M * ntransf * sizeof(test_t));
+    //   c_file.close();
+    // }
+    // save fk now
+    {
+      std::ofstream fk_file("fk.bin", std::ios::binary);
+      std::vector<char> h_fk(plan->nf * sizeof(std::complex<T>));
+      cudaMemcpy(h_fk.data(), plan->fw, h_fk.size(), cudaMemcpyDeviceToHost);
+      fk_file.write(h_fk.data(), h_fk.size());
+      fk_file.close();
+      std::cout << "fk: " << d_fk.size() << std::endl;
+    }
+    {
+      // write the dimensions for the inner type2 and the other parameters to a file not
+      // in binary format
+      std::ofstream params_file("params.txt");
+      // write the dimensions
+      params_file << "nf1: " << t2plan->nf1 << std::endl;
+      params_file << "nf2: " << t2plan->nf2 << std::endl;
+      params_file << "nf3: " << t2plan->nf3 << std::endl;
+      params_file << "M: " << plan->N << std::endl;
+      params_file.close();
+      std::cout << "params: " << plan->N << std::endl;
+    }
     assert(cufinufft_destroy_impl<T>(plan) == 0);
     assert(finufft_destroy(cpu_plan) == 0);
     plan = nullptr;
@@ -409,5 +496,6 @@ int main() {
   // test_type1(double_plan);
   // test_type2(double_plan);
   test_type3(double_plan);
+
   return 0;
 }

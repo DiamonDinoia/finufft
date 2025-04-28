@@ -10,162 +10,169 @@
 
 // Addition for cuDoubleComplex (double) with cuDoubleComplex (double)
 __host__ __device__ __forceinline__ cuDoubleComplex operator+(
-    const cuDoubleComplex &a, const cuDoubleComplex &b) noexcept {
+    const cuDoubleComplex a, const cuDoubleComplex b) noexcept {
   return cuCadd(a, b);
 }
 
 // Subtraction for cuDoubleComplex (double) with cuDoubleComplex (double)
 __host__ __device__ __forceinline__ cuDoubleComplex operator-(
-    const cuDoubleComplex &a, const cuDoubleComplex &b) noexcept {
+    const cuDoubleComplex a, const cuDoubleComplex b) noexcept {
   return cuCsub(a, b);
 }
 
 // Multiplication for cuDoubleComplex (double) with cuDoubleComplex (double)
 __host__ __device__ __forceinline__ cuDoubleComplex operator*(
-    const cuDoubleComplex &a, const cuDoubleComplex &b) noexcept {
-  return cuCmul(a, b);
+    const cuDoubleComplex a, const cuDoubleComplex b) noexcept {
+  double ar = cuCreal(a), ai = cuCimag(a);
+  double br = cuCreal(b), bi = cuCimag(b);
+  return make_cuDoubleComplex(ar * br - ai * bi, ar * bi + ai * br);
+  // return cuCmul(a, b);
 }
 
 // Division for cuDoubleComplex (double) with cuDoubleComplex (double)
 __host__ __device__ __forceinline__ cuDoubleComplex operator/(
-    const cuDoubleComplex &a, const cuDoubleComplex &b) noexcept {
+    const cuDoubleComplex a, const cuDoubleComplex b) noexcept {
   return cuCdiv(a, b);
 }
 
 // Equality for cuDoubleComplex (double) with cuDoubleComplex (double)
-__host__ __device__ __forceinline__ bool operator==(const cuDoubleComplex &a,
-                                                    const cuDoubleComplex &b) noexcept {
+__host__ __device__ __forceinline__ bool operator==(const cuDoubleComplex a,
+                                                    const cuDoubleComplex b) noexcept {
   return cuCreal(a) == cuCreal(b) && cuCimag(a) == cuCimag(b);
 }
 
 // Inequality for cuDoubleComplex (double) with cuDoubleComplex (double)
-__host__ __device__ __forceinline__ bool operator!=(const cuDoubleComplex &a,
-                                                    const cuDoubleComplex &b) noexcept {
+__host__ __device__ __forceinline__ bool operator!=(const cuDoubleComplex a,
+                                                    const cuDoubleComplex b) noexcept {
   return !(a == b);
 }
 
 // Addition for cuDoubleComplex (double) with double
-__host__ __device__ __forceinline__ cuDoubleComplex operator+(const cuDoubleComplex &a,
+__host__ __device__ __forceinline__ cuDoubleComplex operator+(const cuDoubleComplex a,
                                                               double b) noexcept {
   return make_cuDoubleComplex(cuCreal(a) + b, cuCimag(a));
 }
 
 __host__ __device__ __forceinline__ cuDoubleComplex operator+(
-    double a, const cuDoubleComplex &b) noexcept {
+    double a, const cuDoubleComplex b) noexcept {
   return make_cuDoubleComplex(a + cuCreal(b), cuCimag(b));
 }
 
 // Subtraction for cuDoubleComplex (double) with double
-__host__ __device__ __forceinline__ cuDoubleComplex operator-(const cuDoubleComplex &a,
+__host__ __device__ __forceinline__ cuDoubleComplex operator-(const cuDoubleComplex a,
                                                               double b) noexcept {
   return make_cuDoubleComplex(cuCreal(a) - b, cuCimag(a));
 }
 
 __host__ __device__ __forceinline__ cuDoubleComplex operator-(
-    double a, const cuDoubleComplex &b) noexcept {
+    double a, const cuDoubleComplex b) noexcept {
   return make_cuDoubleComplex(a - cuCreal(b), -cuCimag(b));
 }
 
 // Multiplication for cuDoubleComplex (double) with double
-__host__ __device__ __forceinline__ cuDoubleComplex operator*(const cuDoubleComplex &a,
+__host__ __device__ __forceinline__ cuDoubleComplex operator*(const cuDoubleComplex a,
                                                               double b) noexcept {
   return make_cuDoubleComplex(cuCreal(a) * b, cuCimag(a) * b);
 }
 
 __host__ __device__ __forceinline__ cuDoubleComplex operator*(
-    double a, const cuDoubleComplex &b) noexcept {
+    double a, const cuDoubleComplex b) noexcept {
   return make_cuDoubleComplex(a * cuCreal(b), a * cuCimag(b));
 }
 
 // Division for cuDoubleComplex (double) with double
-__host__ __device__ __forceinline__ cuDoubleComplex operator/(const cuDoubleComplex &a,
+__host__ __device__ __forceinline__ cuDoubleComplex operator/(const cuDoubleComplex a,
                                                               double b) noexcept {
   return make_cuDoubleComplex(cuCreal(a) / b, cuCimag(a) / b);
 }
 
 __host__ __device__ __forceinline__ cuDoubleComplex operator/(
-    double a, const cuDoubleComplex &b) noexcept {
+    double a, const cuDoubleComplex b) noexcept {
   double denom = cuCreal(b) * cuCreal(b) + cuCimag(b) * cuCimag(b);
   return make_cuDoubleComplex((a * cuCreal(b)) / denom, (-a * cuCimag(b)) / denom);
 }
 
 // Addition for cuFloatComplex (float) with cuFloatComplex (float)
 __host__ __device__ __forceinline__ cuFloatComplex operator+(
-    const cuFloatComplex &a, const cuFloatComplex &b) noexcept {
+    const cuFloatComplex a, const cuFloatComplex b) noexcept {
   return cuCaddf(a, b);
 }
 
 // Subtraction for cuFloatComplex (float) with cuFloatComplex (float)
 __host__ __device__ __forceinline__ cuFloatComplex operator-(
-    const cuFloatComplex &a, const cuFloatComplex &b) noexcept {
+    const cuFloatComplex a, const cuFloatComplex b) noexcept {
   return cuCsubf(a, b);
 }
 
 // Multiplication for cuFloatComplex (float) with cuFloatComplex (float)
 __host__ __device__ __forceinline__ cuFloatComplex operator*(
-    const cuFloatComplex &a, const cuFloatComplex &b) noexcept {
+    const cuFloatComplex a, const cuFloatComplex b) noexcept {
+  // float ar = cuCrealf(a), ai = cuCimagf(a);
+  // float br = cuCrealf(b), bi = cuCimagf(b);
+  // return make_cuFloatComplex(ar * br - ai * bi, ar * bi + ai * br);
   return cuCmulf(a, b);
 }
 
 // Division for cuFloatComplex (float) with cuFloatComplex (float)
 __host__ __device__ __forceinline__ cuFloatComplex operator/(
-    const cuFloatComplex &a, const cuFloatComplex &b) noexcept {
+    const cuFloatComplex a, const cuFloatComplex b) noexcept {
   return cuCdivf(a, b);
 }
 
 // Equality for cuFloatComplex (float) with cuFloatComplex (float)
-__host__ __device__ __forceinline__ bool operator==(const cuFloatComplex &a,
-                                                    const cuFloatComplex &b) noexcept {
+__host__ __device__ __forceinline__ bool operator==(const cuFloatComplex a,
+                                                    const cuFloatComplex b) noexcept {
   return cuCrealf(a) == cuCrealf(b) && cuCimagf(a) == cuCimagf(b);
 }
 
 // Inequality for cuFloatComplex (float) with cuFloatComplex (float)
-__host__ __device__ __forceinline__ bool operator!=(const cuFloatComplex &a,
-                                                    const cuFloatComplex &b) noexcept {
+__host__ __device__ __forceinline__ bool operator!=(const cuFloatComplex a,
+                                                    const cuFloatComplex b) noexcept {
   return !(a == b);
 }
 
 // Addition for cuFloatComplex (float) with float
-__host__ __device__ __forceinline__ cuFloatComplex operator+(const cuFloatComplex &a,
+__host__ __device__ __forceinline__ cuFloatComplex operator+(const cuFloatComplex a,
                                                              float b) noexcept {
   return make_cuFloatComplex(cuCrealf(a) + b, cuCimagf(a));
 }
 
 __host__ __device__ __forceinline__ cuFloatComplex operator+(
-    float a, const cuFloatComplex &b) noexcept {
+    float a, const cuFloatComplex b) noexcept {
   return make_cuFloatComplex(a + cuCrealf(b), cuCimagf(b));
 }
 
 // Subtraction for cuFloatComplex (float) with float
-__host__ __device__ __forceinline__ cuFloatComplex operator-(const cuFloatComplex &a,
+__host__ __device__ __forceinline__ cuFloatComplex operator-(const cuFloatComplex a,
                                                              float b) noexcept {
   return make_cuFloatComplex(cuCrealf(a) - b, cuCimagf(a));
 }
 
 __host__ __device__ __forceinline__ cuFloatComplex operator-(
-    float a, const cuFloatComplex &b) noexcept {
+    float a, const cuFloatComplex b) noexcept {
   return make_cuFloatComplex(a - cuCrealf(b), -cuCimagf(b));
 }
 
 // Multiplication for cuFloatComplex (float) with float
-__host__ __device__ __forceinline__ cuFloatComplex operator*(const cuFloatComplex &a,
+__host__ __device__ __forceinline__ cuFloatComplex operator*(const cuFloatComplex a,
                                                              float b) noexcept {
+
   return make_cuFloatComplex(cuCrealf(a) * b, cuCimagf(a) * b);
 }
 
 __host__ __device__ __forceinline__ cuFloatComplex operator*(
-    float a, const cuFloatComplex &b) noexcept {
+    float a, const cuFloatComplex b) noexcept {
   return make_cuFloatComplex(a * cuCrealf(b), a * cuCimagf(b));
 }
 
 // Division for cuFloatComplex (float) with float
-__host__ __device__ __forceinline__ cuFloatComplex operator/(const cuFloatComplex &a,
+__host__ __device__ __forceinline__ cuFloatComplex operator/(const cuFloatComplex a,
                                                              float b) noexcept {
   return make_cuFloatComplex(cuCrealf(a) / b, cuCimagf(a) / b);
 }
 
 __host__ __device__ __forceinline__ cuFloatComplex operator/(
-    float a, const cuFloatComplex &b) noexcept {
+    float a, const cuFloatComplex b) noexcept {
   float denom = cuCrealf(b) * cuCrealf(b) + cuCimagf(b) * cuCimagf(b);
   return make_cuFloatComplex((a * cuCrealf(b)) / denom, (-a * cuCimagf(b)) / denom);
 }

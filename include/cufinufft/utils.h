@@ -46,7 +46,7 @@ __inline__ __device__ double atomicAdd(double *address, double val) {
  */
 template<typename T> __forceinline__ __device__ auto interval(const int ns, const T x) {
   const auto xstart = int(std::ceil(x - T(ns) * T(.5)));
-  const auto xend   = int(std::floor(x + T(ns) * T(.5)));
+  const auto xend   = xstart + ns - 1;
   return int2{xstart, xend};
 }
 
@@ -101,8 +101,8 @@ template<typename T> T infnorm(int n, std::complex<T> *a) {
  */
 
 template<typename T>
-static __forceinline__ __device__ void atomicAddComplexShared(cuda_complex<T> *address,
-                                                              cuda_complex<T> res) {
+static __forceinline__ __device__ void atomicAddComplexShared(
+    cuda_complex<T> *address, cuda_complex<T> res) {
   const auto raw_address = reinterpret_cast<T *>(address);
   atomicAdd(raw_address, res.x);
   atomicAdd(raw_address + 1, res.y);
@@ -114,8 +114,8 @@ static __forceinline__ __device__ void atomicAddComplexShared(cuda_complex<T> *a
  * on shared memory are supported so we leverage them
  */
 template<typename T>
-static __forceinline__ __device__ void atomicAddComplexGlobal(cuda_complex<T> *address,
-                                                              cuda_complex<T> res) {
+static __forceinline__ __device__ void atomicAddComplexGlobal(
+    cuda_complex<T> *address, cuda_complex<T> res) {
   if constexpr (
       std::is_same_v<cuda_complex<T>, float2> && COMPUTE_CAPABILITY_90_OR_HIGHER) {
     atomicAdd(address, res);
@@ -173,7 +173,8 @@ auto set_nhg_type3(T S, T X, const cufinufft_opts &opts,
   auto nf = (int)nfd;
   // printf("initial nf=%lld, ns=%d\n",*nf,spopts.nspread);
   //  catch too small nf, and nan or +-inf, otherwise spread fails...
-  if (nf < 2 * spopts.nspread) nf = 2 * spopts.nspread;
+  const auto MIN_NF = 2 * spopts.nspread + 4;
+  if (nf < MIN_NF) nf = MIN_NF;
   if (nf < MAX_NF)                   // otherwise will fail anyway
     nf = utils::next235beven(nf, 1); // expensive at huge nf
   // Note: b is 1 because type 3 uses a type 2 plan, so it should not need the extra

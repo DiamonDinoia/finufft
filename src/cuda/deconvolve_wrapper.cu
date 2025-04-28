@@ -50,7 +50,7 @@ __global__ void deconvolve_2d(int ms, int mt, int nf1, int nf2, cuda_complex<T> 
     k2     = i / ms;
     outidx = k1 + k2 * ms;
 
-    if (modeord == 0) {
+    if constexpr (modeord == 0) {
       pivot1    = k1 - ms / 2;
       pivot2    = k2 - mt / 2;
       w1        = (pivot1 >= 0) ? pivot1 : nf1 + pivot1;
@@ -88,7 +88,7 @@ __global__ void deconvolve_3d(int ms, int mt, int mu, int nf1, int nf2, int nf3,
     k3     = (i / ms / mt);
     outidx = k1 + k2 * ms + k3 * ms * mt;
 
-    if (modeord == 0) {
+    if constexpr (modeord == 0) {
       pivot1    = k1 - ms / 2;
       pivot2    = k2 - mt / 2;
       pivot3    = k3 - mu / 2;
@@ -126,7 +126,7 @@ __global__ void amplify_1d(int ms, int nf1, cuda_complex<T> *fw, cuda_complex<T>
 
   for (int i = blockDim.x * blockIdx.x + threadIdx.x; i < ms;
        i += blockDim.x * gridDim.x) {
-    if (modeord == 0) {
+    if constexpr (modeord == 0) {
       pivot1    = i - ms / 2;
       w1        = (pivot1 >= 0) ? pivot1 : nf1 + pivot1;
       fwkerind1 = abs(pivot1);
@@ -149,13 +149,13 @@ __global__ void amplify_2d(int ms, int mt, int nf1, int nf2, cuda_complex<T> *fw
   int k1, k2, inidx, outidx;
   T kervalue;
 
-  for (int i = blockDim.x * blockIdx.x + threadIdx.x; i < ms * mt;
+  for (auto i = blockDim.x * blockIdx.x + threadIdx.x; i < ms * mt;
        i += blockDim.x * gridDim.x) {
     k1    = i % ms;
     k2    = i / ms;
     inidx = k1 + k2 * ms;
 
-    if (modeord == 0) {
+    if constexpr (modeord == 0) {
       pivot1    = k1 - ms / 2;
       pivot2    = k2 - mt / 2;
       w1        = (pivot1 >= 0) ? pivot1 : nf1 + pivot1;
@@ -186,14 +186,14 @@ __global__ void amplify_3d(int ms, int mt, int mu, int nf1, int nf2, int nf3,
   int k1, k2, k3, inidx, outidx;
   T kervalue;
 
-  for (int i = blockDim.x * blockIdx.x + threadIdx.x; i < ms * mt * mu;
+  for (auto i = blockDim.x * blockIdx.x + threadIdx.x; i < ms * mt * mu;
        i += blockDim.x * gridDim.x) {
     k1    = i % ms;
     k2    = (i / ms) % mt;
     k3    = (i / ms / mt);
     inidx = k1 + k2 * ms + k3 * ms * mt;
 
-    if (modeord == 0) {
+    if constexpr (modeord == 0) {
       pivot1    = k1 - ms / 2;
       pivot2    = k2 - mt / 2;
       pivot3    = k3 - mu / 2;

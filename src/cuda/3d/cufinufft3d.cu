@@ -8,6 +8,7 @@
 #include <cufinufft/cudeconvolve.h>
 #include <cufinufft/spreadinterp.h>
 #include <cufinufft/types.h>
+#include <thrust/complex.h>
 
 #include <thrust/extrema.h>
 
@@ -140,27 +141,28 @@ int cufinufft3d3_exec(cuda_complex<T> *d_c, cuda_complex<T> *d_fk,
   Marco Barbone 08/14/2024
   */
   int ier;
-  cuda_complex<T> *d_cstart;
-  cuda_complex<T> *d_fkstart;
   const auto stream = d_plan->stream;
   // setting input for spreader
   d_plan->c = d_plan->CpBatch;
   // setting output for spreader
   d_plan->fk = d_plan->fw;
+
   for (int i = 0; i * d_plan->batchsize < d_plan->ntransf; i++) {
-    int blksize = min(d_plan->ntransf - i * d_plan->batchsize, d_plan->batchsize);
-    d_cstart    = d_c + i * d_plan->batchsize * d_plan->M;
-    d_fkstart   = d_fk + i * d_plan->batchsize * d_plan->N;
+    int blksize    = min(d_plan->ntransf - i * d_plan->batchsize, d_plan->batchsize);
+    auto d_cstart  = d_c + i * d_plan->batchsize * d_plan->M;
+    auto d_fkstart = d_fk + i * d_plan->batchsize * d_plan->N;
+
     // NOTE: fw might need to be set to 0
     if ((ier = checkCudaErrors(cudaMemsetAsync(
              d_plan->fw, 0, d_plan->batchsize * d_plan->nf * sizeof(cuda_complex<T>),
              stream))))
       return ier;
     // Step 0: pre-phase the input strengths
-    for (int i = 0; i < blksize; i++) {
+    for (int blk = 0; blk < blksize; blk++) {
       thrust::transform(thrust::cuda::par.on(stream), d_plan->prephase,
-                        d_plan->prephase + d_plan->M, d_cstart + i * d_plan->M,
-                        d_plan->c + i * d_plan->M, thrust::multiplies<cuda_complex<T>>());
+                        d_plan->prephase + d_plan->M, d_cstart + blk * d_plan->M,
+                        d_plan->c + blk * d_plan->M,
+                        thrust::multiplies<cuda_complex<T>>());
     }
     // Step 1: Spread
     if ((ier = cuspread3d<T>(d_plan, blksize))) return ier;
@@ -173,11 +175,31 @@ int cufinufft3d3_exec(cuda_complex<T> *d_c, cuda_complex<T> *d_fk,
     if ((ier = cufinufft3d2_exec<T>(d_fkstart, d_plan->fw, d_plan->t2_plan))) return ier;
     // Step 3: deconvolve
     // now we need to d_fk = d_fk*d_plan->deconv
-    for (int i = 0; i < blksize; i++) {
-      thrust::transform(thrust::cuda::par.on(stream), d_plan->deconv,
-                        d_plan->deconv + d_plan->N, d_fkstart + i * d_plan->N,
-                        d_fkstart + i * d_plan->N, thrust::multiplies<cuda_complex<T>>());
-    }
+    // for (int i=0; i<blksize; i++) {
+    //   thrust::transform(thrust::device, reinterpret_cast<const thrust::complex<T>
+    //   *>(d_plan->deconv),
+    //       reinterpret_cast<const thrust::complex<T>*>(d_plan->deconv) + d_plan->N,
+    //       reinterpret_cast<thrust::complex<T>*>(d_fkstart + i * d_plan->N),
+    //       reinterpret_cast<thrust::complex<T>*>(d_fkstart + i * d_plan->N),
+    //       thrust::multiplies<thrust::complex<T>>());
+    // }
+    //
+    std::size_t N           = d_plan->N;
+    std::size_t total_size  = blksize * N;
+    cuda_complex<T> *deconv = d_plan->deconv;
+
+    auto counting_iter   = thrust::counting_iterator<std::size_t>(0);
+    auto deconv_mod_iter = thrust::make_transform_iterator(
+        counting_iter, [=] __host__ __device__(std::size_t i) {
+          return deconv[i % N]; // modulo access
+        });
+
+    thrust::transform(thrust::cuda::par.on(stream),
+                      deconv_mod_iter,
+                      deconv_mod_iter + total_size,
+                      d_fkstart,
+                      d_fkstart,
+                      thrust::multiplies<cuda_complex<T>>{});
   }
   return 0;
 }
