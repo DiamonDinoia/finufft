@@ -173,7 +173,7 @@ auto set_nhg_type3(T S, T X, const cufinufft_opts &opts,
   auto nf = (int)nfd;
   // printf("initial nf=%lld, ns=%d\n",*nf,spopts.nspread);
   //  catch too small nf, and nan or +-inf, otherwise spread fails...
-  const auto MIN_NF = 2 * spopts.nspread + 4;
+  const auto MIN_NF = 2 * spopts.nspread;
   if (nf < MIN_NF) nf = MIN_NF;
   if (nf < MAX_NF)                   // otherwise will fail anyway
     nf = utils::next235beven(nf, 1); // expensive at huge nf

@@ -88,8 +88,8 @@ int run_test(int method, int type, int N1, int N2, int N3, int M, T tol, T check
   cufinufft_opts opts;
   cufinufft_default_opts(&opts);
   opts.gpu_method      = 1;
-  opts.gpu_kerevalmeth = 0;
-  opts.upsampfac       = upsampfac;
+  opts.gpu_kerevalmeth = 1;
+  opts.upsampfac       = 1.25;
   opts.debug           = 2;
   int dim              = 3;
   int nmodes[3]        = {N1, N2, N3};
