@@ -17,6 +17,7 @@
 // convenient private finufft internals that tests need
 #include <finufft/finufft_core.h>
 #include <finufft/finufft_utils.hpp>
+#include <common/common.h>
 #include <memory>
 
 // --------------- Private data types for compilation in either prec ---------
@@ -36,6 +37,7 @@ using CPX = std::complex<FLT>;
 
 // -------------- Math consts (not in math.h) and useful math macros ----------
 #include <cmath>
+using ::finufft::common::PI;
 
 // either-precision unit imaginary number...
 #define IMA (CPX(0.0, 1.0))
