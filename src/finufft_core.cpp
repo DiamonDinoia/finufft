@@ -16,6 +16,15 @@ using namespace finufft::utils;
 using namespace finufft::spreadinterp;
 using namespace finufft::heuristics;
 
+// Forward declaration of the generic execution kernel. This will be used to
+// initialize the function pointer stored inside the plan. Specialized kernels
+// can later be provided and assigned to the plan at creation time.
+template<typename TF>
+static int execute_kernel_default(
+    const FINUFFT_PLAN_T<TF> &p, typename FINUFFT_PLAN_T<TF>::TC *cj,
+    typename FINUFFT_PLAN_T<TF>::TC *fk, bool adjoint, int ntrans_actual,
+    typename FINUFFT_PLAN_T<TF>::TC *aligned_scratch, size_t scratch_size);
+
 /* Computational core for FINUFFT.
 
    Based on Barnett 2017-2018 finufft?d.cpp containing nine drivers, plus
@@ -425,10 +434,9 @@ static void deconvolveshuffle3d(int dir, T prefac, const std::vector<T> &ker1,
 
 // --------- batch helper functions for t1,2 exec: ---------------------------
 
-template<typename T>
+template<typename T, int NS, int KM, bool Adjoint>
 static int spreadinterpSortedBatch(int batchSize, const FINUFFT_PLAN_T<T> &p,
-                                   std::complex<T> *fwBatch, std::complex<T> *cBatch,
-                                   bool adjoint)
+                                   std::complex<T> *fwBatch, std::complex<T> *cBatch)
 /*
   Spreads (or interpolates) a batch of batchSize strength vectors in cBatch
   to (or from) the batch of fine working grids fwBatch, using the same set of
@@ -454,17 +462,17 @@ static int spreadinterpSortedBatch(int batchSize, const FINUFFT_PLAN_T<T> &p,
     std::complex<T> *fwi = fwBatch + i * p.nf(); // start of i'th fw array in
                                                  // fwBatch workspace or user array
     std::complex<T> *ci = cBatch + i * p.nj;     // start of i'th c array in cBatch
-    spreadinterpSorted(p.sortIndices, (UBIGINT)p.nfdim[0], (UBIGINT)p.nfdim[1],
-                       (UBIGINT)p.nfdim[2], (T *)fwi, (UBIGINT)p.nj, p.XYZ[0], p.XYZ[1],
-                       p.XYZ[2], (T *)ci, p.spopts, p.didSort, adjoint);
+    spreadinterpSorted<T, NS, KM, Adjoint>(p.sortIndices, (UBIGINT)p.nfdim[0],
+                                           (UBIGINT)p.nfdim[1], (UBIGINT)p.nfdim[2],
+                                           (T *)fwi, (UBIGINT)p.nj, p.XYZ[0], p.XYZ[1],
+                                           p.XYZ[2], (T *)ci, p.spopts, p.didSort);
   }
   return 0;
 }
 
-template<typename T>
+template<typename T, int Dim, bool Adjoint>
 static int deconvolveBatch(int batchSize, const FINUFFT_PLAN_T<T> &p,
-                           std::complex<T> *fkBatch, std::complex<T> *fwBatch,
-                           bool adjoint)
+                           std::complex<T> *fkBatch, std::complex<T> *fwBatch)
 /*
   Type 1: deconvolves (amplifies) from each interior fw array in fwBatch
   into each output array fk in fkBatch.
@@ -480,7 +488,7 @@ static int deconvolveBatch(int batchSize, const FINUFFT_PLAN_T<T> &p,
   int dir = p.spopts.spread_direction;
   // Quick and dirty way to change direction 1 into direction 2 and vice versa
   // if adjoint operation is requested.
-  if (adjoint) dir = 3 - dir;
+  if constexpr (Adjoint) dir = 3 - dir;
 #pragma omp parallel for num_threads(batchSize)
   for (int i = 0; i < batchSize; i++) {
     std::complex<T> *fwi = fwBatch + i * p.nf(); // start of i'th fw array in
@@ -488,10 +496,10 @@ static int deconvolveBatch(int batchSize, const FINUFFT_PLAN_T<T> &p,
     std::complex<T> *fki = fkBatch + i * p.N();  // start of i'th fk array in fkBatch
 
     // pick dim-specific routine from above; note prefactors hardcoded to 1.0...
-    if (p.dim == 1)
+    if constexpr (Dim == 1)
       deconvolveshuffle1d(dir, T(1), p.phiHat[0], p.mstu[0], (T *)fki, p.nfdim[0], fwi,
                           p.opts.modeord);
-    else if (p.dim == 2)
+    else if constexpr (Dim == 2)
       deconvolveshuffle2d(dir, T(1), p.phiHat[0], p.phiHat[1], p.mstu[0], p.mstu[1],
                           (T *)fki, p.nfdim[0], p.nfdim[1], fwi, p.opts.modeord);
     else
@@ -763,6 +771,8 @@ FINUFFT_PLAN_T<TF>::FINUFFT_PLAN_T(int type_, int dim_, const BIGINT *n_modes, i
     // Type 3 will call finufft_makeplan for type 2; no need to init FFTW
     // Note we don't even know nj or nk yet, so can't do anything else!
   }
+  // by default use the generic execution kernel
+  execKernel = &execute_kernel_default<TF>;
   if (ier > 1) throw int(ier); // report setup_spreader status (could be warning)
 }
 
@@ -976,8 +986,9 @@ template int FINUFFT_PLAN_T<double>::setpts(BIGINT nj, double *xj, double *yj, d
 
 // EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
 template<typename TF>
-int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntrans_actual,
-                                         TC *aligned_scratch, size_t scratch_size) const {
+template<int NS, int KM, bool Debug, bool SpreadOnly, bool Adjoint, int Type, int Dim>
+int FINUFFT_PLAN_T<TF>::execute_internal_impl(
+    TC *cj, TC *fk, int ntrans_actual, TC *aligned_scratch, size_t scratch_size) const {
   /* See ../docs/cguru.doc for current documentation.
 
    For given (stack of) weights cj or coefficients fk, performs NUFFTs with
@@ -1021,12 +1032,12 @@ int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntran
   // if no number of actual transforms has been specified, use the default
   if (ntrans_actual <= 0) ntrans_actual = ntrans;
 
-  if (type != 3) { // --------------------- TYPE 1,2 EXEC ------------------
+  if constexpr (Type != 3) { // --------------------- TYPE 1,2 EXEC ------------------
 
     double t_sprint = 0.0, t_fft = 0.0, t_deconv = 0.0; // accumulated timing
-    if (opts.debug)
+    if constexpr (Debug)
       printf("[%s] start%s ntrans=%d (%d batches, bsize=%d)...\n", "execute",
-             adjoint ? " adjoint" : "", ntrans_actual, nbatch, batchSize);
+             Adjoint ? " adjoint" : "", ntrans_actual, nbatch, batchSize);
     // allocate temporary buffers
     bool scratch_provided = scratch_size >= size_t(nf() * batchSize);
     std::vector<TC, xsimd::aligned_allocator<TC, 64>> fwBatch_(
@@ -1039,44 +1050,48 @@ int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntran
       int bB            = b * batchSize; // index of vector, since batchsizes same
       TC *cjb           = cj + bB * nj;  // point to batch of user weights
       TC *fkb           = fk + bB * N(); // point to batch of user mode coeffs
-      if (opts.debug > 1)
-        printf("[%s] start batch %d (size %d):\n", "execute", b, thisBatchSize);
+      if constexpr (Debug)
+        if (opts.debug > 1)
+          printf("[%s] start batch %d (size %d):\n", "execute", b, thisBatchSize);
 
       // STEP 1: (varies by type)
       timer.restart();
       // usually spread/interp to/from fwBatch (vs spreadinterponly: to/from user grid)
-      TC *fwBatch_or_fkb = opts.spreadinterponly ? fkb : fwBatch;
-      if ((type == 1) != adjoint) { // spread NU pts X, weights cj, to fw grid
-        spreadinterpSortedBatch<TF>(thisBatchSize, *this, fwBatch_or_fkb, cjb, adjoint);
+      TC *fwBatch_or_fkb = SpreadOnly ? fkb : fwBatch;
+      if constexpr ((Type == 1) != Adjoint) { // spread NU pts X, weights cj, to fw grid
+        spreadinterpSortedBatch<TF, NS, KM, Adjoint>(thisBatchSize, *this, fwBatch_or_fkb,
+                                                     cjb);
         t_sprint += timer.elapsedsec();
-        if (opts.spreadinterponly) // we're done (skip to next iteration of loop)
+        if constexpr (SpreadOnly) // we're done (skip to next iteration of loop)
           continue;
-      } else if (!opts.spreadinterponly) {
+      } else if constexpr (!SpreadOnly) {
         // amplify Fourier coeffs fk into 0-padded fw
-        deconvolveBatch<TF>(thisBatchSize, *this, fkb, fwBatch, adjoint);
+        deconvolveBatch<TF, Dim, Adjoint>(thisBatchSize, *this, fkb, fwBatch);
         t_deconv += timer.elapsedsec();
       }
-      if (!opts.spreadinterponly) { // Do FFT unless spread/interp only...
+      if constexpr (!SpreadOnly) { // Do FFT unless spread/interp only...
         // STEP 2: call the FFT on this batch
         timer.restart();
 
-        do_fft(*this, fwBatch, thisBatchSize, adjoint);
+        do_fft(*this, fwBatch, thisBatchSize, Adjoint);
         t_fft += timer.elapsedsec();
-        if (opts.debug > 1) printf("\tFFT exec:\t\t%.3g s\n", timer.elapsedsec());
+        if constexpr (Debug)
+          if (opts.debug > 1) printf("\tFFT exec:\t\t%.3g s\n", timer.elapsedsec());
       }
       // STEP 3: (varies by type)
       timer.restart();
-      if ((type == 1) != adjoint) { // deconvolve (amplify) fw and shuffle to fk
-        deconvolveBatch<TF>(thisBatchSize, *this, fkb, fwBatch, adjoint);
+      if constexpr ((Type == 1) != Adjoint) { // deconvolve (amplify) fw and shuffle to fk
+        deconvolveBatch<TF, Dim, Adjoint>(thisBatchSize, *this, fkb, fwBatch);
         t_deconv += timer.elapsedsec();
       } else { // interpolate unif fw grid to NU target pts
-        spreadinterpSortedBatch<TF>(thisBatchSize, *this, fwBatch_or_fkb, cjb, adjoint);
+        spreadinterpSortedBatch<TF, NS, KM, Adjoint>(thisBatchSize, *this, fwBatch_or_fkb,
+                                                     cjb);
         t_sprint += timer.elapsedsec();
       }
     } // ........end b loop
 
-    if (opts.debug) { // report total times in their natural order...
-      if ((type == 1) != adjoint) {
+    if constexpr (Debug) { // report total times in their natural order...
+      if constexpr ((Type == 1) != Adjoint) {
         printf("[%s] done. tot spread:\t\t%.3g s\n", "execute", t_sprint);
         printf("                tot FFT:\t\t%.3g s\n", t_fft);
         printf("                tot deconvolve:\t\t%.3g s\n", t_deconv);
@@ -1095,9 +1110,9 @@ int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntran
 
     double t_phase = 0.0, t_sprint = 0.0, t_inner = 0.0,
            t_deconv = 0.0; // accumulated timings
-    if (opts.debug)
+    if constexpr (Debug)
       printf("[%s t3] start%s ntrans=%d (%d batches, bsize=%d)...\n", "execute",
-             adjoint ? " adjoint" : "", ntrans_actual, nbatch, batchSize);
+             Adjoint ? " adjoint" : "", ntrans_actual, nbatch, batchSize);
 
     // allocate temporary buffers
     // We are trying to be clever here and re-use memory whenever possible.
@@ -1105,7 +1120,7 @@ int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntran
     // so that it doesn't need to be reallocated for every batch.
     std::vector<TC, xsimd::aligned_allocator<TC, 64>> buf1, buf2, buf3;
     TC *CpBatch, *fwBatch, *fwBatch_inner;
-    if (!adjoint) { // we can combine CpBatch and fwBatch_inner!
+    if constexpr (!Adjoint) { // we can combine CpBatch and fwBatch_inner!
       buf1.resize(std::max(nj * batchSize, innerT2plan->nf() * innerT2plan->batchSize));
       CpBatch = fwBatch_inner = buf1.data();
       buf2.resize(nf() * batchSize);
@@ -1135,10 +1150,11 @@ int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntran
       int bB            = b * batchSize;
       TC *cjb           = cj + bB * nj; // batch of input strengths
       TC *fkb           = fk + bB * nk; // batch of output strengths
-      if (opts.debug > 1)
-        printf("[%s t3] start batch %d (size %d):\n", "execute", b, thisBatchSize);
+      if constexpr (Debug)
+        if (opts.debug > 1)
+          printf("[%s t3] start batch %d (size %d):\n", "execute", b, thisBatchSize);
 
-      if (!adjoint) {
+      if constexpr (!Adjoint) {
         // STEP 0: pre-phase (possibly) the c_j input strengths into c'_j batch...
         timer.restart();
 #pragma omp parallel for num_threads(opts.nthreads) // or batchSize?
@@ -1152,15 +1168,15 @@ int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntran
 
         // STEP 1: spread c'_j batch (x'_j NU pts) into internal fw batch grid...
         timer.restart();
-        spreadinterpSortedBatch<TF>(thisBatchSize, *this, fwBatch, CpBatch,
-                                    adjoint); // X are primed
+        spreadinterpSortedBatch<TF, NS, KM, Adjoint>(thisBatchSize, *this, fwBatch,
+                                                     CpBatch);
         t_sprint += timer.elapsedsec();
 
         // STEP 2: type 2 NUFFT from fw batch to user output fk array batch...
         timer.restart();
         /* (alarming that FFT not shrunk, but safe, because t2's fwBatch array
        still the same size, as Andrea explained; just wastes a few flops) */
-        innerT2plan->execute_internal(fkb, fwBatch, adjoint, thisBatchSize, fwBatch_inner,
+        innerT2plan->execute_internal(fkb, fwBatch, Adjoint, thisBatchSize, fwBatch_inner,
                                       innerT2plan->nf() * innerT2plan->batchSize);
         t_inner += timer.elapsedsec();
         // STEP 3: apply deconvolve (precomputed 1/phiHat(targ_k), phasing too)...
@@ -1184,14 +1200,13 @@ int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntran
         t_deconv += timer.elapsedsec();
         // STEP 1: adjoint type 2 (i.e. type 1) NUFFT from CpBatch to fwBatch...
         timer.restart();
-        innerT2plan->execute_internal(CpBatch, fwBatch, adjoint, thisBatchSize,
+        innerT2plan->execute_internal(CpBatch, fwBatch, Adjoint, thisBatchSize,
                                       fwBatch_inner,
                                       innerT2plan->nf() * innerT2plan->batchSize);
         t_inner += timer.elapsedsec();
         // STEP 2: interpolate fwBatch into user output array ...
         timer.restart();
-        spreadinterpSortedBatch<TF>(thisBatchSize, *this, fwBatch, cjb,
-                                    adjoint); // X are primed
+        spreadinterpSortedBatch<TF, NS, KM, Adjoint>(thisBatchSize, *this, fwBatch, cjb);
         t_sprint += timer.elapsedsec();
         // STEP 3: post-phase (possibly) the c_j output strengths (in place) ...
         timer.restart();
@@ -1206,8 +1221,8 @@ int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntran
       }
     } // ........end b loop
 
-    if (opts.debug) { // report total times in their natural order...
-      if (!adjoint) {
+    if constexpr (Debug) { // report total times in their natural order...
+      if constexpr (!Adjoint) {
         printf("[%s t3] done. tot prephase:\t%.3g s\n", "execute", t_phase);
         printf("                   tot spread:\t\t%.3g s\n", t_sprint);
         printf("                   tot inner NUFFT:\t%.3g s\n", t_inner);
@@ -1224,6 +1239,49 @@ int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntran
   // int)k,(double)real(fk[k]),(double)imag(fk[k]));  // debug
 
   return 0;
+}
+
+template<typename TF> struct ExecuteCaller {
+  const FINUFFT_PLAN_T<TF> &p;
+  typename FINUFFT_PLAN_T<TF>::TC *cj;
+  typename FINUFFT_PLAN_T<TF>::TC *fk;
+  int ntrans_actual;
+  typename FINUFFT_PLAN_T<TF>::TC *aligned_scratch;
+  size_t scratch_size;
+  template<int NS, int KM, bool Debug, bool SpreadOnly, bool Adjoint, int Type, int Dim>
+  int operator()() const {
+    return p
+        .template execute_internal_impl<NS, KM, Debug, SpreadOnly, Adjoint, Type, Dim>(
+            cj, fk, ntrans_actual, aligned_scratch, scratch_size);
+  }
+};
+
+template<typename TF>
+static int execute_kernel_default(
+    const FINUFFT_PLAN_T<TF> &p, typename FINUFFT_PLAN_T<TF>::TC *cj,
+    typename FINUFFT_PLAN_T<TF>::TC *fk, bool adjoint, int ntrans_actual,
+    typename FINUFFT_PLAN_T<TF>::TC *aligned_scratch, size_t scratch_size) {
+  ExecuteCaller<TF> caller{p, cj, fk, ntrans_actual, aligned_scratch, scratch_size};
+  using NsSeq   = common::make_range<common::MIN_NSPREAD, common::MAX_NSPREAD>;
+  using KerSeq  = std::make_integer_sequence<int, common::KEREVAL_METHODS>;
+  using BoolSeq = common::make_range<0, 1>;
+  using TypeSeq = common::make_range<1, 3>;
+  using DimSeq  = common::make_range<1, 3>;
+  auto params =
+      std::make_tuple(common::DispatchParam<NsSeq>{p.spopts.nspread, NsSeq{}},
+                      common::DispatchParam<KerSeq>{p.spopts.kerevalmeth, KerSeq{}},
+                      common::DispatchParam<BoolSeq>{p.opts.debug ? 1 : 0, BoolSeq{}},
+                      common::DispatchParam<BoolSeq>{p.opts.spreadinterponly, BoolSeq{}},
+                      common::DispatchParam<BoolSeq>{adjoint, BoolSeq{}},
+                      common::DispatchParam<TypeSeq>{p.type, TypeSeq{}},
+                      common::DispatchParam<DimSeq>{p.dim, DimSeq{}});
+  return common::dispatch(caller, params);
+}
+
+template<typename TF>
+int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntrans_actual,
+                                         TC *aligned_scratch, size_t scratch_size) const {
+  return execKernel(*this, cj, fk, adjoint, ntrans_actual, aligned_scratch, scratch_size);
 }
 template int FINUFFT_PLAN_T<float>::execute_internal(
     std::complex<float> *cj, std::complex<float> *fk, bool adjoint, int ntrans_actual,

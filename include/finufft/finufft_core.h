@@ -121,6 +121,18 @@ template<typename TF> struct FINUFFT_PLAN_T { // the main plan class, fully C++
   finufft_opts opts; // this and spopts could be made ptrs
   finufft_spread_opts spopts;
 
+  // function pointer to the internal execution kernel. This allows the plan to
+  // choose a specialized implementation at creation time so that
+  // execute_internal only performs a single dispatch.
+  using ExecFunc      = int (*)(const FINUFFT_PLAN_T<TF> &, TC *, TC *, bool, int, TC *,
+                           size_t);
+  ExecFunc execKernel = nullptr;
+
+  // internal implementation used by the default execution kernel
+  template<int NS, int KM, bool Debug, bool SpreadOnly, bool Adjoint, int Type, int Dim>
+  int execute_internal_impl(TC *cj, TC *fk, int ntrans_actual, TC *aligned_scratch,
+                            size_t scratch_size) const;
+
   // Remaining actions (not create/delete) in guru interface are now methods...
   int setpts(BIGINT nj, TF *xj, TF *yj, TF *zj, BIGINT nk, TF *s, TF *t, TF *u);
   int execute_internal(TC *cj, TC *fk, bool adjoint = false, int ntrans_actual = -1,
