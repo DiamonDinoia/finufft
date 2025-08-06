@@ -1954,30 +1954,32 @@ int spreadinterpSorted(const std::vector<BIGINT> &sort_indices, const UBIGINT N1
   return 0;
 }
 
+template<typename T> struct Caller {
+  const std::vector<BIGINT> &sort_indices;
+  UBIGINT N1, N2, N3;
+  T *data_uniform;
+  UBIGINT M;
+  T *kx;
+  T *ky;
+  T *kz;
+  T *data_nonuniform;
+  const finufft_spread_opts &opts;
+  int did_sort;
+  template<int NS, int KM, bool ADJ> int operator()() const {
+    return spreadinterpSorted<T, NS, KM, ADJ>(sort_indices, N1, N2, N3, data_uniform, M,
+                                              kx, ky, kz, data_nonuniform, opts,
+                                              did_sort);
+  }
+};
+
 template<typename T>
 int spreadinterpSorted(const std::vector<BIGINT> &sort_indices, const UBIGINT N1,
                        const UBIGINT N2, const UBIGINT N3, T *data_uniform,
                        const UBIGINT M, T *FINUFFT_RESTRICT kx, T *FINUFFT_RESTRICT ky,
                        T *FINUFFT_RESTRICT kz, T *FINUFFT_RESTRICT data_nonuniform,
                        const finufft_spread_opts &opts, int did_sort, bool adjoint) {
-  struct Caller {
-    const std::vector<BIGINT> &sort_indices;
-    UBIGINT N1, N2, N3;
-    T *data_uniform;
-    UBIGINT M;
-    T *kx;
-    T *ky;
-    T *kz;
-    T *data_nonuniform;
-    const finufft_spread_opts &opts;
-    int did_sort;
-    template<int NS, int KM, bool ADJ> int operator()() const {
-      return spreadinterpSorted<T, NS, KM, ADJ>(sort_indices, N1, N2, N3, data_uniform, M,
-                                                kx, ky, kz, data_nonuniform, opts,
-                                                did_sort);
-    }
-  } caller{sort_indices,    N1,   N2,      N3, data_uniform, M, kx, ky, kz,
-           data_nonuniform, opts, did_sort};
+  const Caller<T> caller{sort_indices,    N1,   N2,      N3, data_uniform, M, kx, ky, kz,
+                         data_nonuniform, opts, did_sort};
   using NsSeq =
       common::make_range<::finufft::common::MIN_NSPREAD, ::finufft::common::MAX_NSPREAD>;
   using KerSeq  = std::make_integer_sequence<int, common::KEREVAL_METHODS>;
@@ -2019,12 +2021,13 @@ template int spreadinterpSorted<double>(
   FINUFFT_INSTANTIATE_NS(T, 2)                                                           \
   FINUFFT_INSTANTIATE_NS(T, 3)                                                           \
   FINUFFT_INSTANTIATE_NS(T, 4)                                                           \
-  FINUFFT_INSTANTIATE_NS(T, 5) FINUFFT_INSTANTIATE_NS(T, 6) FINUFFT_INSTANTIATE_NS(T, 7) \
-      FINUFFT_INSTANTIATE_NS(T, 8) FINUFFT_INSTANTIATE_NS(T, 9)                          \
-          FINUFFT_INSTANTIATE_NS(T, 10) FINUFFT_INSTANTIATE_NS(T, 11)                    \
-              FINUFFT_INSTANTIATE_NS(T, 12) FINUFFT_INSTANTIATE_NS(T, 13)                \
-                  FINUFFT_INSTANTIATE_NS(T, 14) FINUFFT_INSTANTIATE_NS(T, 15)            \
-                      FINUFFT_INSTANTIATE_NS(T, 16)
+  FINUFFT_INSTANTIATE_NS(T, 5)                                                           \
+  FINUFFT_INSTANTIATE_NS(T, 6)                                                           \
+  FINUFFT_INSTANTIATE_NS(T, 7) FINUFFT_INSTANTIATE_NS(T, 8) FINUFFT_INSTANTIATE_NS(T, 9) \
+      FINUFFT_INSTANTIATE_NS(T, 10) FINUFFT_INSTANTIATE_NS(T, 11)                        \
+          FINUFFT_INSTANTIATE_NS(T, 12) FINUFFT_INSTANTIATE_NS(T, 13)                    \
+              FINUFFT_INSTANTIATE_NS(T, 14) FINUFFT_INSTANTIATE_NS(T, 15)                \
+                  FINUFFT_INSTANTIATE_NS(T, 16)
 
 FINUFFT_INSTANTIATE_ALL(float)
 FINUFFT_INSTANTIATE_ALL(double)
