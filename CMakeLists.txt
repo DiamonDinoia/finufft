@@ -122,6 +122,16 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Set the default build type to Release" FORCE)
 endif()
 
+# This set of sources is compiled twice, once in single precision and once in
+# double precision The single precision compilation is done with -DSINGLE
+set(FINUFFT_PRECISION_DEPENDENT_SOURCES)
+
+# If we're building for Fortran, make sure we also include the translation
+# layer.
+if(FINUFFT_BUILD_FORTRAN)
+    list(APPEND FINUFFT_PRECISION_DEPENDENT_SOURCES fortran/finufftfort.cpp)
+endif()
+
 # set linker flags for sanitizer
 set(FINUFFT_SANITIZER_FLAGS)
 if(FINUFFT_ENABLE_SANITIZERS)
@@ -245,8 +255,100 @@ function(set_finufft_options target)
     target_link_libraries(${target} PRIVATE ${FINUFFT_FFTLIBS})
 endfunction()
 
-set(INSTALL_TARGETS "")
-add_subdirectory(src)
+if(FINUFFT_USE_CPU)
+    set(FINUFFT_SOURCES
+        src/spreadinterp.cpp
+        src/fft.cpp
+        src/finufft_core.cpp
+        src/c_interface.cpp
+        src/finufft_utils.cpp
+        src/utils.cpp
+    )
+
+    if(FINUFFT_BUILD_FORTRAN)
+        list(APPEND FINUFFT_SOURCES fortran/finufftfort.cpp)
+    endif()
+
+    # Main finufft libraries
+    if(NOT FINUFFT_STATIC_LINKING)
+        add_library(finufft SHARED ${FINUFFT_SOURCES})
+    else()
+        add_library(finufft STATIC ${FINUFFT_SOURCES})
+    endif()
+    set_finufft_options(finufft)
+
+    if(WIN32 AND FINUFFT_SHARED_LINKING)
+        target_compile_definitions(finufft PRIVATE dll_EXPORTS FINUFFT_DLL)
+    endif()
+    find_library(MATH_LIBRARY m)
+    if(MATH_LIBRARY)
+        target_link_libraries(finufft PRIVATE ${MATH_LIBRARY})
+    endif()
+    target_include_directories(finufft PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+    target_include_directories(finufft SYSTEM INTERFACE $<INSTALL_INTERFACE:${CMAKE_INSTALL_PREFIX}/include>)
+    if(FINUFFT_ENABLE_INSTALL)
+        file(GLOB FINUFFT_PUBLIC_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include/finufft*.h")
+        set_target_properties(finufft PROPERTIES PUBLIC_HEADER "${FINUFFT_PUBLIC_HEADERS}")
+    endif()
+    list(APPEND INSTALL_TARGETS finufft)
+endif()
+
+if(FINUFFT_USE_CUDA)
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        message(
+            WARNING
+            "FINUFFT WARNING: No CUDA architecture supplied via '-DCMAKE_CUDA_ARCHITECTURES=...', defaulting to 'native' See: https://developer.nvidia.com/cuda-gpus for more details on what architecture to supply."
+        )
+        detect_cuda_architecture()
+    endif()
+    if(CMAKE_CUDA_ARCHITECTURES MATCHES "compute_")
+        message(
+            FATAL_ERROR
+            "CMAKE_CUDA_ARCHITECTURES must be a list of integers like 70;75;86, not strings like compute_89"
+        )
+    endif()
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    include(cmake/setupCCCL.cmake)
+    add_subdirectory(src/cuda)
+    if(BUILD_TESTING AND FINUFFT_BUILD_TESTS)
+        add_subdirectory(perftest/cuda)
+        add_subdirectory(test/cuda)
+    endif()
+
+    list(APPEND INSTALL_TARGETS cufinufft)
+endif()
+
+# Add tests defined in their own directory
+if(BUILD_TESTING AND FINUFFT_USE_CPU AND FINUFFT_BUILD_TESTS)
+    add_subdirectory(test)
+    add_subdirectory(perftest)
+endif()
+
+if(FINUFFT_BUILD_EXAMPLES AND FINUFFT_USE_CPU)
+    add_subdirectory(examples)
+endif()
+
+if(FINUFFT_BUILD_EXAMPLES AND FINUFFT_USE_CUDA)
+    add_subdirectory(examples/cuda)
+endif()
+
+if(FINUFFT_BUILD_FORTRAN)
+    enable_language(Fortran)
+    add_subdirectory(fortran)
+endif()
+
+if(FINUFFT_BUILD_MATLAB)
+    add_subdirectory(matlab)
+endif()
+
+if(FINUFFT_BUILD_DEVEL)
+    add_subdirectory(devel)
+endif()
+
+if(FINUFFT_BUILD_PYTHON)
+    add_subdirectory(python)
+endif()
 
 # gersemi: off
 message(STATUS "FINUFFT configuration summary:")
