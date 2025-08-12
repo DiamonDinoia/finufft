@@ -24,8 +24,6 @@ set(CUFINUFFT_INCLUDE_DIRS
     $<TARGET_PROPERTY:CUDA::cufft,INTERFACE_INCLUDE_DIRECTORIES>
 )
 
-set(CUFINUFFT_INCLUDE_DIRS ${CUFINUFFT_INCLUDE_DIRS} PARENT_SCOPE)
-
 # flush denormals to zero and enable verbose PTXAS output
 if(CMAKE_CUDA_COMPILER_ID STREQUAL "NVIDIA")
     list(APPEND FINUFFT_CUDA_FLAGS $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda --extra-device-vectorization>)
@@ -61,16 +59,20 @@ else()
 endif()
 target_compile_options(cufinufft PUBLIC ${FINUFFT_CUDA_FLAGS})
 
-if(WIN32 OR (BUILD_TESTING AND FINUFFT_BUILD_TESTS) OR CIBUILDWHEEL)
+if(WIN32 OR FINUFFT_BUILD_TESTS OR CIBUILDWHEEL)
     target_link_libraries(cufinufft PUBLIC CUDA::cudart CUDA::cufft)
 else()
     target_link_libraries(cufinufft PUBLIC CUDA::cudart_static CUDA::cufft_static)
 endif()
 target_link_libraries(cufinufft PUBLIC CCCL::CCCL)
-# disable deprecated warnings for tests if supported
-if(FINUFFT_HAS_NO_DEPRECATED_DECLARATIONS)
-    target_compile_options(cufinufft PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Wno-deprecated-declarations>)
-endif()
+# disable deprecated warnings for CUDA sources on non-MSVC hosts
+target_compile_options(
+    cufinufft
+    PRIVATE $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>>:-Wno-deprecated-declarations>
+)
 
 file(GLOB CUFINUFFT_PUBLIC_HEADERS "${CMAKE_SOURCE_DIR}/include/cufinufft*.h")
 set_target_properties(cufinufft PROPERTIES PUBLIC_HEADER "${CUFINUFFT_PUBLIC_HEADERS}")
+
+list(APPEND INSTALL_TARGETS cufinufft)
+set(INSTALL_TARGETS "${INSTALL_TARGETS}" PARENT_SCOPE)

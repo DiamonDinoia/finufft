@@ -4,9 +4,8 @@ foreach(srcfile ${test_src})
     string(REGEX REPLACE "\\.c.?" "" executable ${srcfile})
     get_filename_component(executable ${executable} NAME)
     add_executable(${executable} ${srcfile})
-    target_include_directories(${executable} PUBLIC ${CUFINUFFT_INCLUDE_DIRS})
     find_library(MathLib m)
-    target_link_libraries(${executable} cufinufft CUDA::cufft CUDA::cudart)
+    target_link_libraries(${executable} cufinufft)
     if(MathLib)
         target_link_libraries(${executable} ${MathLib})
     endif()
@@ -15,12 +14,7 @@ foreach(srcfile ${test_src})
         ${executable}
         PROPERTIES LINKER_LANGUAGE CUDA CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
     )
-    message(
-        STATUS
-        "Adding test ${executable}"
-        " with CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}"
-        " and INCLUDE=${CUFINUFFT_INCLUDE_DIRS}"
-    )
+    message(STATUS "Adding test ${executable} with CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}")
 endforeach()
 
 function(add_tests PREC REQ_TOL CHECK_TOL UPSAMP)

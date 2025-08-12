@@ -1,6 +1,5 @@
 add_executable(cuperftest cuperftest.cu)
-target_include_directories(cuperftest PUBLIC ${CUFINUFFT_INCLUDE_DIRS})
-target_link_libraries(cuperftest cufinufft CUDA::cufft CUDA::cudart)
+target_link_libraries(cuperftest cufinufft)
 target_compile_features(cuperftest PRIVATE cxx_std_17)
 set_target_properties(
     cuperftest

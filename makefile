@@ -459,7 +459,10 @@ docker-wheel:
 define clone_repo
     @if [ ! -d "$(3)" ]; then \
         echo "Cloning repository $(1) at tag $(2) into directory $(3)"; \
-        git clone --depth=1 --branch $(2) $(1) $(3); \
+        git clone --depth=1 --no-tags $(1) $(3) && \
+        cd $(3) && \
+        git fetch --depth=1 origin tag $(2) && \
+        git -c advice.detachedHead=false checkout $(2); \
     else \
         cd $(3) && \
         CURRENT_VERSION=$$(git describe --tags --abbrev=0) && \
@@ -468,10 +471,11 @@ define clone_repo
         else \
             echo "Directory $(3) exists but is at version $$CURRENT_VERSION. Checking out the correct version $(2)."; \
             git fetch --tags && \
-            git checkout $(2) || { echo "Error: Failed to checkout version $(2) in $(3)."; exit 1; }; \
+            git -c advice.detachedHead=false checkout $(2) || { echo "Error: Failed to checkout version $(2) in $(3)."; exit 1; }; \
         fi; \
     fi
 endef
+
 
 # download: header-only, no compile needed...
 $(XSIMD_DIR)/include/xsimd/xsimd.hpp:
