@@ -2,40 +2,27 @@ function(copy_dll source_target destination_target)
     if(NOT WIN32)
         return()
     endif()
-    # Get the binary directory of the destination target
-    get_target_property(DESTINATION_DIR ${destination_target} BINARY_DIR)
-    set(DESTINATION_FILE ${DESTINATION_DIR}/$<TARGET_FILE_NAME:${source_target}>)
-    if(NOT EXISTS ${DESTINATION_FILE})
-        message(STATUS "Copying ${source_target} to ${DESTINATION_DIR} directory for ${destination_target}")
-        # Define the custom command to copy the source target to the destination
-        # directory
-        add_custom_command(
-            TARGET ${destination_target}
-            POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${source_target}> ${DESTINATION_FILE}
-            COMMENT "Copying ${source_target} to ${destination_target} directory"
-        )
-    endif()
-    # Unset the variables to leave a clean state
-    unset(DESTINATION_DIR)
-    unset(SOURCE_FILE)
-    unset(DESTINATION_FILE)
+    add_custom_command(
+        TARGET ${destination_target}
+        POST_BUILD
+        COMMAND
+            ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:${source_target}>
+            $<TARGET_FILE_DIR:${destination_target}>/$<TARGET_FILE_NAME:${source_target}>
+        COMMENT "Copying $<TARGET_FILE_NAME:${source_target}> next to $<TARGET_FILE_NAME:${destination_target}>"
+        VERBATIM
+    )
 endfunction()
 
 include(CheckIPOSupported)
 check_ipo_supported(RESULT LTO_SUPPORTED OUTPUT LTO_ERROR)
-
 if(LTO_SUPPORTED)
-    message(STATUS "LTO is supported and enabled.")
     set(FINUFFT_INTERPROCEDURAL_OPTIMIZATION TRUE)
 else()
-    message(WARNING "LTO is not supported: ${LTO_ERROR}")
     set(FINUFFT_INTERPROCEDURAL_OPTIMIZATION FALSE)
 endif()
 
 function(detect_cuda_architecture)
     find_program(NVIDIA_SMI_EXECUTABLE nvidia-smi)
-
     if(NVIDIA_SMI_EXECUTABLE)
         execute_process(
             COMMAND ${NVIDIA_SMI_EXECUTABLE} --query-gpu=compute_cap --format=csv,noheader
@@ -43,19 +30,13 @@ function(detect_cuda_architecture)
             OUTPUT_STRIP_TRAILING_WHITESPACE
             ERROR_QUIET
         )
-
         if(compute_cap MATCHES "^[0-9]+\\.[0-9]+$")
             string(REPLACE "." "" arch "${compute_cap}")
-            message(STATUS "Detected CUDA compute capability: ${compute_cap} (sm_${arch})")
-
-            # Pass as list of integers, not string
             set(CMAKE_CUDA_ARCHITECTURES ${arch} PARENT_SCOPE)
         else()
-            message(WARNING "Failed to parse compute capability: '${compute_cap}', defaulting to 70")
-            set(CMAKE_CUDA_ARCHITECTURES 70 PARENT_SCOPE)
+            message(FATAL_ERROR "Failed to parse compute capability: '${compute_cap}'")
         endif()
     else()
-        message(WARNING "nvidia-smi not found, defaulting CMAKE_CUDA_ARCHITECTURES to 70")
-        set(CMAKE_CUDA_ARCHITECTURES 70 PARENT_SCOPE)
+        message(FATAL_ERROR "nvidia-smi not found; set -DCMAKE_CUDA_ARCHITECTURES=..")
     endif()
 endfunction()

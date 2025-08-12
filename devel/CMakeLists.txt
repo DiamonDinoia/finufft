@@ -1,8 +1,3 @@
-project(finufft_devel)
-# Set the minimum required version of CMake
-cmake_minimum_required(VERSION 3.5)
-
-# include cpm cmake, downloading it
 CPMAddPackage(
     NAME
     benchmark
@@ -14,14 +9,16 @@ CPMAddPackage(
     "BENCHMARK_ENABLE_TESTING OFF"
 )
 
-if(benchmark_ADDED)
-    # patch benchmark target
-    set_target_properties(benchmark PROPERTIES CXX_STANDARD 17)
-endif()
-
 add_executable(foldrescale foldrescale.cpp)
-target_link_libraries(foldrescale finufft benchmark xsimd)
+target_link_libraries(foldrescale PRIVATE finufft::finufft xsimd benchmark::benchmark)
+target_compile_features(foldrescale PRIVATE cxx_std_17)
+enable_asan(foldrescale)
+
 add_executable(padding padding.cpp)
 target_compile_features(padding PRIVATE cxx_std_17)
-target_link_libraries(padding finufft xsimd)
-target_compile_options(padding PRIVATE -march=native)
+target_link_libraries(padding PRIVATE finufft::finufft xsimd)
+# Reuse FINUFFT_ARCH_FLAGS instead of hardcoding
+if(FINUFFT_ARCH_FLAGS)
+    finufft_target_add_flags_if_supported(padding PRIVATE ${FINUFFT_ARCH_FLAGS})
+endif()
+enable_asan(padding)

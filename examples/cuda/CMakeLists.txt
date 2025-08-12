@@ -1,9 +1,8 @@
 file(GLOB example_src "*.cpp")
-
 foreach(srcfile ${example_src})
     string(REPLACE ".cpp" "" executable ${srcfile})
     get_filename_component(executable ${executable} NAME)
     add_executable(${executable} ${srcfile})
-    target_link_libraries(${executable} cufinufft)
+    target_link_libraries(${executable} PRIVATE cufinufft::cufinufft CCCL::CCCL)
     target_compile_features(${executable} PRIVATE cxx_std_17)
 endforeach()

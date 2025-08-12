@@ -1,13 +1,21 @@
 # Helper functions for configuring FINUFFT targets
 
 function(finufft_link_test target)
+    target_link_libraries(${target} PRIVATE finufft::finufft)
+    enable_asan(${target})
+    target_compile_features(${target} PRIVATE cxx_std_17)
+
+    # Tests should compile with the same backend selection as the library
     if(FINUFFT_USE_DUCC0)
         target_compile_definitions(${target} PRIVATE FINUFFT_USE_DUCC0)
     endif()
-    target_link_libraries(${target} PRIVATE finufft)
-    enable_asan(${target})
-    target_compile_features(${target} PRIVATE cxx_std_17)
-    target_compile_options(${target} PRIVATE ${FINUFFT_WARNING_FLAGS})
+
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+        finufft_target_add_flags_if_supported(${target} PRIVATE ${FINUFFT_WARN_GNUC})
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        finufft_target_add_flags_if_supported(${target} PRIVATE ${FINUFFT_WARN_MSVC})
+    endif()
+
     set_target_properties(
         ${target}
         PROPERTIES
@@ -18,17 +26,46 @@ endfunction()
 
 function(set_finufft_options target)
     target_compile_features(${target} PUBLIC cxx_std_17)
-    target_compile_options(${target} PRIVATE ${FINUFFT_WARNING_FLAGS})
-    target_compile_options(
+
+    # Default hidden visibility on ELF (minimize exported symbols)
+    set_target_properties(${target} PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
+
+    # Make backend selection visible to dependents (so headers/source agree)
+    if(FINUFFT_USE_DUCC0)
+        target_compile_definitions(${target} PUBLIC FINUFFT_USE_DUCC0)
+    endif()
+
+    # Warnings
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+        finufft_target_add_flags_if_supported(${target} PRIVATE ${FINUFFT_WARN_GNUC})
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        finufft_target_add_flags_if_supported(${target} PRIVATE ${FINUFFT_WARN_MSVC})
+    endif()
+
+    # Arch/optimization per config (PRIVATE)
+    if(CMAKE_BUILD_TYPE MATCHES "^[Rr]elease|RelWithDebInfo$")
+        if(FINUFFT_ARCH_FLAGS)
+            finufft_target_add_flags_if_supported(${target} PRIVATE ${FINUFFT_ARCH_FLAGS})
+        endif()
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+            finufft_target_add_flags_if_supported(${target} PRIVATE ${FINUFFT_REL_GNUC})
+        elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+            finufft_target_add_flags_if_supported(${target} PRIVATE ${FINUFFT_REL_MSVC})
+        endif()
+    elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+            finufft_target_add_flags_if_supported(${target} PRIVATE ${FINUFFT_DBG_GNUC})
+        elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+            finufft_target_add_flags_if_supported(${target} PRIVATE ${FINUFFT_DBG_MSVC})
+        endif()
+    endif()
+
+    # Public includes (export-safe)
+    target_include_directories(
         ${target}
-        PRIVATE
-            $<$<CONFIG:Release,RelWithDebInfo>:${FINUFFT_ARCH_FLAGS}>
-            $<$<CONFIG:Release>:${FINUFFT_CXX_FLAGS_RELEASE}>
-            $<$<CONFIG:RelWithDebInfo>:${FINUFFT_CXX_FLAGS_RELWITHDEBINFO}>
-            $<$<CONFIG:Debug>:${FINUFFT_CXX_FLAGS_DEBUG}>
+        PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>
     )
-    target_include_directories(${target} PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
-    target_include_directories(${target} SYSTEM INTERFACE $<INSTALL_INTERFACE:${CMAKE_INSTALL_PREFIX}/include>)
+
     set_target_properties(
         ${target}
         PROPERTIES
@@ -36,12 +73,6 @@ function(set_finufft_options target)
             POSITION_INDEPENDENT_CODE ${FINUFFT_POSITION_INDEPENDENT_CODE}
             INTERPROCEDURAL_OPTIMIZATION ${FINUFFT_INTERPROCEDURAL_OPTIMIZATION}
     )
+
     enable_asan(${target})
-    if(FINUFFT_USE_DUCC0)
-        target_compile_definitions(${target} PRIVATE FINUFFT_USE_DUCC0)
-    endif()
-    if(FINUFFT_USE_OPENMP)
-        target_link_libraries(${target} PUBLIC OpenMP::OpenMP_CXX)
-    endif()
-    target_link_libraries(${target} PRIVATE xsimd ${FINUFFT_FFTLIBS})
 endfunction()

@@ -1,8 +1,9 @@
 # Build flags and sanitizer helpers for FINUFFT
 
-# Map "native" to compiler-specific architecture flags; emulate for MSVC
+include(CheckCXXCompilerFlag)
+
+# Probe/choose arch flags for MSVC using a tiny runtime probe
 function(finufft_detect_msvc_arch out_var)
-    message(STATUS "Checking for AVX, AVX512 and SSE support")
     try_run(
         RUN_RESULT_VAR
         COMPILE_RESULT_VAR
@@ -17,56 +18,98 @@ function(finufft_detect_msvc_arch out_var)
         set(${out_var} "/arch:AVX2" PARENT_SCOPE)
     elseif(RUN_OUTPUT MATCHES "AVX")
         set(${out_var} "/arch:AVX" PARENT_SCOPE)
-    elseif(RUN_OUTPUT MATCHES "SSE")
-        set(${out_var} "/arch:SSE" PARENT_SCOPE)
+    elseif(RUN_OUTPUT MATCHES "SSE2")
+        set(${out_var} "/arch:SSE2" PARENT_SCOPE)
     else()
         set(${out_var} "" PARENT_SCOPE)
     endif()
-    message(STATUS "CPU supports: ${RUN_OUTPUT}")
-    message(STATUS "Using MSVC flags: ${${out_var}}")
 endfunction()
 
+# Compute FINUFFT_ARCH_FLAGS if set to "native"
 if(FINUFFT_ARCH_FLAGS STREQUAL "native")
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
         set(FINUFFT_ARCH_FLAGS -march=native CACHE STRING "" FORCE)
     elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         finufft_detect_msvc_arch(_finufft_arch)
         set(FINUFFT_ARCH_FLAGS "${_finufft_arch}" CACHE STRING "" FORCE)
     else()
-        # Other compilers don't support -march=native
         set(FINUFFT_ARCH_FLAGS "" CACHE STRING "" FORCE)
     endif()
 endif()
 
-# Common warning flags applied to all targets
-set(FINUFFT_WARNING_FLAGS
-    $<$<CXX_COMPILER_ID:MSVC>:/W4>
-    $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-Wall;-Wextra;-Wpedantic;-Wno-unknown-pragmas;-Wno-deprecated-declarations>
+# Helper: add only supported flags to target
+function(finufft_target_add_flags_if_supported tgt scope)
+    foreach(flag IN LISTS ARGN)
+        # Avoid accidental list-splitting and cache the probe result
+        string(REPLACE ";" "\\;" flag "${flag}")
+        string(MD5 _key "${flag}-${CMAKE_CXX_COMPILER_ID}")
+        set(_cache_var "FINUFFT_FLAG_OK_${_key}")
+        if(NOT DEFINED ${_cache_var})
+            check_cxx_compiler_flag("${flag}" ${_cache_var})
+        endif()
+        if(${_cache_var})
+            target_compile_options(${tgt} ${scope} "${flag}")
+        endif()
+    endforeach()
+endfunction()
+
+# Common warning flags
+set(_finufft_warn_gnuc
+    -Wall
+    -Wextra
+    -Wpedantic
+    -Wno-unknown-pragmas
+    -Wno-deprecated-declarations
 )
+set(_finufft_warn_msvc /W4)
 
 # Optimization flags
-set(FINUFFT_CXX_FLAGS_RELEASE
-    $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-funroll-loops;-ffp-contract=fast;-fno-math-errno;-fno-signed-zeros;-fno-trapping-math;-fassociative-math;-freciprocal-math;-fmerge-all-constants;-ftree-vectorize;-fimplicit-constexpr;-fcx-limited-range;-O3>
-    $<$<CXX_COMPILER_ID:MSVC>:/Ox;/fp:contract;/fp:except->
+set(_finufft_rel_gnuc
+    -O3
+    -funroll-loops
+    -ffp-contract=fast
+    -fno-math-errno
+    -fno-signed-zeros
+    -fno-trapping-math
+    -fassociative-math
+    -freciprocal-math
+    -fmerge-all-constants
+    -ftree-vectorize
+    -fcx-limited-range
 )
+set(_finufft_rel_msvc /Ox /fp:contract /fp:except-)
 
-set(FINUFFT_CXX_FLAGS_DEBUG $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-g3> $<$<CXX_COMPILER_ID:MSVC>:/Zi>)
-
-set(FINUFFT_CXX_FLAGS_RELWITHDEBINFO ${FINUFFT_CXX_FLAGS_RELEASE} ${FINUFFT_CXX_FLAGS_DEBUG})
+# Debug flags
+set(_finufft_dbg_gnuc -g3)
+set(_finufft_dbg_msvc /Zi)
 
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-# Sanitizer support
+# Sanitizer support (only if supported)
 function(enable_asan target)
     if(FINUFFT_ENABLE_SANITIZERS)
         if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-            target_compile_options(${target} PRIVATE /fsanitize=address /RTC1)
+            finufft_target_add_flags_if_supported(${target} PRIVATE /fsanitize=address /RTC1)
         else()
-            target_compile_options(${target} PRIVATE -fsanitize=address -fsanitize=undefined -fsanitize=bounds-strict)
+            finufft_target_add_flags_if_supported(
+                ${target}
+                PRIVATE
+                -fsanitize=address
+                -fsanitize=undefined
+                -fsanitize=bounds-strict
+            )
             target_link_options(${target} PRIVATE -fsanitize=address -fsanitize=undefined -fsanitize=bounds-strict)
         endif()
     endif()
 endfunction()
+
+# Expose helpers/sets as normal vars (no PARENT_SCOPE here)
+set(FINUFFT_WARN_GNUC "${_finufft_warn_gnuc}")
+set(FINUFFT_WARN_MSVC "${_finufft_warn_msvc}")
+set(FINUFFT_REL_GNUC "${_finufft_rel_gnuc}")
+set(FINUFFT_REL_MSVC "${_finufft_rel_msvc}")
+set(FINUFFT_DBG_GNUC "${_finufft_dbg_gnuc}")
+set(FINUFFT_DBG_MSVC "${_finufft_dbg_msvc}")

@@ -1,5 +1,5 @@
 add_executable(cuperftest cuperftest.cu)
-target_link_libraries(cuperftest cufinufft)
+target_link_libraries(cuperftest PRIVATE cufinufft::cufinufft)
 target_compile_features(cuperftest PRIVATE cxx_std_17)
 set_target_properties(
     cuperftest

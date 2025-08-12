@@ -24,8 +24,7 @@ foreach(TEST ${TESTS})
     finufft_link_test(${TEST}f)
 endforeach()
 
-# copy the DLLs to the build directory so that the tests can find them there fix
-# for windows
+# copy the DLLs to the build directory so that the tests can find them there (Windows)
 copy_dll(finufft basicpassfail)
 
 # Add ctest definitions not for both precisions...
@@ -37,19 +36,22 @@ target_compile_features(testutils PRIVATE cxx_std_17)
 finufft_link_test(testutils)
 add_test(NAME run_testutils COMMAND testutils WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# FFTW lock test (FFTW + OpenMP only): set up FFTW here and link cleanly
 if(NOT FINUFFT_USE_DUCC0 AND FINUFFT_USE_OPENMP)
+    include(${PROJECT_SOURCE_DIR}/cmake/setupFFTW.cmake)
+
     add_executable(fftw_lock_test fftw_lock_test.cpp)
     target_compile_features(fftw_lock_test PRIVATE cxx_std_17)
     finufft_link_test(fftw_lock_test)
+
+    # Just link the stable interface
+    target_link_libraries(fftw_lock_test PRIVATE finufft::fftw)
+
     add_test(NAME run_fftw_lock_test COMMAND fftw_lock_test WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 endif()
 
 # Add ctest definitions that run at both precisions...
 function(add_tests_with_prec PREC REQ_TOL CHECK_TOL SUFFIX)
-    # All of the following should be run at OMP_NUM_THREADS=4 or something small,
-    # as in makefile. This prevents them taking a huge time on a, say, 128-core
-    # Rome node. ... but I don't know platform-indep way to do that! Does anyone?
-
     add_test(NAME run_basic_pass_fail_${PREC} COMMAND basicpassfail${SUFFIX} WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
     add_test(
@@ -99,7 +101,6 @@ function(add_tests_with_prec PREC REQ_TOL CHECK_TOL SUFFIX)
     add_test(NAME run_adjointness_${PREC} COMMAND adjointness${SUFFIX} WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 endfunction()
 
-# use above function to actually add the tests, with certain requested and check
-# tols
+# use above function to actually add the tests, with certain requested and check tols
 add_tests_with_prec(float 1e-5 2e-4 f)
 add_tests_with_prec(double 1e-12 1e-11 "")
