@@ -531,21 +531,27 @@ static void interp_line(T *FINUFFT_RESTRICT target, const T *du, const T *ker, B
   if (i1 < 0 || i1 + ns >= BIGINT(N1) || i1 + ns + (padding + 1) / 2 >= BIGINT(N1)) {
     return interp_line_wrap<T, ns>(target, du, ker, i1, N1);
   } else { // doesn't wrap
-    // logic largely similar to spread 1D kernel, please see the explanation there
-    // for the first part of this code
-    const auto res = [du, j, ker]() constexpr noexcept {
+    const auto res = [du, j, ker]() noexcept {
       const auto du_ptr = du + 2 * j;
       simd_type res_low{0}, res_hi{0};
-      for (uint8_t dx{0}; dx < regular_part; dx += 2 * simd_size) {
-        const auto ker_v   = simd_type::load_aligned(ker + dx / 2);
-        const auto du_pt0  = simd_type::load_unaligned(du_ptr + dx);
-        const auto du_pt1  = simd_type::load_unaligned(du_ptr + dx + simd_size);
-        const auto ker0low = xsimd::swizzle(ker_v, zip_low_index<arch_t, T>);
-        const auto ker0hi  = xsimd::swizzle(ker_v, zip_hi_index<arch_t, T>);
-        res_low            = xsimd::fma(ker0low, du_pt0, res_low);
-        res_hi             = xsimd::fma(ker0hi, du_pt1, res_hi);
-      }
+      // Fully-unrolled pairs of vectors: dx = 0, 2*simd_size, 4*simd_size, ...
+      static_loop<0, regular_part, static_cast<std::int64_t>(2 * simd_size)>(
+          [&](auto DX) {
+            constexpr std::int64_t dx64 = decltype(DX)::value;
+            constexpr std::size_t dx    = static_cast<std::size_t>(dx64);
 
+            const auto ker_v  = simd_type::load_aligned(ker + dx / 2);
+            const auto du_pt0 = simd_type::load_unaligned(du_ptr + dx);
+            const auto du_pt1 = simd_type::load_unaligned(du_ptr + dx + simd_size);
+
+            const auto ker0low = xsimd::swizzle(ker_v, zip_low_index<arch_t, T>);
+            const auto ker0hi  = xsimd::swizzle(ker_v, zip_hi_index<arch_t, T>);
+
+            res_low = xsimd::fma(ker0low, du_pt0, res_low);
+            res_hi  = xsimd::fma(ker0hi, du_pt1, res_hi);
+          });
+
+      // Compile-time tail: one extra half-vector when regular_part < 2*ns
       if constexpr (regular_part < 2 * ns) {
         const auto ker0    = simd_type::load_unaligned(ker + (regular_part / 2));
         const auto du_pt   = simd_type::load_unaligned(du_ptr + regular_part);
@@ -553,10 +559,7 @@ static void interp_line(T *FINUFFT_RESTRICT target, const T *du, const T *ker, B
         res_low            = xsimd::fma(ker0low, du_pt, res_low);
       }
 
-      // This does a horizontal sum using a loop instead of relying on SIMD instructions
-      // this is faster than the code below but less elegant.
-      // lambdas here to limit the scope of temporary variables and have the compiler
-      // optimize the code better
+      // same result as before (your “faster, less elegant” path)
       return res_low + res_hi;
     }();
     const auto sum = chsum(res); // this is the SIMD channel sum
@@ -675,42 +678,50 @@ static void interp_square(T *FINUFFT_RESTRICT target, const T *du, const T *ker1
   static constexpr uint8_t line_vectors = (2 * ns + padding) / simd_size;
   if (i1 >= 0 && i1 + ns <= BIGINT(N1) && i2 >= 0 && i2 + ns <= BIGINT(N2) &&
       (i1 + ns + (padding + 1) / 2 < BIGINT(N1))) {
+
     const auto line = [du, N1, i1 = UBIGINT(i1), i2 = UBIGINT(i2),
                        ker2]() constexpr noexcept {
-      // new array du_pts to store the du values for the current y line
-      std::array<simd_type, line_vectors> line{0};
-      // block for first y line, to avoid explicitly initializing line with zeros
-      // add remaining const-y lines to the line (expensive inner loop)
-      for (uint8_t dy{0}; dy < ns; dy++) {
-        const auto l_ptr = du + 2 * (N1 * (i2 + dy) + i1); // (see above)
+      // accumulates the du values for the current y line
+      std::array<simd_type, line_vectors> line{}; // zero-initialized
+
+      // unroll over dy and l (expensive inner loop)
+      static_loop<0, ns>([&](auto DY) {
+        constexpr std::size_t dy = static_cast<std::size_t>(decltype(DY)::value);
+        const auto *l_ptr        = du + 2 * (N1 * (i2 + dy) + i1);
         const simd_type ker2_v{ker2[dy]};
-        for (uint8_t l{0}; l < line_vectors; ++l) {
-          const auto du_pt = simd_type::load_unaligned(l * simd_size + l_ptr);
-          line[l]          = xsimd::fma(ker2_v, du_pt, line[l]);
-        }
-      }
+
+        static_loop<0, line_vectors>([&](auto L) {
+          constexpr std::size_t l = static_cast<std::size_t>(decltype(L)::value);
+          const auto du_pt        = simd_type::load_unaligned(l * simd_size + l_ptr);
+          line[l]                 = xsimd::fma(ker2_v, du_pt, line[l]);
+        });
+      });
+
       return line;
     }();
-    // This is the same as 1D interpolation
-    // using lambda to limit the scope of the temporary variables
+
+    // Same as 1D interpolation: apply x kernel to the (interleaved) line
     const auto res = [ker1, &line]() constexpr noexcept {
-      // apply x kernel to the (interleaved) line and add together
       simd_type res_low{0}, res_hi{0};
-      // Start the loop from the second iteration
-      for (uint8_t i{0}; i < (line_vectors & ~1); // NOLINT(*-too-small-loop-variable)
-           i += 2) {
-        const auto ker1_v  = simd_type::load_aligned(ker1 + i * simd_size / 2);
-        const auto ker1low = xsimd::swizzle(ker1_v, zip_low_index<arch_t, T>);
-        const auto ker1hi  = xsimd::swizzle(ker1_v, zip_hi_index<arch_t, T>);
-        res_low            = xsimd::fma(ker1low, line[i], res_low);
-        res_hi             = xsimd::fma(ker1hi, line[i + 1], res_hi);
-      }
+
+      // pairs of interleaved vectors
+      static_loop<0, (line_vectors & ~1), 2>([&](auto I) {
+        constexpr std::size_t i = static_cast<std::size_t>(decltype(I)::value);
+        const auto ker1_v       = simd_type::load_aligned(ker1 + i * simd_size / 2);
+        const auto ker1low      = xsimd::swizzle(ker1_v, zip_low_index<arch_t, T>);
+        const auto ker1hi       = xsimd::swizzle(ker1_v, zip_hi_index<arch_t, T>);
+        res_low                 = xsimd::fma(ker1low, line[i], res_low);
+        res_hi                  = xsimd::fma(ker1hi, line[i + 1], res_hi);
+      });
+
+      // compile-time tail if odd number of vectors
       if constexpr (line_vectors % 2) {
         const auto ker1_v =
             simd_type::load_aligned(ker1 + (line_vectors - 1) * simd_size / 2);
         const auto ker1low = xsimd::swizzle(ker1_v, zip_low_index<arch_t, T>);
         res_low            = xsimd::fma(ker1low, line.back(), res_low);
       }
+
       return res_low + res_hi;
     }();
     const auto sum = chsum(res); // this is the SIMD channel sum
@@ -841,40 +852,54 @@ static void interp_cube(T *FINUFFT_RESTRICT target, const T *du, const T *ker1,
   std::array<T, 2> out{0};
   if (in_bounds_1 && in_bounds_2 && in_bounds_3 &&
       (i1 + ns + (padding + 1) / 2 < BIGINT(N1))) {
+
     const auto line = [N1, N2, i1 = UBIGINT(i1), i2 = UBIGINT(i2), i3 = UBIGINT(i3), ker2,
                        ker3, du]() constexpr noexcept {
-      std::array<simd_type, line_vectors> line{0};
-      for (uint8_t dz{0}; dz < ns; ++dz) {
-        const auto oz = N1 * N2 * (i3 + dz);                      // offset due to z
-        for (uint8_t dy{0}; dy < ns; ++dy) {
-          const auto l_ptr = du + 2 * (oz + N1 * (i2 + dy) + i1); // ptr start of line
+      std::array<simd_type, line_vectors> line{}; // zero-initialized
+
+      // Unroll z, then y, then the inner vector blocks
+      static_loop<0, ns>([&](auto DZ) {
+        constexpr std::size_t dz = static_cast<std::size_t>(decltype(DZ)::value);
+        const auto oz            = N1 * N2 * (i3 + dz); // offset due to z
+
+        static_loop<0, ns>([&](auto DY) {
+          constexpr std::size_t dy = static_cast<std::size_t>(decltype(DY)::value);
+
+          const auto *l_ptr = du + 2 * (oz + N1 * (i2 + dy) + i1); // start of this line
           const simd_type ker23{ker2[dy] * ker3[dz]};
-          for (uint8_t l{0}; l < line_vectors; ++l) {
-            const auto du_pt = simd_type::load_unaligned(l * simd_size + l_ptr);
-            line[l]          = xsimd::fma(ker23, du_pt, line[l]);
-          }
-        }
-      }
+
+          static_loop<0, line_vectors>([&](auto L) {
+            constexpr std::size_t l = static_cast<std::size_t>(decltype(L)::value);
+            const auto du_pt        = simd_type::load_unaligned(l * simd_size + l_ptr);
+            line[l]                 = xsimd::fma(ker23, du_pt, line[l]);
+          });
+        });
+      });
+
       return line;
     }();
+
     const auto res = [ker1, &line]() constexpr noexcept {
-      // apply x kernel to the (interleaved) line and add together
       simd_type res_low{0}, res_hi{0};
-      // Start the loop from the second iteration
-      for (uint8_t i{0}; i < (line_vectors & ~1); // NOLINT(*-too-small-loop-variable)
-           i += 2) {
-        const auto ker1_v  = simd_type::load_aligned(ker1 + i * simd_size / 2);
-        const auto ker1low = xsimd::swizzle(ker1_v, zip_low_index<arch_t, T>);
-        const auto ker1hi  = xsimd::swizzle(ker1_v, zip_hi_index<arch_t, T>);
-        res_low            = xsimd::fma(ker1low, line[i], res_low);
-        res_hi             = xsimd::fma(ker1hi, line[i + 1], res_hi);
-      }
+
+      // pairs of interleaved vectors
+      static_loop<0, (line_vectors & ~1), 2>([&](auto I) {
+        constexpr std::size_t i = static_cast<std::size_t>(decltype(I)::value);
+        const auto ker1_v       = simd_type::load_aligned(ker1 + i * simd_size / 2);
+        const auto ker1low      = xsimd::swizzle(ker1_v, zip_low_index<arch_t, T>);
+        const auto ker1hi       = xsimd::swizzle(ker1_v, zip_hi_index<arch_t, T>);
+        res_low                 = xsimd::fma(ker1low, line[i], res_low);
+        res_hi                  = xsimd::fma(ker1hi, line[i + 1], res_hi);
+      });
+
+      // compile-time tail if odd number of vectors
       if constexpr (line_vectors % 2) {
         const auto ker1_v =
             simd_type::load_aligned(ker1 + (line_vectors - 1) * simd_size / 2);
         const auto ker1low = xsimd::swizzle(ker1_v, zip_low_index<arch_t, T>);
         res_low            = xsimd::fma(ker1low, line.back(), res_low);
       }
+
       return res_low + res_hi;
     }();
     const auto sum = chsum(res); // this is the SIMD channel sum
@@ -1021,16 +1046,21 @@ FINUFFT_NEVER_INLINE void spread_subproblem_1d_kernel(
     // on [-1,1].
     // Using uint8_t in loops to favor unrolling.
     // Most compilers limit the unrolling to 255, uint8_t is at most 255
-    for (uint8_t dx{0}; dx < regular_part; dx += 2 * simd_size) {
+    // process in blocks of 2*SIMD vectors
+    static_loop<0, regular_part, static_cast<std::int64_t>(2 * simd_size)>([&](auto DX) {
+      constexpr std::size_t dx = static_cast<std::size_t>(decltype(DX)::value);
+
       // read ker_v which is simd_size wide from ker
       // ker_v looks like this:
       // +-----------------------+
       // |y0|y1|y2|y3|y4|y5|y6|y7|
       // +-----------------------+
       const auto ker_v = simd_type::load_aligned(ker.data() + dx / 2);
+
       // read 2*SIMD vectors from the subproblem grid
       const auto du_pt0 = simd_type::load_unaligned(trg + dx);
       const auto du_pt1 = simd_type::load_unaligned(trg + dx + simd_size);
+
       // swizzle is faster than zip_lo(ker_v, ker_v) and zip_hi(ker_v, ker_v)
       // swizzle in this case is equivalent to zip_lo and zip_hi respectively
       const auto ker0low = xsimd::swizzle(ker_v, zip_low_index<arch_t, T>);
@@ -1043,16 +1073,18 @@ FINUFFT_NEVER_INLINE void spread_subproblem_1d_kernel(
       // +-----------------------+
       // |y4|y4|y5|y5|y6|y6|y7|y7|
       // +-----------------------+
+
       // same as before each element of the subproblem grid is multiplied by the
-      // corresponding element of the kernel since dd_pt is re|im interleaves res0 is also
-      // correctly re|im interleaved
+      // corresponding element of the kernel since dd_pt is re|im interleaves
+      // res0 is also correctly re|im interleaved
       // doing this for two SIMD vectors at once allows to fully utilize ker_v instead of
       // wasting the higher half
       const auto res0 = xsimd::fma(ker0low, dd_pt, du_pt0);
       const auto res1 = xsimd::fma(ker0hi, dd_pt, du_pt1);
+
       res0.store_unaligned(trg + dx);
       res1.store_unaligned(trg + dx + simd_size);
-    }
+    });
     // sanity check at compile time that all the elements are computed
     static_assert(regular_part + simd_size >= 2 * ns);
     // case where the 2*ns is not a multiple of 2*simd_size
@@ -1158,11 +1190,13 @@ FINUFFT_NEVER_INLINE static void spread_subproblem_2d_kernel(
       // For more details please read the 1D case. The difference is that
       // here the loop is on the number of simd vectors In the 1D case the loop is on the
       // number of elements in the kernel
-      for (uint8_t i = 0; i < (kerval_vectors & ~1); // NOLINT(*-too-small-loop-variable)
-           i += 2) {
+      static_loop<0, (kerval_vectors & ~1), 2>([&](auto I) {
+        constexpr std::size_t i = static_cast<std::size_t>(decltype(I)::value);
+
         const auto ker1_v  = simd_type::load_aligned(ker1 + i * simd_size / 2);
         const auto ker1low = xsimd::swizzle(ker1_v, zip_low_index<arch_t, T>);
         const auto ker1hi  = xsimd::swizzle(ker1_v, zip_hi_index<arch_t, T>);
+
         // this initializes the entire vector registers with the same value
         // the ker1val_v[i] looks like this:
         // +-----------------------+
@@ -1170,7 +1204,7 @@ FINUFFT_NEVER_INLINE static void spread_subproblem_2d_kernel(
         // +-----------------------+
         ker1val_v[i]     = ker1low * dd_pt;
         ker1val_v[i + 1] = ker1hi * dd_pt; // same as above
-      }
+      });
       if constexpr (kerval_vectors % 2) {
         const auto ker1_v =
             simd_type::load_unaligned(ker1 + (kerval_vectors - 1) * simd_size / 2);
@@ -1181,16 +1215,21 @@ FINUFFT_NEVER_INLINE static void spread_subproblem_2d_kernel(
     }();
 
     // critical inner loop:
-    for (auto dy = 0; dy < ns; ++dy) {
+    static_loop<0, ns>([&](auto DY) {
+      constexpr std::size_t dy = static_cast<std::size_t>(decltype(DY)::value);
+
       const auto j = size1 * (i2 - off2 + dy) + i1 - off1; // should be in subgrid
       auto *FINUFFT_RESTRICT trg = du + 2 * j;
       const simd_type kerval_v(ker2[dy]);
-      for (uint8_t i = 0; i < kerval_vectors; ++i) {
+
+      static_loop<0, kerval_vectors>([&](auto I) {
+        constexpr std::size_t i = static_cast<std::size_t>(decltype(I)::value);
+
         const auto trg_v  = simd_type::load_unaligned(trg + i * simd_size);
         const auto result = xsimd::fma(kerval_v, ker1val_v[i], trg_v);
         result.store_unaligned(trg + i * simd_size);
-      }
-    }
+      });
+    });
   }
 }
 
@@ -1276,14 +1315,16 @@ FINUFFT_NEVER_INLINE void spread_subproblem_3d_kernel(
       // we need to handle the last batch separately
       // to the & ~1 is to ensure that we do not iterate over the last batch if it is odd
       // as it sets the last bit to 0
-      for (uint8_t i = 0; i < (kerval_vectors & ~1); // NOLINT(*-too-small-loop-variable
-           i += 2) {
+      static_loop<0, (kerval_vectors & ~1), 2>([&](auto I) {
+        constexpr std::size_t i = static_cast<std::size_t>(decltype(I)::value);
+
         const auto ker1_v  = simd_type::load_aligned(ker1 + i * simd_size / 2);
         const auto ker1low = xsimd::swizzle(ker1_v, zip_low_index<arch_t, T>);
         const auto ker1hi  = xsimd::swizzle(ker1_v, zip_hi_index<arch_t, T>);
-        ker1val_v[i]       = ker1low * dd_pt;
-        ker1val_v[i + 1]   = ker1hi * dd_pt;
-      }
+
+        ker1val_v[i]     = ker1low * dd_pt;
+        ker1val_v[i + 1] = ker1hi * dd_pt;
+      });
       // (at compile time) check if the number of kerval_vectors is odd
       // if it is we need to handle the last batch separately
       if constexpr (kerval_vectors % 2) {
@@ -1295,19 +1336,24 @@ FINUFFT_NEVER_INLINE void spread_subproblem_3d_kernel(
       return ker1val_v;
     }();
     // critical inner loop:
-    for (uint8_t dz{0}; dz < ns; ++dz) {
-      const auto oz = size1 * size2 * (i3 - off3 + dz);           // offset due to z
-      for (uint8_t dy{0}; dy < ns; ++dy) {
+    static_loop<0, ns>([&](auto DZ) {
+      constexpr std::size_t dz = static_cast<std::size_t>(decltype(DZ)::value);
+      const auto oz            = size1 * size2 * (i3 - off3 + dz); // offset due to z
+
+      static_loop<0, ns>([&](auto DY) {
+        constexpr std::size_t dy = static_cast<std::size_t>(decltype(DY)::value);
         const auto j = oz + size1 * (i2 - off2 + dy) + i1 - off1; // should be in subgrid
         auto *FINUFFT_RESTRICT trg = du + 2 * j;
         const simd_type kerval_v(ker2[dy] * ker3[dz]);
-        for (uint8_t i{0}; i < kerval_vectors; ++i) {
-          const auto trg_v  = simd_type::load_unaligned(trg + i * simd_size);
-          const auto result = xsimd::fma(kerval_v, ker1val_v[i], trg_v);
+
+        static_loop<0, kerval_vectors>([&](auto I) {
+          constexpr std::size_t i = static_cast<std::size_t>(decltype(I)::value);
+          const auto trg_v        = simd_type::load_unaligned(trg + i * simd_size);
+          const auto result       = xsimd::fma(kerval_v, ker1val_v[i], trg_v);
           result.store_unaligned(trg + i * simd_size);
-        }
-      }
-    }
+        });
+      });
+    });
   }
 }
 
