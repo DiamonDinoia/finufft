@@ -15,8 +15,9 @@ option(FINUFFT_ENABLE_SANITIZERS "Whether to enable sanitizers, only effective f
 option(FINUFFT_USE_OPENMP "Whether to use OpenMP for parallelization. If disabled, the finufft library will be single threaded. This does not affect the choice of FFTW library." ON)
 option(FINUFFT_USE_CPU "Whether to build the ordinary FINUFFT library (libfinufft)." ON)
 option(FINUFFT_USE_CUDA "Whether to build CUDA accelerated FINUFFT library (libcufinufft). This is completely independent of the main FINUFFT library" OFF)
-option(BUILD_SHARED_LIBS "Build shared libraries instead of static ones" OFF)
-option(FINUFFT_POSITION_INDEPENDENT_CODE "Whether to build with position independent code (-fPIC). Forced ON if BUILD_SHARED_LIBS is ON." ON)
+# Replace legacy BUILD_SHARED_LIBS toggle with explicit FINUFFT_STATIC_LINKING user option
+option(FINUFFT_STATIC_LINKING "If ON builds the static finufft library, if OFF build a shared finufft library." ON)
+option(FINUFFT_POSITION_INDEPENDENT_CODE "Whether to build with position independent code (-fPIC). Forced ON if shared." ON)
 option(FINUFFT_BUILD_DEVEL "Whether to build development executables" OFF)
 option(FINUFFT_BUILD_EXAMPLES "Whether to build the FINUFFT examples" OFF)
 option(FINUFFT_BUILD_TESTS "Whether to build the FINUFFT tests" OFF)
@@ -34,8 +35,15 @@ set(FINUFFT_ARCH_FLAGS "native" CACHE STRING "Compiler flags for specifying targ
 cmake_dependent_option(FINUFFT_ENABLE_INSTALL "Disable installation in the case of python builds" ON "NOT FINUFFT_BUILD_PYTHON" OFF)
 # gersemi: on
 
-# PIC: force ON when shared; otherwise honor the option
-if(BUILD_SHARED_LIBS)
+# Map FINUFFT_STATIC_LINKING -> CMake's BUILD_SHARED_LIBS
+if(FINUFFT_STATIC_LINKING)
+    set(BUILD_SHARED_LIBS OFF)
+else()
+    set(BUILD_SHARED_LIBS ON)
+endif()
+
+# PIC: force ON when building shared; otherwise honor the option variable only per-target
+if(NOT FINUFFT_STATIC_LINKING)
     set(FINUFFT_POSITION_INDEPENDENT_CODE ON)
 endif()
 set(CMAKE_POSITION_INDEPENDENT_CODE ${FINUFFT_POSITION_INDEPENDENT_CODE})
@@ -71,6 +79,8 @@ if(FINUFFT_USE_CUDA)
     endif()
     enable_language(CUDA)
     find_package(CUDAToolkit REQUIRED COMPONENTS cudart cufft)
+    # Ensure CCCL is available for CUDA targets (defines CCCL::CCCL)
+    include(${PROJECT_SOURCE_DIR}/cmake/setupCCCL.cmake)
 endif()
 
 if(PROJECT_IS_TOP_LEVEL)
