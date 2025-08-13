@@ -1,0 +1,25 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Build-time feature flags baked into the config
+set(FINUFFT_USE_OPENMP @FINUFFT_USE_OPENMP@)
+set(FINUFFT_USE_DUCC0  @FINUFFT_USE_DUCC0@)
+set(FINUFFT_USE_CUDA   @FINUFFT_USE_CUDA@)
+set(FINUFFT_WAS_BUILT_SHARED @BUILD_SHARED_LIBS@)
+
+# Dependencies required by public interfaces
+if(FINUFFT_USE_OPENMP AND FINUFFT_WAS_BUILT_SHARED)
+  find_dependency(OpenMP)
+endif()
+
+if(NOT FINUFFT_USE_DUCC0 AND FINUFFT_WAS_BUILT_SHARED)
+  find_dependency(FFTW3)
+endif()
+
+if(FINUFFT_USE_CUDA)
+  find_dependency(CUDAToolkit)
+endif()
+
+# Exported targets
+include("${CMAKE_CURRENT_LIST_DIR}/finufftTargets.cmake")
