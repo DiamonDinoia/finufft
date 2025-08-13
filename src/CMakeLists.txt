@@ -28,14 +28,20 @@ if(FINUFFT_USE_CPU)
     set_finufft_options(finufft)
 
     if(FINUFFT_USE_DUCC0)
-        target_link_libraries(finufft PRIVATE ducc0)
+        include(${PROJECT_SOURCE_DIR}/cmake/setupDUCC.cmake)
+        target_link_libraries(finufft PRIVATE ducc0::ducc0)
     else()
         include(${PROJECT_SOURCE_DIR}/cmake/setupFFTW.cmake)
-        target_link_libraries(finufft PRIVATE finufft::fftw) # keep private
+        # Use FFTW while building finufft, and expose link-only dep to consumers
+        target_link_libraries(finufft PRIVATE finufft::fftw)
+        target_link_libraries(finufft INTERFACE $<LINK_ONLY:finufft::fftw>)
     endif()
 
     if(FINUFFT_USE_OPENMP)
-        target_link_libraries(finufft PRIVATE OpenMP::OpenMP_CXX) # keep private
+        # Compile finufft with OpenMP; expose link-only dep to consumers so
+        # they don't inherit OpenMP compile flags unless they opt-in.
+        target_link_libraries(finufft PRIVATE OpenMP::OpenMP_CXX)
+        target_link_libraries(finufft INTERFACE $<LINK_ONLY:OpenMP::OpenMP_CXX>)
     endif()
 
     # xsimd is header-only
@@ -54,17 +60,13 @@ if(FINUFFT_USE_CPU)
         target_link_libraries(finufft PRIVATE ${MATH_LIBRARY})
     endif()
 
-    # --- Key line: strip *any* interface deps from install ---
-    set_property(TARGET finufft PROPERTY INTERFACE_LINK_LIBRARIES "")
-
     # Build-tree umbrella for tests/examples (not installed)
     add_library(finufft_all INTERFACE)
     target_link_libraries(finufft_all INTERFACE finufft)
     if(NOT FINUFFT_USE_DUCC0)
         target_link_libraries(finufft_all INTERFACE finufft::fftw)
-    endif()
-    if(FINUFFT_USE_OPENMP)
-        target_link_libraries(finufft_all INTERFACE OpenMP::OpenMP_CXX)
+    else()
+        target_link_libraries(finufft_all INTERFACE ducc0::ducc0)
     endif()
     add_library(finufft::all ALIAS finufft_all)
 

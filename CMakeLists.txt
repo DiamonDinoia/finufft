@@ -85,6 +85,11 @@ endif()
 
 add_subdirectory(src)
 
+# Build CUDA library when requested so its target is available to tests/examples
+if(FINUFFT_USE_CUDA)
+    add_subdirectory(src/cuda)
+endif()
+
 if(BUILD_TESTING AND FINUFFT_BUILD_TESTS AND FINUFFT_USE_CPU)
     add_subdirectory(test)
     add_subdirectory(perftest)
