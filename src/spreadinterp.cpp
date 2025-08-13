@@ -398,7 +398,7 @@ static FINUFFT_ALWAYS_INLINE void eval_kernel_vec_Horner(T *FINUFFT_RESTRICT ker
       constexpr std::uint8_t offset = static_cast<std::uint8_t>(offset_start) - i;
 
       // Build even/odd Horner lanes (compile-time unrolled)
-      simd_type k_odd = []() {
+      simd_type k_odd = [i]() {
         if constexpr (if_odd_degree) {
           return simd_type::load_aligned(
               padded_coeffs[0].data() + static_cast<std::size_t>(i));
