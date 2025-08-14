@@ -1,15 +1,15 @@
-#include <finufft/fft.h>
-#include <finufft/finufft_core.h>
-#include <finufft/finufft_utils.hpp>
-#include <finufft/heuristics.hpp>
-#include <finufft/spreadinterp.h>
-
 #include <cmath>
 #include <cstdio>
 #include <iomanip>
 #include <memory>
 #include <vector>
-#include <xsimd/xsimd.hpp>
+
+#include <finufft/fft.h>
+#include <finufft/finufft_core.h>
+#include <finufft/finufft_utils.hpp>
+#include <finufft/heuristics.hpp>
+#include <finufft/spreadinterp.h>
+#include <finufft/xsimd.hpp>
 
 using namespace finufft;
 using namespace finufft::utils;
