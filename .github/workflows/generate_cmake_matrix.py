@@ -10,16 +10,14 @@ combinations = [
             "gcc-11",
             "gcc-12",
             "gcc-13",
-            "gcc-14",
             "clang-16",
             "clang-17",
             "clang-18",
-            "clang-19",
         ],
     ),
     (
         "windows-2022",
-        ["msvc", "clang-16", "clang-17", "clang-18", "clang-19"],
+        ["msvc", "clang-16", "clang-17", "clang-18"],
     ),
     (
         "macos-12",
