@@ -888,6 +888,398 @@ static void interp_cube(T *FINUFFT_RESTRICT target, const T *du, const T *ker1,
   target[1] = out[1];
 }
 
+// -----------------------------------------------------------------------------
+// Scalar Horner evaluator (no xsimd).
+// -----------------------------------------------------------------------------
+template<typename T, std::uint8_t w, std::uint8_t upsampfact>
+static FINUFFT_ALWAYS_INLINE void eval_kernel_Horner(
+    T *FINUFFT_RESTRICT ker, T x, const finufft_spread_opts & /*opts*/) noexcept {
+  // Map local grid offset into [-1, 1]
+  const T z = std::fma(T(2), x, T(w - 1));
+
+  // Select coefficient set at compile time
+  constexpr auto horner_coeffs = []() constexpr noexcept {
+    if constexpr (upsampfact == 200) {
+      return get_horner_coeffs_200<T, w>();
+    } else {
+      static_assert(upsampfact == 125, "Unsupported upsampfact");
+      return get_horner_coeffs_125<T, w>();
+    }
+  }();
+  constexpr std::size_t nc = horner_coeffs.size();
+
+  // Plain scalar Horner per tap
+  for (std::size_t i = 0; i < w; ++i) {
+    T k = horner_coeffs[0][i];
+    for (std::size_t j = 1; j < nc; ++j) k = std::fma(k, z, horner_coeffs[j][i]);
+    ker[i] = k;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Utility: evaluate 1D/2D/3D kernels into contiguous blocks, scalar path only.
+// Writes each kernel (ns entries) into ker + i*MAX_NSPREAD.
+// -----------------------------------------------------------------------------
+template<int ns, int kerevalmeth, class T, typename... V>
+static FINUFFT_ALWAYS_INLINE T *ker_eval_scalar(
+    T *FINUFFT_RESTRICT ker, const finufft_spread_opts &opts, const V... elems) noexcept {
+  static_assert(ns > 0 && ns <= MAX_NSPREAD, "ns out of range");
+  const std::array<T, sizeof...(elems)> inputs{T(elems)...};
+
+  for (std::size_t i = 0; i < inputs.size(); ++i) {
+    if constexpr (kerevalmeth == 1) {
+      // Horner polynomial method (scalar)
+      if (opts.upsampfac == 2.0) {
+        eval_kernel_Horner<T, static_cast<std::uint8_t>(ns), 200>(ker + i * MAX_NSPREAD,
+                                                                  inputs[i], opts);
+      }
+      if (opts.upsampfac == 1.25) {
+        eval_kernel_Horner<T, static_cast<std::uint8_t>(ns), 125>(ker + i * MAX_NSPREAD,
+                                                                  inputs[i], opts);
+      }
+    }
+    if constexpr (kerevalmeth == 0) {
+      // "set_kernel_args + evaluate_vector" path
+      std::array<T, MAX_NSPREAD> kernel_args{};
+      set_kernel_args<T, ns>(kernel_args.data(), inputs[i]);
+      evaluate_kernel_vector<T, ns>(ker + i * MAX_NSPREAD, kernel_args.data(), opts);
+    }
+  }
+  return ker;
+}
+
+// -----------------------------------------------------------------------------
+// 1D spread: NU -> uniform subgrid (no wrapping inside subproblem)
+// -----------------------------------------------------------------------------
+template<typename T, std::uint8_t ns, int kerevalmeth>
+FINUFFT_NEVER_INLINE void spread_subproblem_1d_scalar_kernel(
+    BIGINT off1, BIGINT size1, T *FINUFFT_RESTRICT du, BIGINT M,
+    const T *FINUFFT_RESTRICT kx, const T *FINUFFT_RESTRICT dd,
+    const finufft_spread_opts &opts) {
+  static_assert(ns > 0 && ns <= MAX_NSPREAD, "ns out of range");
+
+  const T ns2 = T(ns) / T(2);
+
+  // zero output subgrid
+  for (BIGINT i = 0; i < 2 * size1; ++i) du[i] = T(0);
+
+  // local storage for kernel values (1D): uses a MAX_NSPREAD stride
+  T kernel_values[MAX_NSPREAD];
+
+  for (BIGINT i = 0; i < M; ++i) {
+    const T re0 = dd[2 * i];
+    const T im0 = dd[2 * i + 1];
+
+    // start index and relative offset
+    BIGINT i1 = (BIGINT)std::ceil(kx[i] - ns2);
+    T x1      = T(i1) - kx[i];
+
+    // clipping safeguard (matches original behavior)
+    if (x1 < -ns2) x1 = -ns2;
+    if (x1 > -ns2 + 1) x1 = -ns2 + 1;
+
+    // evaluate kernel for x1 into kernel_values[0..ns-1]
+    ker_eval_scalar<ns, kerevalmeth, T>(kernel_values, opts, x1);
+
+    // accumulate into subgrid
+    BIGINT j = i1 - off1;
+    for (int dx = 0; dx < int(ns); ++dx) {
+      const T k = kernel_values[dx];
+      du[2 * j] += re0 * k;
+      du[2 * j + 1] += im0 * k;
+      ++j;
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// 2D spread: NU -> uniform subgrid (no wrapping inside subproblem)
+// -----------------------------------------------------------------------------
+template<typename T, std::uint8_t ns, int kerevalmeth>
+FINUFFT_NEVER_INLINE void spread_subproblem_2d_scalar_kernel(
+    BIGINT off1, BIGINT off2, BIGINT size1, BIGINT size2, T *FINUFFT_RESTRICT du,
+    BIGINT M, const T *FINUFFT_RESTRICT kx, const T *FINUFFT_RESTRICT ky,
+    const T *FINUFFT_RESTRICT dd, const finufft_spread_opts &opts) {
+  static_assert(ns > 0 && ns <= MAX_NSPREAD, "ns out of range");
+
+  const T ns2 = T(ns) / T(2);
+
+  // zero output subgrid
+  for (BIGINT i = 0; i < 2 * size1 * size2; ++i) du[i] = T(0);
+
+  // kernel values stored in consecutive MAX_NSPREAD-chunked blocks: [ker1 | ker2]
+  T kernel_values[2 * MAX_NSPREAD];
+  T *ker1 = kernel_values;
+  T *ker2 = kernel_values + MAX_NSPREAD;
+
+  // pre-mul buffer for complex (re,im)
+  T ker1val[2 * ns];
+
+  for (BIGINT i = 0; i < M; ++i) {
+    const T re0 = dd[2 * i];
+    const T im0 = dd[2 * i + 1];
+
+    BIGINT i1  = (BIGINT)std::ceil(kx[i] - ns2);
+    BIGINT i2  = (BIGINT)std::ceil(ky[i] - ns2);
+    const T x1 = T(i1) - kx[i];
+    const T x2 = T(i2) - ky[i];
+
+    // evaluate both dims at once
+    ker_eval_scalar<ns, kerevalmeth, T>(kernel_values, opts, x1, x2);
+
+    // combine ker1 with source to reduce FLOPs in inner loop
+    for (int t = 0; t < int(ns); ++t) {
+      ker1val[2 * t]     = re0 * ker1[t];
+      ker1val[2 * t + 1] = im0 * ker1[t];
+    }
+
+    // critical inner loop
+    for (int dy = 0; dy < int(ns); ++dy) {
+      const BIGINT j = size1 * (i2 - off2 + dy) + (i1 - off1);
+      const T kerval = ker2[dy];
+      T *trg         = du + 2 * j;
+      for (int dx = 0; dx < int(2 * ns); ++dx) {
+        trg[dx] += kerval * ker1val[dx];
+      }
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// 3D spread: NU -> uniform subgrid (no wrapping inside subproblem)
+// -----------------------------------------------------------------------------
+template<typename T, std::uint8_t ns, int kerevalmeth>
+FINUFFT_NEVER_INLINE void spread_subproblem_3d_scalar_kernel(
+    BIGINT off1, BIGINT off2, BIGINT off3, BIGINT size1, BIGINT size2, BIGINT size3,
+    T *FINUFFT_RESTRICT du, BIGINT M, const T *FINUFFT_RESTRICT kx,
+    const T *FINUFFT_RESTRICT ky, const T *FINUFFT_RESTRICT kz,
+    const T *FINUFFT_RESTRICT dd, const finufft_spread_opts &opts) {
+  static_assert(ns > 0 && ns <= MAX_NSPREAD, "ns out of range");
+
+  const T ns2 = T(ns) / T(2);
+
+  // zero output subgrid
+  for (BIGINT i = 0; i < 2 * size1 * size2 * size3; ++i) du[i] = T(0);
+
+  // kernel values stored in consecutive MAX_NSPREAD-chunked blocks: [ker1 | ker2 | ker3]
+  T kernel_values[3 * MAX_NSPREAD];
+  T *ker1 = kernel_values + 0 * MAX_NSPREAD;
+  T *ker2 = kernel_values + 1 * MAX_NSPREAD;
+  T *ker3 = kernel_values + 2 * MAX_NSPREAD;
+
+  // pre-mul buffer for complex (re,im)
+  T ker1val[2 * ns];
+
+  for (BIGINT i = 0; i < M; ++i) {
+    const T re0 = dd[2 * i];
+    const T im0 = dd[2 * i + 1];
+
+    BIGINT i1 = (BIGINT)std::ceil(kx[i] - ns2);
+    BIGINT i2 = (BIGINT)std::ceil(ky[i] - ns2);
+    BIGINT i3 = (BIGINT)std::ceil(kz[i] - ns2);
+
+    const T x1 = T(i1) - kx[i];
+    const T x2 = T(i2) - ky[i];
+    const T x3 = T(i3) - kz[i];
+
+    // evaluate all three dims at once
+    ker_eval_scalar<ns, kerevalmeth, T>(kernel_values, opts, x1, x2, x3);
+
+    // combine ker1 with source to reduce FLOPs in inner loops
+    for (int t = 0; t < int(ns); ++t) {
+      ker1val[2 * t]     = re0 * ker1[t];
+      ker1val[2 * t + 1] = im0 * ker1[t];
+    }
+
+    // critical inner loops
+    for (int dz = 0; dz < int(ns); ++dz) {
+      const BIGINT oz = size1 * size2 * (i3 - off3 + dz);
+      for (int dy = 0; dy < int(ns); ++dy) {
+        const BIGINT j = oz + size1 * (i2 - off2 + dy) + (i1 - off1);
+        const T kerval = ker2[dy] * ker3[dz];
+        T *trg         = du + 2 * j;
+        for (int dx = 0; dx < int(2 * ns); ++dx) {
+          trg[dx] += kerval * ker1val[dx];
+        }
+      }
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// 1D interp: uniform subgrid -> NU (with wrapping)
+// -----------------------------------------------------------------------------
+template<typename T, uint8_t ns>
+FINUFFT_NEVER_INLINE void interp_line_scalar_kernel(
+    T *target, const T *du, const T *ker, BIGINT i1, BIGINT N1)
+{
+  static_assert(ns > 0, "ns must be positive");
+  static_assert(ns <= MAX_NSPREAD, "ns exceeds MAX_NSPREAD");
+
+  T out[2] = {T(0), T(0)};
+  BIGINT j = i1;
+
+  if (i1 < 0) { // wraps at left
+    j += N1;
+    for (int dx = 0; dx < -i1; ++dx) {
+      out[0] += du[2 * j] * ker[dx];
+      out[1] += du[2 * j + 1] * ker[dx];
+      ++j;
+    }
+    j -= N1;
+    for (int dx = -i1; dx < int(ns); ++dx) {
+      out[0] += du[2 * j] * ker[dx];
+      out[1] += du[2 * j + 1] * ker[dx];
+      ++j;
+    }
+  } else if (i1 + ns >= N1) { // wraps at right
+    for (int dx = 0; dx < int(N1 - i1); ++dx) {
+      out[0] += du[2 * j] * ker[dx];
+      out[1] += du[2 * j + 1] * ker[dx];
+      ++j;
+    }
+    j -= N1;
+    for (int dx = int(N1 - i1); dx < int(ns); ++dx) {
+      out[0] += du[2 * j] * ker[dx];
+      out[1] += du[2 * j + 1] * ker[dx];
+      ++j;
+    }
+  } else { // no wrapping
+    for (int dx = 0; dx < int(ns); ++dx) {
+      out[0] += du[2 * j] * ker[dx];
+      out[1] += du[2 * j + 1] * ker[dx];
+      ++j;
+    }
+  }
+
+  target[0] = out[0];
+  target[1] = out[1];
+}
+
+// -----------------------------------------------------------------------------
+// 2D interp: uniform subgrid -> NU (with wrapping)
+// -----------------------------------------------------------------------------
+template<typename T, uint8_t ns>
+FINUFFT_NEVER_INLINE void interp_square_scalar_kernel(
+    T *target, const T *du, const T *ker1, const T *ker2,
+    BIGINT i1, BIGINT i2, BIGINT N1, BIGINT N2)
+{
+  static_assert(ns > 0, "ns must be positive");
+  static_assert(ns <= MAX_NSPREAD, "ns exceeds MAX_NSPREAD");
+
+  T out[2] = {T(0), T(0)};
+
+  if (i1 >= 0 && i1 + ns <= N1 && i2 >= 0 && i2 + ns <= N2) {
+    // no wrapping: SIMD/FMA-friendly path
+    T line[2 * ns]; // interleaved real/imag
+    {
+      const T *lptr = du + 2 * (N1 * i2 + i1);
+      for (int l = 0; l < int(2 * ns); ++l)
+        line[l] = ker2[0] * lptr[l];
+    }
+    for (int dy = 1; dy < int(ns); ++dy) {
+      const T *lptr = du + 2 * (N1 * (i2 + dy) + i1);
+      for (int l = 0; l < int(2 * ns); ++l)
+        line[l] += ker2[dy] * lptr[l];
+    }
+    for (int dx = 0; dx < int(ns); ++dx) {
+      out[0] += line[2 * dx] * ker1[dx];
+      out[1] += line[2 * dx + 1] * ker1[dx];
+    }
+  } else {
+    // wrapping path (rare)
+    BIGINT j1[ns], j2[ns];
+    BIGINT x = i1, y = i2;
+    for (int d = 0; d < int(ns); ++d) {
+      if (x < 0) x += N1;
+      if (x >= N1) x -= N1;
+      j1[d] = x++;
+      if (y < 0) y += N2;
+      if (y >= N2) y -= N2;
+      j2[d] = y++;
+    }
+    for (int dy = 0; dy < int(ns); ++dy) {
+      const BIGINT oy = N1 * j2[dy];
+      for (int dx = 0; dx < int(ns); ++dx) {
+        const T k = ker1[dx] * ker2[dy];
+        const BIGINT j = oy + j1[dx];
+        out[0] += du[2 * j] * k;
+        out[1] += du[2 * j + 1] * k;
+      }
+    }
+  }
+
+  target[0] = out[0];
+  target[1] = out[1];
+}
+
+// -----------------------------------------------------------------------------
+// 3D interp: uniform subgrid -> NU (with wrapping)
+// -----------------------------------------------------------------------------
+template<typename T, uint8_t ns>
+FINUFFT_NEVER_INLINE void interp_cube_scalar_kernel(
+    T *target, const T *du, const T *ker1, const T *ker2, const T *ker3,
+    BIGINT i1, BIGINT i2, BIGINT i3, BIGINT N1, BIGINT N2, BIGINT N3)
+{
+  static_assert(ns > 0, "ns must be positive");
+  static_assert(ns <= MAX_NSPREAD, "ns exceeds MAX_NSPREAD");
+
+  T out[2] = {T(0), T(0)};
+
+  if (i1 >= 0 && i1 + ns <= N1 &&
+      i2 >= 0 && i2 + ns <= N2 &&
+      i3 >= 0 && i3 + ns <= N3) {
+    // no wrapping: SIMD/FMA-friendly path
+    T line[2 * ns];
+    for (int l = 0; l < int(2 * ns); ++l) line[l] = T(0);
+
+    for (int dz = 0; dz < int(ns); ++dz) {
+      const BIGINT oz = N1 * N2 * (i3 + dz);
+      for (int dy = 0; dy < int(ns); ++dy) {
+        const T *lptr = du + 2 * (oz + N1 * (i2 + dy) + i1);
+        const T ker23 = ker2[dy] * ker3[dz];
+        for (int l = 0; l < int(2 * ns); ++l)
+          line[l] += lptr[l] * ker23;
+      }
+    }
+    for (int dx = 0; dx < int(ns); ++dx) {
+      out[0] += line[2 * dx] * ker1[dx];
+      out[1] += line[2 * dx + 1] * ker1[dx];
+    }
+  } else {
+    // wrapping path (rare)
+    BIGINT j1[ns], j2[ns], j3[ns];
+    BIGINT x = i1, y = i2, z = i3;
+    for (int d = 0; d < int(ns); ++d) {
+      if (x < 0) x += N1;
+      if (x >= N1) x -= N1;
+      j1[d] = x++;
+      if (y < 0) y += N2;
+      if (y >= N2) y -= N2;
+      j2[d] = y++;
+      if (z < 0) z += N3;
+      if (z >= N3) z -= N3;
+      j3[d] = z++;
+    }
+    for (int dz = 0; dz < int(ns); ++dz) {
+      const BIGINT oz = N1 * N2 * j3[dz];
+      for (int dy = 0; dy < int(ns); ++dy) {
+        const BIGINT oy = oz + N1 * j2[dy];
+        const T ker23 = ker2[dy] * ker3[dz];
+        for (int dx = 0; dx < int(ns); ++dx) {
+          const T k = ker1[dx] * ker23;
+          const BIGINT j = oy + j1[dx];
+          out[0] += du[2 * j] * k;
+          out[1] += du[2 * j + 1] * k;
+        }
+      }
+    }
+  }
+
+  target[0] = out[0];
+  target[1] = out[1];
+}
+
 template<int ns, int kerevalmeth, class T,
          class simd_type = xsimd::make_sized_batch_t<T, find_optimal_simd_width<T, ns>()>,
          typename... V>
@@ -1083,7 +1475,10 @@ template<typename T> struct SpreadSubproblem1dCaller {
   const T *dd;
   const finufft_spread_opts &opts;
   template<int NS, int KM> int operator()() const {
-    spread_subproblem_1d_kernel<T, NS, KM>(off1, size1, du, M, kx, dd, opts);
+    if (opts.simd == 1)
+      spread_subproblem_1d_scalar_kernel<T, NS, KM>(off1, size1, du, M, kx, dd, opts);
+    else
+      spread_subproblem_1d_kernel<T, NS, KM>(off1, size1, du, M, kx, dd, opts);
     return 0;
   }
 };
@@ -1206,8 +1601,12 @@ template<typename T> struct SpreadSubproblem2dCaller {
   const T *dd;
   const finufft_spread_opts &opts;
   template<int NS, int KM> int operator()() const {
-    spread_subproblem_2d_kernel<T, NS, KM>(off1, off2, size1, size2, du, M, kx, ky, dd,
-                                           opts);
+    if (opts.simd == 1)
+      spread_subproblem_2d_scalar_kernel<T, NS, KM>(off1, off2, size1, size2, du, M, kx,
+                                                    ky, dd, opts);
+    else
+      spread_subproblem_2d_kernel<T, NS, KM>(off1, off2, size1, size2, du, M, kx, ky, dd,
+                                             opts);
     return 0;
   }
 };
@@ -1324,8 +1723,12 @@ template<typename T> struct SpreadSubproblem3dCaller {
   T *dd;
   const finufft_spread_opts &opts;
   template<int NS, int KM> int operator()() const {
-    spread_subproblem_3d_kernel<T, NS, KM>(off1, off2, off3, size1, size2, size3, du, M,
-                                           kx, ky, kz, dd, opts);
+    if (opts.simd == 1)
+      spread_subproblem_3d_scalar_kernel<T, NS, KM>(off1, off2, off3, size1, size2, size3,
+                                                    du, M, kx, ky, kz, dd, opts);
+    else
+      spread_subproblem_3d_kernel<T, NS, KM>(off1, off2, off3, size1, size2, size3, du, M,
+                                             kx, ky, kz, dd, opts);
     return 0;
   }
 };
@@ -2037,25 +2440,48 @@ FINUFFT_NEVER_INLINE static int interpSorted_kernel(
 
         // eval kernel values patch and use to interpolate from uniform data...
         if (!(opts.flags & TF_OMIT_SPREADING)) {
-          switch (ndims) {
-          case 1:
-            ker_eval<ns, kerevalmeth, T, simd_type>(kernel_values.data(), opts, x1);
-            interp_line<T, ns, simd_type>(target, data_uniform, ker1, i1, N1);
-            break;
-          case 2:
-            ker_eval<ns, kerevalmeth, T, simd_type>(kernel_values.data(), opts, x1, x2);
-            interp_square<T, ns, simd_type>(target, data_uniform, ker1, ker2, i1, i2, N1,
-                                            N2);
-            break;
-          case 3:
-            ker_eval<ns, kerevalmeth, T, simd_type>(kernel_values.data(), opts, x1, x2,
-                                                    x3);
-            interp_cube<T, ns, simd_type>(target, data_uniform, ker1, ker2, ker3, i1, i2,
-                                          i3, N1, N2, N3);
-            break;
-          default: // can't get here
-            FINUFFT_UNREACHABLE;
-            break;
+          if (opts.simd == 1) {
+            switch (ndims) {
+            case 1:
+              ker_eval_scalar<ns, kerevalmeth, T>(kernel_values.data(), opts, x1);
+              interp_line_scalar_kernel<T, ns>(target, data_uniform, ker1, i1, N1);
+              break;
+            case 2:
+              ker_eval_scalar<ns, kerevalmeth, T>(kernel_values.data(), opts, x1, x2);
+              interp_square_scalar_kernel<T, ns>(target, data_uniform, ker1, ker2, i1, i2,
+                                                 N1, N2);
+              break;
+            case 3:
+              ker_eval_scalar<ns, kerevalmeth, T>(kernel_values.data(), opts, x1, x2,
+                                                  x3);
+              interp_cube_scalar_kernel<T, ns>(target, data_uniform, ker1, ker2, ker3,
+                                               i1, i2, i3, N1, N2, N3);
+              break;
+            default: // can't get here
+              FINUFFT_UNREACHABLE;
+              break;
+            }
+          } else {
+            switch (ndims) {
+            case 1:
+              ker_eval<ns, kerevalmeth, T, simd_type>(kernel_values.data(), opts, x1);
+              interp_line<T, ns, simd_type>(target, data_uniform, ker1, i1, N1);
+              break;
+            case 2:
+              ker_eval<ns, kerevalmeth, T, simd_type>(kernel_values.data(), opts, x1, x2);
+              interp_square<T, ns, simd_type>(target, data_uniform, ker1, ker2, i1, i2, N1,
+                                              N2);
+              break;
+            case 3:
+              ker_eval<ns, kerevalmeth, T, simd_type>(kernel_values.data(), opts, x1, x2,
+                                                      x3);
+              interp_cube<T, ns, simd_type>(target, data_uniform, ker1, ker2, ker3, i1,
+                                            i2, i3, N1, N2, N3);
+              break;
+            default: // can't get here
+              FINUFFT_UNREACHABLE;
+              break;
+            }
           }
         }
       } // end loop over targets in chunk
@@ -2192,6 +2618,7 @@ FINUFFT_EXPORT int FINUFFT_CDECL setup_spreader(
   opts.sort             = 2; // 2:auto-choice
   opts.kerpad           = 0; // affects only evaluate_kernel_vector
   opts.kerevalmeth      = kerevalmeth;
+  opts.simd             = 2;
   opts.upsampfac        = upsampfac;
   opts.nthreads         = 0; // all avail
   opts.sort_threads     = 0; // 0:auto-choice
