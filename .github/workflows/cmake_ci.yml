@@ -132,48 +132,61 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y libfftw3-dev
-      - name: Configure Cmake
-        run: |
-          cmake -S . -B ./build -G Ninja -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_BUILD_TYPE:STRING=${{matrix.build_type}} -DFINUFFT_ARCH_FLAGS=${{ matrix.arch_flags }} -DFINUFFT_BUILD_TESTS=ON -DFINUFFT_STATIC_LINKING=${{matrix.finufft_static_linking}} -DFINUFFT_USE_DUCC0=${{ matrix.ducc_fft }} -DFINUFFT_ENABLE_SANITIZERS=${{matrix.build_type == 'Debug'}}
-        env:
-          CPM_SOURCE_CACHE: cpm
-      - name: Build
-        run: |
-          cmake --build ./build --config ${{matrix.build_type}}
-      - name: Test
-        working-directory: ./build
-        run: |
-          ctest -C ${{matrix.build_type}} --output-on-failure
       - name: Set up Python
-        if: matrix.finufft_static_linking == 'off'
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
           cache-dependency-path: requirements.txt
-      - name: Build Python wheels
-        if: matrix.finufft_static_linking == 'off'
-        env:
-          MACOSX_DEPLOYMENT_TARGET: 13
-          CPM_SOURCE_CACHE: cpm
-        shell: bash
+      - name: Install Python requirements
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install -r requirements.txt
-          python3 -m pip install \
-            --verbose \
-            -C cmake.define.CMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -C cmake.define.FINUFFT_ARCH_FLAGS=${{ matrix.arch_flags }} \
-            -C cmake.define.FINUFFT_USE_DUCC0=${{ matrix.ducc_fft }} \
-            -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache \
-            -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache \
-            -C cmake.define.CMAKE_GENERATOR=Ninja \
-            -C cmake.define.CMAKE_GENERATOR_PLATFORM= \
-            python/finufft
-      - name: Test Python package
-        if: matrix.finufft_static_linking == 'off'
+      - name: Build and test configurations
+        shell: bash
+        env:
+          CPM_SOURCE_CACHE: cpm
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.os == 'macos-12' && '12' || matrix.os == 'macos-13' && '13' || '' }}
         run: |
-          python3 -m pytest python/finufft/test
+          configs=(
+            "build_type=Release ducc_fft=On" \
+            "build_type=Debug ducc_fft=Off"
+          )
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            arch_flags=("/arch:AVX2" "/arch:SSE2" "native")
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            arch_flags=("-march=x86-64" "-march=x86-64-v2" "-march=x86-64-v3" "-march=native")
+          else
+            arch_flags=("native")
+          fi
+          for arch in "${arch_flags[@]}"; do
+            arch_dir=$(echo "$arch" | tr -c 'A-Za-z0-9' '_')
+            for cfg in "${configs[@]}"; do
+              eval "$cfg"
+              build_dir="build_${build_type}_${ducc_fft}_${arch_dir}"
+              cmake -S . -B "$build_dir" -G Ninja \
+                -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+                -DCMAKE_BUILD_TYPE=$build_type \
+                -DFINUFFT_ARCH_FLAGS=$arch \
+                -DFINUFFT_USE_DUCC0=$ducc_fft \
+                -DFINUFFT_BUILD_TESTS=ON
+              cmake --build "$build_dir" --config "$build_type"
+              (cd "$build_dir" && ctest -C "$build_type" --output-on-failure)
+              python3 -m pip install \
+                --verbose \
+                -C cmake.define.CMAKE_BUILD_TYPE=$build_type \
+                -C cmake.define.FINUFFT_ARCH_FLAGS=$arch \
+                -C cmake.define.FINUFFT_USE_DUCC0=$ducc_fft \
+                -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache \
+                -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache \
+                -C cmake.define.CMAKE_GENERATOR=Ninja \
+                -C cmake.define.CMAKE_GENERATOR_PLATFORM= \
+                python/finufft
+              python3 -m pytest python/finufft/test
+              rm -rf "$build_dir"
+            done
+          done
   cleanup:
     runs-on: ubuntu-22.04
     needs: cmake-ci
