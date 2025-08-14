@@ -54,8 +54,59 @@ struct [[maybe_unused]] select_odd {
   }
 };
 
-// this finds the largest SIMD instruction set that can handle N elements
-// void otherwise -> compile error
+#if defined(XSIMD_WITH_EMULATED) && XSIMD_WITH_EMULATED
+
+template<class T, uint8_t N = 1> constexpr uint8_t min_simd_width() {
+  return static_cast<uint8_t>(xsimd::batch<T>::size);
+}
+
+template<class T, uint8_t N> constexpr uint8_t find_optimal_simd_width() {
+  return static_cast<uint8_t>(xsimd::batch<T>::size);
+}
+
+template<class T, uint8_t N> constexpr uint8_t GetPaddedSIMDWidth() {
+  return static_cast<uint8_t>(xsimd::batch<T>::size);
+}
+
+template<class T, uint8_t N> using PaddedSIMD = xsimd::batch<T>;
+
+// --- compile-time padding for ns ---
+template<class T, uint8_t ns> constexpr uint8_t get_padding() {
+  constexpr uint8_t width = GetPaddedSIMDWidth<T, ns>();
+  const unsigned w        = width ? width : 1u;
+  const unsigned padded   = ((static_cast<unsigned>(ns) + w - 1u) / w) * w;
+  return static_cast<uint8_t>(padded - ns);
+}
+
+template<class T, uint8_t ns> constexpr uint8_t get_padding_helper(uint8_t runtime_ns) {
+  if constexpr (ns < 2) {
+    return 0;
+  } else {
+    return (runtime_ns == ns)
+               ? get_padding<T, ns>()
+               : get_padding_helper<T, static_cast<uint8_t>(ns - 1)>(runtime_ns);
+  }
+}
+
+template<class T> inline uint8_t get_padding(uint8_t ns) {
+  if (ns == 0) return 0;
+  if (ns > 2 * MAX_NSPREAD) ns = static_cast<uint8_t>(2 * MAX_NSPREAD);
+  return get_padding_helper<T, static_cast<uint8_t>(2 * MAX_NSPREAD)>(ns);
+}
+
+// --- "best SIMD" type selection (trivial in emulated) ---
+template<class T, uint8_t N, uint8_t K = 0>
+static constexpr xsimd::batch<T> BestSIMDHelper() {
+  return {};
+}
+
+template<class T, uint8_t N> using BestSIMD = xsimd::batch<T>;
+
+#else
+// NATIVE BACKENDS
+
+// ---- your original helpers (unchanged) ----
+
 template<class T, uint8_t N, uint8_t K = N> static constexpr auto BestSIMDHelper() {
   if constexpr (N % K == 0) { // returns void in the worst case
     return xsimd::make_sized_batch<T, K>{};
@@ -63,25 +114,28 @@ template<class T, uint8_t N, uint8_t K = N> static constexpr auto BestSIMDHelper
     return BestSIMDHelper<T, N, (K >> 1)>();
   }
 }
+
 template<class T, uint8_t N = 1> constexpr uint8_t min_simd_width() {
   // finds the smallest simd width that can handle N elements
   // simd size is batch size the SIMD width in xsimd terminology
   if constexpr (std::is_void_v<xsimd::make_sized_batch_t<T, N>>) {
-    return min_simd_width<T, N * 2>();
+    return min_simd_width<T, static_cast<uint8_t>(N * 2)>();
   } else {
     return N;
   }
 }
 
-template<class T, uint8_t N> constexpr auto find_optimal_simd_width() {
+template<class T, uint8_t N> constexpr uint8_t find_optimal_simd_width() {
   // finds the smallest simd width that minimizes the number of iterations
   // NOTE: might be suboptimal for some cases 2^N+1 for example
   // in the future we might want to implement a more sophisticated algorithm
   uint8_t optimal_simd_width = min_simd_width<T>();
-  uint8_t min_iterations     = (N + optimal_simd_width - 1) / optimal_simd_width;
+  uint8_t min_iterations =
+      static_cast<uint8_t>((N + optimal_simd_width - 1) / optimal_simd_width);
   for (uint8_t simd_width = optimal_simd_width;
-       simd_width <= xsimd::batch<T, xsimd::best_arch>::size; simd_width *= 2) {
-    uint8_t iterations = (N + simd_width - 1) / simd_width;
+       simd_width <= xsimd::batch<T, xsimd::best_arch>::size;
+       simd_width = static_cast<uint8_t>(simd_width * 2)) {
+    uint8_t iterations = static_cast<uint8_t>((N + simd_width - 1) / simd_width);
     if (iterations < min_iterations) {
       min_iterations     = iterations;
       optimal_simd_width = simd_width;
@@ -90,48 +144,52 @@ template<class T, uint8_t N> constexpr auto find_optimal_simd_width() {
   return optimal_simd_width;
 }
 
-template<class T, uint8_t N> constexpr auto GetPaddedSIMDWidth() {
+template<class T, uint8_t N> constexpr uint8_t GetPaddedSIMDWidth() {
   // helper function to get the SIMD width with padding for the given number of elements
   // that minimizes the number of iterations
   return xsimd::make_sized_batch<T, find_optimal_simd_width<T, N>()>::type::size;
 }
+
 template<class T, uint8_t N>
 using PaddedSIMD = typename xsimd::make_sized_batch<T, GetPaddedSIMDWidth<T, N>()>::type;
+
 template<class T, uint8_t ns> constexpr auto get_padding() {
-  // helper function to get the padding for the given number of elements
-  // ns is known at compile time, rounds ns to the next multiple of the SIMD width
-  // then subtracts ns to get the padding using a bitwise and trick
-  // WARING: this trick works only for power of 2s
-  // SOURCE: Agner Fog's VCL manual
+  // WARING: your original used a PoT bit trick; to be safe, use a generic
+  // ceil-to-multiple:
   constexpr uint8_t width = GetPaddedSIMDWidth<T, ns>();
-  return ((ns + width - 1) & (-width)) - ns;
+  const unsigned w        = width ? width : 1u;
+  const unsigned padded   = ((static_cast<unsigned>(ns) + w - 1u) / w) * w;
+  return static_cast<uint8_t>(padded - ns);
 }
 
+// ---- guard these too (runtime API) ----
 template<class T, uint8_t ns> constexpr auto get_padding_helper(uint8_t runtime_ns) {
-  // helper function to get the padding for the given number of elements where ns is
-  // known at runtime, it uses recursion to find the padding
-  // this allows to avoid having a function with a large number of switch cases
-  // as GetPaddedSIMDWidth requires a compile time value
-  // it cannot be a lambda function because of the template recursion
   if constexpr (ns < 2) {
-    return 0;
+    return static_cast<uint8_t>(0);
   } else {
     if (runtime_ns == ns) {
       return get_padding<T, ns>();
     } else {
-      return get_padding_helper<T, ns - 1>(runtime_ns);
+      return get_padding_helper<T, static_cast<uint8_t>(ns - 1)>(runtime_ns);
     }
   }
 }
 
-template<class T> uint8_t get_padding(uint8_t ns) {
+template<class T> inline uint8_t get_padding(uint8_t ns) {
   // return the padding as a function of the number of elements
   // 2 * MAX_NSPREAD is the maximum number of elements that we can have
   // that's why is hardcoded here
-  return get_padding_helper<T, 2 * MAX_NSPREAD>(ns);
+#ifndef MAX_NSPREAD
+#define MAX_NSPREAD 16
+#endif
+  return get_padding_helper<T, static_cast<uint8_t>(2 * MAX_NSPREAD)>(ns);
 }
+
 template<class T, uint8_t N>
 using BestSIMD = typename decltype(BestSIMDHelper<T, N, xsimd::batch<T>::size>())::type;
+
+#endif // XSIMD_WITH_EMULATED
+
 template<class T, class V, size_t... Is>
 constexpr T generate_sequence_impl(V a, V b, index_sequence<Is...>) noexcept {
   // utility function to generate a sequence of a, b interleaved as function arguments
@@ -1110,9 +1168,8 @@ FINUFFT_NEVER_INLINE void spread_subproblem_3d_scalar_kernel(
 // 1D interp: uniform subgrid -> NU (with wrapping)
 // -----------------------------------------------------------------------------
 template<typename T, uint8_t ns>
-FINUFFT_NEVER_INLINE void interp_line_scalar_kernel(
-    T *target, const T *du, const T *ker, BIGINT i1, BIGINT N1)
-{
+FINUFFT_NEVER_INLINE void interp_line_scalar_kernel(T *target, const T *du, const T *ker,
+                                                    BIGINT i1, BIGINT N1) {
   static_assert(ns > 0, "ns must be positive");
   static_assert(ns <= MAX_NSPREAD, "ns exceeds MAX_NSPREAD");
 
@@ -1161,9 +1218,8 @@ FINUFFT_NEVER_INLINE void interp_line_scalar_kernel(
 // -----------------------------------------------------------------------------
 template<typename T, uint8_t ns>
 FINUFFT_NEVER_INLINE void interp_square_scalar_kernel(
-    T *target, const T *du, const T *ker1, const T *ker2,
-    BIGINT i1, BIGINT i2, BIGINT N1, BIGINT N2)
-{
+    T *target, const T *du, const T *ker1, const T *ker2, BIGINT i1, BIGINT i2, BIGINT N1,
+    BIGINT N2) {
   static_assert(ns > 0, "ns must be positive");
   static_assert(ns <= MAX_NSPREAD, "ns exceeds MAX_NSPREAD");
 
@@ -1174,13 +1230,11 @@ FINUFFT_NEVER_INLINE void interp_square_scalar_kernel(
     T line[2 * ns]; // interleaved real/imag
     {
       const T *lptr = du + 2 * (N1 * i2 + i1);
-      for (int l = 0; l < int(2 * ns); ++l)
-        line[l] = ker2[0] * lptr[l];
+      for (int l = 0; l < int(2 * ns); ++l) line[l] = ker2[0] * lptr[l];
     }
     for (int dy = 1; dy < int(ns); ++dy) {
       const T *lptr = du + 2 * (N1 * (i2 + dy) + i1);
-      for (int l = 0; l < int(2 * ns); ++l)
-        line[l] += ker2[dy] * lptr[l];
+      for (int l = 0; l < int(2 * ns); ++l) line[l] += ker2[dy] * lptr[l];
     }
     for (int dx = 0; dx < int(ns); ++dx) {
       out[0] += line[2 * dx] * ker1[dx];
@@ -1201,7 +1255,7 @@ FINUFFT_NEVER_INLINE void interp_square_scalar_kernel(
     for (int dy = 0; dy < int(ns); ++dy) {
       const BIGINT oy = N1 * j2[dy];
       for (int dx = 0; dx < int(ns); ++dx) {
-        const T k = ker1[dx] * ker2[dy];
+        const T k      = ker1[dx] * ker2[dy];
         const BIGINT j = oy + j1[dx];
         out[0] += du[2 * j] * k;
         out[1] += du[2 * j + 1] * k;
@@ -1218,17 +1272,14 @@ FINUFFT_NEVER_INLINE void interp_square_scalar_kernel(
 // -----------------------------------------------------------------------------
 template<typename T, uint8_t ns>
 FINUFFT_NEVER_INLINE void interp_cube_scalar_kernel(
-    T *target, const T *du, const T *ker1, const T *ker2, const T *ker3,
-    BIGINT i1, BIGINT i2, BIGINT i3, BIGINT N1, BIGINT N2, BIGINT N3)
-{
+    T *target, const T *du, const T *ker1, const T *ker2, const T *ker3, BIGINT i1,
+    BIGINT i2, BIGINT i3, BIGINT N1, BIGINT N2, BIGINT N3) {
   static_assert(ns > 0, "ns must be positive");
   static_assert(ns <= MAX_NSPREAD, "ns exceeds MAX_NSPREAD");
 
   T out[2] = {T(0), T(0)};
 
-  if (i1 >= 0 && i1 + ns <= N1 &&
-      i2 >= 0 && i2 + ns <= N2 &&
-      i3 >= 0 && i3 + ns <= N3) {
+  if (i1 >= 0 && i1 + ns <= N1 && i2 >= 0 && i2 + ns <= N2 && i3 >= 0 && i3 + ns <= N3) {
     // no wrapping: SIMD/FMA-friendly path
     T line[2 * ns];
     for (int l = 0; l < int(2 * ns); ++l) line[l] = T(0);
@@ -1238,8 +1289,7 @@ FINUFFT_NEVER_INLINE void interp_cube_scalar_kernel(
       for (int dy = 0; dy < int(ns); ++dy) {
         const T *lptr = du + 2 * (oz + N1 * (i2 + dy) + i1);
         const T ker23 = ker2[dy] * ker3[dz];
-        for (int l = 0; l < int(2 * ns); ++l)
-          line[l] += lptr[l] * ker23;
+        for (int l = 0; l < int(2 * ns); ++l) line[l] += lptr[l] * ker23;
       }
     }
     for (int dx = 0; dx < int(ns); ++dx) {
@@ -1265,9 +1315,9 @@ FINUFFT_NEVER_INLINE void interp_cube_scalar_kernel(
       const BIGINT oz = N1 * N2 * j3[dz];
       for (int dy = 0; dy < int(ns); ++dy) {
         const BIGINT oy = oz + N1 * j2[dy];
-        const T ker23 = ker2[dy] * ker3[dz];
+        const T ker23   = ker2[dy] * ker3[dz];
         for (int dx = 0; dx < int(ns); ++dx) {
-          const T k = ker1[dx] * ker23;
+          const T k      = ker1[dx] * ker23;
           const BIGINT j = oy + j1[dx];
           out[0] += du[2 * j] * k;
           out[1] += du[2 * j + 1] * k;
@@ -2452,10 +2502,9 @@ FINUFFT_NEVER_INLINE static int interpSorted_kernel(
                                                  N1, N2);
               break;
             case 3:
-              ker_eval_scalar<ns, kerevalmeth, T>(kernel_values.data(), opts, x1, x2,
-                                                  x3);
-              interp_cube_scalar_kernel<T, ns>(target, data_uniform, ker1, ker2, ker3,
-                                               i1, i2, i3, N1, N2, N3);
+              ker_eval_scalar<ns, kerevalmeth, T>(kernel_values.data(), opts, x1, x2, x3);
+              interp_cube_scalar_kernel<T, ns>(target, data_uniform, ker1, ker2, ker3, i1,
+                                               i2, i3, N1, N2, N3);
               break;
             default: // can't get here
               FINUFFT_UNREACHABLE;
@@ -2469,8 +2518,8 @@ FINUFFT_NEVER_INLINE static int interpSorted_kernel(
               break;
             case 2:
               ker_eval<ns, kerevalmeth, T, simd_type>(kernel_values.data(), opts, x1, x2);
-              interp_square<T, ns, simd_type>(target, data_uniform, ker1, ker2, i1, i2, N1,
-                                              N2);
+              interp_square<T, ns, simd_type>(target, data_uniform, ker1, ker2, i1, i2,
+                                              N1, N2);
               break;
             case 3:
               ker_eval<ns, kerevalmeth, T, simd_type>(kernel_values.data(), opts, x1, x2,
