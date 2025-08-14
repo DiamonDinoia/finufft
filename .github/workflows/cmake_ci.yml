@@ -68,17 +68,17 @@ jobs:
       - name: Download dependencies in cache linux
         if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'Linux'
         run: |
-          cmake -S . -B ./build
+          cmake -S . -B ./build -DCPM_SOURCE_CACHE=cpm
           rm -rf build
-          cmake -S . -B ./build -DFINUFFT_USE_DUCC0=ON
+          cmake -S . -B ./build -DFINUFFT_USE_DUCC0=ON -DCPM_SOURCE_CACHE=cpm
         env:
           CPM_SOURCE_CACHE: cpm
       - name: Download dependencies in cache windows
         if: steps.cache.outputs.cache-hit != 'true' && runner.os != 'Linux'
         run: |
-          cmake -S . -B build
+          cmake -S . -B build -DCPM_SOURCE_CACHE=cpm
           rm build -r -force
-          cmake -S . -B build -DFINUFFT_USE_DUCC0=ON
+          cmake -S . -B build -DFINUFFT_USE_DUCC0=ON -DCPM_SOURCE_CACHE=cpm
         env:
           CPM_SOURCE_CACHE: cpm
       - name: Cache dependencies
