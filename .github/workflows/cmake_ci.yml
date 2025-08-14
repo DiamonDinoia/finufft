@@ -15,6 +15,7 @@ jobs:
         run: |
           MATRIX=$(python3 ${{ github.workspace }}/.github/workflows/generate_cmake_matrix.py)
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
   pip-requirements:
     runs-on: ubuntu-24.04
     steps:
@@ -38,6 +39,7 @@ jobs:
         with:
           name: requirements
           path: requirements.txt
+
   cache:
     strategy:
       matrix:
@@ -82,9 +84,10 @@ jobs:
       - name: Cache dependencies
         uses: actions/cache/save@v4
         with:
-          key: cpm-cache-00-${{ runner.os == 'windows' && 'windows-' || '' }}${{ hashFiles('**/CMakeLists.txt', 'cmake/*') }}
+          key: cpm-cache-00-${{ runner.os == 'windows' && 'windows-' || '' }}${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
           enableCrossOsArchive: true
           path: cpm
+
   cmake-ci:
     runs-on: ${{ matrix.os }}
     needs: [prepare, cache, pip-requirements]
@@ -94,23 +97,32 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: Restore Cache
         uses: actions/cache/restore@v4
         with:
-          key: cpm-cache-00-${{ runner.os == 'windows' && 'windows-' || '' }}${{ hashFiles('**/CMakeLists.txt', 'cmake/*') }}
+          key: cpm-cache-00-${{ runner.os == 'windows' && 'windows-' || '' }}${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
           enableCrossOsArchive: true
           path: cpm
+
       - name: Download requirements.txt
         uses: actions/download-artifact@v4
         with:
           name: requirements
+
+      # Manual sccache setup (action + env)
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
       - name: Set caching env vars
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
           echo "SCCACHE_GHA_VERSION=0" >> $GITHUB_ENV
+
       - name: Set up sccache on Windows
         if: runner.os == 'Windows'
         run: Add-Content -Path $env:GITHUB_ENV -Value "SCCACHE_GHA_ENABLED=true"
+
       - name: Setup Cpp
         uses: aminya/setup-cpp@v1
         with:
@@ -121,7 +133,7 @@ jobs:
           vcpkg: false
           cppcheck: false
           clangtidy: false
-          sccache: true  # use setup-cpp's sccache support
+          # sccache intentionally NOT enabled here; using manual sccache action above
 
       - name: Set min macOS version and install fftw
         if: runner.os == 'macOS'
@@ -129,11 +141,13 @@ jobs:
           brew install fftw libomp
           echo "CMAKE_PREFIX_PATH=$(brew --prefix):$(brew --prefix libomp)" >> $GITHUB_ENV
           echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH"
-      - name: Install fftw
+
+      - name: Install fftw (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt update
           sudo apt install -y libfftw3-dev
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -145,6 +159,7 @@ jobs:
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install -r requirements.txt
+
       - name: Build and test configurations
         shell: bash
         env:
@@ -152,7 +167,7 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.os == 'macos-12' && '12' || matrix.os == 'macos-13' && '13' || '' }}
         run: |
           configs=(
-            "build_type=Release ducc_fft=On" \
+            "build_type=Release ducc_fft=On"
             "build_type=Debug ducc_fft=Off"
           )
           if [[ "$RUNNER_OS" == "Windows" ]]; then
@@ -177,6 +192,8 @@ jobs:
                 -DFINUFFT_BUILD_TESTS=ON
               cmake --build "$build_dir" --config "$build_type"
               (cd "$build_dir" && ctest -C "$build_type" --output-on-failure)
+
+              # Build & test Python package with matching CMake options
               python3 -m pip install \
                 --verbose \
                 -C cmake.define.CMAKE_BUILD_TYPE=$build_type \
@@ -188,10 +205,12 @@ jobs:
                 -C cmake.define.CMAKE_GENERATOR=Ninja \
                 -C cmake.define.CMAKE_GENERATOR_PLATFORM= \
                 python/finufft
+
               python3 -m pytest python/finufft/test
               rm -rf "$build_dir"
             done
           done
+
   cleanup:
     runs-on: ubuntu-24.04
     needs: cmake-ci
