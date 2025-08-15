@@ -191,7 +191,8 @@ jobs:
                 -DCMAKE_BUILD_TYPE=$build_type \
                 -DFINUFFT_ARCH_FLAGS=$arch \
                 -DFINUFFT_USE_DUCC0=$ducc_fft \
-                -DFINUFFT_BUILD_TESTS=ON
+                -DFINUFFT_BUILD_TESTS=ON \
+                -DCMAKE_POLICY_VERSION_MINIMUM=3.0
               cmake --build "$build_dir" --config "$build_type"
               (cd "$build_dir" && ctest -C "$build_type" --output-on-failure)
 
@@ -206,6 +207,7 @@ jobs:
                 -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache \
                 -C cmake.define.CMAKE_GENERATOR=Ninja \
                 -C cmake.define.CMAKE_GENERATOR_PLATFORM= \
+                -C cmake.define.CMAKE_POLICY_VERSION_MINIMUM=3.0 \
                 python/finufft
 
               python3 -m pytest python/finufft/test
