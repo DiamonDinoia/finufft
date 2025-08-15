@@ -17,7 +17,7 @@ jobs:
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
   pip-requirements:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -44,7 +44,7 @@ jobs:
     strategy:
       matrix:
         os:
-          - ubuntu-24.04
+          - ubuntu-22.04
           - windows-2022
     runs-on: ${{ matrix.os }}
     steps:
@@ -141,8 +141,13 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install fftw libomp
+          # Make libomp visible to the linker & compiler
+          echo "LDFLAGS=-L$(brew --prefix libomp)/lib" >> $GITHUB_ENV
+          echo "CPPFLAGS=-I$(brew --prefix libomp)/include" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=$(brew --prefix libomp)/lib" >> $GITHUB_ENV
+          echo "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib" >> $GITHUB_ENV
+          # (Optional) Also help CMake find brew packages
           echo "CMAKE_PREFIX_PATH=$(brew --prefix):$(brew --prefix libomp)" >> $GITHUB_ENV
-          echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH"
 
       - name: Install fftw (Linux)
         if: runner.os == 'Linux'
@@ -216,7 +221,7 @@ jobs:
           done
 
   cleanup:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     needs: cmake-ci
     steps:
       - name: Artifact cleanup
