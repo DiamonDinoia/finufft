@@ -51,42 +51,44 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: create cache directory
+        shell: bash
         run: |
-          mkdir -p ../cpm
+          mkdir -p "${{ github.workspace }}/cpm"
       - name: Check if cache exists
         id: cache
         uses: actions/cache@v4
         with:
           key: cpm-cache-00-${{ runner.os == 'windows' && 'windows-' || '' }}${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
           enableCrossOsArchive: true
-          path: cpm
+          path: ${{ github.workspace }}/cpm
       - name: Setup Cpp
         if: steps.cache.outputs.cache-hit != 'true'
         uses: aminya/setup-cpp@v1
         with:
-          cmake : true
+          cmake: 3.31.6
       - name: Download dependencies in cache linux
         if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'Linux'
         run: |
-          cmake -S . -B ./build -DCPM_SOURCE_CACHE=../cpm
+          cmake -S . -B ./build -DCPM_SOURCE_CACHE="${{ github.workspace }}/cpm"
           rm -rf build
-          cmake -S . -B ./build -DFINUFFT_USE_DUCC0=ON -DCPM_SOURCE_CACHE=../cpm
+          cmake -S . -B ./build -DFINUFFT_USE_DUCC0=ON -DCPM_SOURCE_CACHE="${{ github.workspace }}/cpm"
         env:
-          CPM_SOURCE_CACHE: cpm
+          CPM_SOURCE_CACHE: ${{ github.workspace }}/cpm
       - name: Download dependencies in cache windows
         if: steps.cache.outputs.cache-hit != 'true' && runner.os != 'Linux'
         run: |
-          cmake -S . -B build -DCPM_SOURCE_CACHE=../cpm
+          cmake -S . -B build -DCPM_SOURCE_CACHE="${{ github.workspace }}/cpm"
           rm build -r -force
-          cmake -S . -B build -DFINUFFT_USE_DUCC0=ON -DCPM_SOURCE_CACHE=../cpm
+          cmake -S . -B build -DFINUFFT_USE_DUCC0=ON -DCPM_SOURCE_CACHE="${{ github.workspace }}/cpm"
         env:
-          CPM_SOURCE_CACHE: cpm
+          CPM_SOURCE_CACHE: ${{ github.workspace }}/cpm
       - name: Cache dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           key: cpm-cache-00-${{ runner.os == 'windows' && 'windows-' || '' }}${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
           enableCrossOsArchive: true
-          path: ../cpm
+          path: ${{ github.workspace }}/cpm
 
   cmake-ci:
     runs-on: ${{ matrix.os }}
@@ -103,7 +105,7 @@ jobs:
         with:
           key: cpm-cache-00-${{ runner.os == 'windows' && 'windows-' || '' }}${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
           enableCrossOsArchive: true
-          path: cpm
+          path: ${{ github.workspace }}/cpm
 
       - name: Download requirements.txt
         uses: actions/download-artifact@v4
@@ -128,7 +130,7 @@ jobs:
         with:
           compiler: ${{ matrix.toolchain }}
           vcvarsall: ${{ contains(matrix.os, 'windows') }}
-          cmake: true
+          cmake: 3.31.6
           ninja: true
           vcpkg: false
           cppcheck: false
@@ -163,7 +165,7 @@ jobs:
       - name: Build and test configurations
         shell: bash
         env:
-          CPM_SOURCE_CACHE: cpm
+          CPM_SOURCE_CACHE: ${{ github.workspace }}/cpm
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.os == 'macos-12' && '12' || matrix.os == 'macos-13' && '13' || '' }}
         run: |
           configs=(
@@ -183,7 +185,7 @@ jobs:
               eval "$cfg"
               build_dir="build_${build_type}_${ducc_fft}_${arch_dir}"
               cmake -S . -B "$build_dir" -G Ninja \
-                -DCPM_SOURCE_CACHE=../cpm \
+                -DCPM_SOURCE_CACHE="${{ github.workspace }}/cpm" \
                 -DCMAKE_C_COMPILER_LAUNCHER=sccache \
                 -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
                 -DCMAKE_BUILD_TYPE=$build_type \
@@ -199,7 +201,7 @@ jobs:
                 -C cmake.define.CMAKE_BUILD_TYPE=$build_type \
                 -C cmake.define.FINUFFT_ARCH_FLAGS=$arch \
                 -C cmake.define.FINUFFT_USE_DUCC0=$ducc_fft \
-                -C cmake.define.CPM_SOURCE_CACHE=../cpm \
+                -C cmake.define.CPM_SOURCE_CACHE=${{ github.workspace }}/cpm \
                 -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache \
                 -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache \
                 -C cmake.define.CMAKE_GENERATOR=Ninja \
