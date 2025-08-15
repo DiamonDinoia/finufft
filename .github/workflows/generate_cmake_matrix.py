@@ -17,7 +17,7 @@ combinations = [
     ),
     (
         "windows-2022",
-        ["msvc", "clang-16", "clang-17", "clang-18"],
+        ["msvc", "clang-19"],
     ),
     (
         "macos-12",
