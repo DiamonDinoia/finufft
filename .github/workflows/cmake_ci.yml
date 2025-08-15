@@ -172,7 +172,7 @@ jobs:
             "build_type=Release ducc_fft=On"
             "build_type=Debug ducc_fft=Off"
           )
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
+          if [[ "${{ matrix.toolchain }}" == "msvc" ]]; then
             arch_flags=("/arch:AVX2" "/arch:SSE2" "native")
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             arch_flags=("-march=x86-64" "-march=x86-64-v2" "-march=x86-64-v3" "-march=native")
