@@ -22,7 +22,16 @@ jobs:
           ninja: true
           vcvarsall: true
 
-      # MATLAB on PATH for find_package(Matlab)/matlab_add_mex
+      # Linux: use GCC 11 (keeps GLIBCXX requirements compatible with MATLAB R2023b)
+      - name: Select GCC 11 (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          echo "CC=gcc-11" >> "$GITHUB_ENV"
+          echo "CXX=g++-11" >> "$GITHUB_ENV"
+          g++-11 --version
+
+      # MATLAB available for find_package(Matlab)/matlab_add_mex and tests
       - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v2
         with:
@@ -30,11 +39,12 @@ jobs:
           products: MATLAB
           cache: true
 
-      # macOS: OpenMP runtime and multi-target matrix
+      # macOS: install OpenMP runtime & set deployment targets
       - name: Install libomp (macOS) and set env
         if: runner.os == 'macOS'
         shell: bash
         run: |
+          set -euo pipefail
           export HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_INSTALL_CLEANUP=1
           brew install libomp
           {
@@ -46,34 +56,46 @@ jobs:
             echo "MAC_TARGETS=12.0 13.0"
           } >> "$GITHUB_ENV"
 
-      # -------- Linux & Windows (unified) --------
+      # ---------- Linux & Windows ----------
       - name: Configure & Build (Linux/Windows, DUCC0)
         if: runner.os != 'macOS'
         shell: bash
         run: |
+          set -euo pipefail
+          EXTRA_FLAGS=""
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            EXTRA_FLAGS="-DCMAKE_C_COMPILER=gcc-11 -DCMAKE_CXX_COMPILER=g++-11"
+          fi
           cmake -S . -B build -G Ninja \
             -DFINUFFT_USE_DUCC0=ON \
-            -DFINUFFT_MATLAB_INSTALL=ON
+            -DFINUFFT_MATLAB_INSTALL=ON \
+            ${EXTRA_FLAGS}
           cmake --build build --target finufft_mex --parallel
 
+      # Tests: prefer MATLAB's own libstdc++ at runtime (Linux only)
       - name: Run fullmathtest.m (Linux/Windows)
         if: runner.os != 'macOS'
         uses: matlab-actions/run-command@v2
+        env:
+          # Prepend MATLAB's sys/os/glnxa64 so its libstdc++.so.6 is chosen.
+          LD_LIBRARY_PATH: ${{ runner.os == 'Linux' && format('{0}/MATLAB/2023.2.999/x64/sys/os/glnxa64:{1}', env.RUNNER_TOOL_CACHE, env.LD_LIBRARY_PATH) || env.LD_LIBRARY_PATH }}
         with:
           command: |
             addpath(genpath('matlab'));
             addpath(genpath('build'));
             fullmathtest
 
-      - name: Package (Linux/Windows) with CPack (TGZ)
+      # Package via CPack (creates build/finufft-matlab-mex-*.zip or *.tar.gz)
+      - name: Package (Linux/Windows) with CPack
         if: runner.os != 'macOS'
         shell: bash
         run: |
-          mkdir -p dist
-          os_tag=$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')
-          (cd build && cpack -G TGZ -B ../dist -D CPACK_PACKAGE_FILE_NAME="finufft-matlab-mex-${os_tag}")
+          set -euo pipefail
+          cmake --build build --target package
+          echo "Produced packages:"
+          ls -l build/*.zip build/*.tar.gz 2>/dev/null || true
 
-      # -------- macOS (multi-target) --------
+      # ---------- macOS (per deployment target) ----------
       - name: Configure & Build (macOS; DUCC0, multi-target)
         if: runner.os == 'macOS'
         shell: bash
@@ -94,26 +116,33 @@ jobs:
         with:
           command: |
             addpath(genpath('matlab'));
-            ts = strsplit(strtrim(getenv('MAC_TARGETS')));
-            for k = 1:numel(ts)
-              addpath(genpath(fullfile('build_mac_', ts{k})));
+            targets = regexp(getenv('MAC_TARGETS'), '\s+', 'split');
+            for i = 1:numel(targets)
+              tgt = strtrim(targets{i});
+              p = genpath(fullfile('build_mac_', tgt));
+              addpath(p);
               fullmathtest;
-              rmpath(genpath(fullfile('build_mac_', ts{k})));
+              rmpath(p);
             end
+            clear targets tgt p i;
 
-      - name: Package (macOS) with CPack (TGZ per target)
+      - name: Package (macOS) with CPack (per target)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist
           for tgt in ${MAC_TARGETS}; do
-            (cd "build_mac_${tgt}" && cpack -G TGZ -B ../dist -D CPACK_PACKAGE_FILE_NAME="finufft-matlab-mex-macos-${tgt}")
+            cmake --build "build_mac_${tgt}" --target package
           done
+          echo "Produced packages:"
+          ls -l build_mac_*/finufft-matlab-mex-macos-*.tar.gz || true
 
-      # Upload archives
+      # Upload only CPack-produced archives
       - uses: actions/upload-artifact@v4
         with:
           name: finufft-matlab-mex-${{ matrix.os }}
-          path: dist/**
+          path: |
+            build/*.zip
+            build/*.tar.gz
+            build_mac_*/finufft-matlab-mex-macos-*.tar.gz
           if-no-files-found: error

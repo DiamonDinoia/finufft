@@ -66,30 +66,22 @@ endforeach()
 if(FINUFFT_MATLAB_INSTALL)
     set(CPACK_GENERATOR "TGZ;ZIP")
     set(CPACK_PACKAGE_NAME "finufft-matlab")
+    # We want the archive to contain only `matlab/` at the root:
+    set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
+
+    # OS-specific archive choice + filename
+    if(WIN32)
+        set(CPACK_GENERATOR "ZIP")
+        set(CPACK_PACKAGE_FILE_NAME "finufft-matlab-mex-windows")
+    elseif(APPLE)
+        # If you’re building multiple macOS deployment targets in separate build dirs,
+        # CMAKE_OSX_DEPLOYMENT_TARGET is set per build dir, so we bake it in:
+        set(CPACK_GENERATOR "TGZ")
+        set(CPACK_PACKAGE_FILE_NAME "finufft-matlab-mex-macos-${CMAKE_OSX_DEPLOYMENT_TARGET}")
+    else()
+        set(CPACK_GENERATOR "TGZ")
+        set(CPACK_PACKAGE_FILE_NAME "finufft-matlab-mex-linux")
+    endif()
+
     include(CPack)
-
-    install(FILES ${MATLAB_MFILES} DESTINATION matlab)
-    install(DIRECTORY "@gpuArray" DESTINATION matlab)
-
-    if(TARGET finufft_mex)
-        install(
-            TARGETS finufft_mex
-            LIBRARY
-                DESTINATION
-                    matlab # .mexa64/.mexmaci64
-            RUNTIME
-                DESTINATION
-                    matlab # .mexw64 on Windows
-        )
-    endif()
-    if(TARGET cufinufft_mex)
-        install(TARGETS cufinufft_mex LIBRARY DESTINATION matlab RUNTIME DESTINATION matlab)
-    endif()
-    # Convenience meta-target
-    if(TARGET finufft_mex OR TARGET cufinufft_mex)
-        add_custom_target(
-            matlab
-            DEPENDS $<$<TARGET_EXISTS:finufft_mex>:finufft_mex> $<$<TARGET_EXISTS:cufinufft_mex>:cufinufft_mex>
-        )
-    endif()
 endif()
