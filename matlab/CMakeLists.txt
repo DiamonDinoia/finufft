@@ -68,6 +68,9 @@ if(FINUFFT_MATLAB_INSTALL)
     set(CPACK_PACKAGE_NAME "finufft-matlab")
     include(CPack)
 
+    install(FILES ${MATLAB_MFILES} DESTINATION matlab)
+    install(DIRECTORY "@gpuArray" DESTINATION matlab)
+
     if(TARGET finufft_mex)
         install(
             TARGETS finufft_mex
@@ -82,10 +85,6 @@ if(FINUFFT_MATLAB_INSTALL)
     if(TARGET cufinufft_mex)
         install(TARGETS cufinufft_mex LIBRARY DESTINATION matlab RUNTIME DESTINATION matlab)
     endif()
-    if(MATLAB_MFILES)
-        install(FILES ${MATLAB_MFILES} DESTINATION matlab)
-    endif()
-
     # Convenience meta-target
     if(TARGET finufft_mex OR TARGET cufinufft_mex)
         add_custom_target(

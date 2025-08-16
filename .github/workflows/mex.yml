@@ -1,5 +1,4 @@
-# .github/workflows/build-matlab-mex.yml
-name: cmake ci linux macos windows
+name: Build MATLAB MEX
 
 on: [push, pull_request]
 
@@ -24,10 +23,12 @@ jobs:
           vcvarsall: true
 
       # MATLAB on PATH for find_package(Matlab)/matlab_add_mex
-      - name: Setup MATLAB
+      - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v2
         with:
+          release: R2023b
           products: MATLAB
+          cache: true
 
       # macOS: OpenMP runtime and multi-target matrix
       - name: Install libomp (macOS) and set env
@@ -57,11 +58,12 @@ jobs:
 
       - name: Run fullmathtest.m (Linux/Windows)
         if: runner.os != 'macOS'
-        shell: bash
-        run: |
-          # locate built MEX folder and run test
-          MEX_DIR="$(dirname "$(find build -type f -name 'finufft.mex*' -print -quit)")"
-          matlab -batch "addpath('matlab'); addpath('${MEX_DIR}'); run('matlab/test/fullmathtest.m');"
+        uses: matlab-actions/run-command@v2
+        with:
+          command: |
+            addpath(genpath('matlab'));
+            addpath(genpath('build'));
+            fullmathtest
 
       - name: Package (Linux/Windows) with CPack (TGZ)
         if: runner.os != 'macOS'
@@ -88,13 +90,16 @@ jobs:
 
       - name: Run fullmathtest.m (macOS per target)
         if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          for tgt in ${MAC_TARGETS}; do
-            MEX_DIR="$(dirname "$(find "build_mac_${tgt}" -type f -name 'finufft.mex*' -print -quit)")"
-            matlab -batch "addpath('matlab'); addpath('${MEX_DIR}'); run('matlab/test/fullmathtest.m');"
-          done
+        uses: matlab-actions/run-command@v2
+        with:
+          command: |
+            addpath(genpath('matlab'));
+            ts = strsplit(strtrim(getenv('MAC_TARGETS')));
+            for k = 1:numel(ts)
+              addpath(genpath(fullfile('build_mac_', ts{k})));
+              fullmathtest;
+              rmpath(genpath(fullfile('build_mac_', ts{k})));
+            end
 
       - name: Package (macOS) with CPack (TGZ per target)
         if: runner.os == 'macOS'
