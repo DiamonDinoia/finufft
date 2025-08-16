@@ -45,6 +45,11 @@ if(FINUFFT_SHARED_LINKING)
     set(FINUFFT_POSITION_INDEPENDENT_CODE ON)
 endif()
 
+if(FINUFFT_MATLAB_INSTALL)
+    set(FINUFFT_BUILD_MATLAB ON)
+    set(FINUFFT_ENABLE_INSTALL OFF)
+endif()
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Use the folder that contains this CMakeLists.txt, not the project root

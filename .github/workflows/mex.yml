@@ -1,72 +1,114 @@
-name: Generate Matlab mex files
-on:
-  # Weekly schedule (Sunday 00:00 UTC)
-  schedule:
-    - cron: "0 0 * * 0"
+# .github/workflows/build-matlab-mex.yml
+name: cmake ci linux macos windows
 
-  # On tag push
-  push:
-    tags:
-      - 'v*'
-  # Manual trigger (with an optional deploy toggle)
-  workflow_dispatch:
-    inputs:
-      deploy:
-        description: "Deploy after build?"
-        type: boolean
-        required: false
-        default: false
+on: [push, pull_request]
 
 jobs:
-  mex-ci:
-    name: ${{ matrix.os }}
+  matlab-mex:
+    name: ${{ matrix.os }} (MATLAB CPU MEX via DUCC0)
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest, macos-14]
     runs-on: ${{ matrix.os }}
+
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-      - name: Set up MATLAB
+      - uses: actions/checkout@v4
+
+      # Toolchain: CMake + Ninja (+ MSVC env on Windows)
+      - name: Setup C++ toolchain
+        uses: aminya/setup-cpp@v1.7.1
+        with:
+          cmake: true
+          ninja: true
+          vcvarsall: true
+
+      # MATLAB on PATH for find_package(Matlab)/matlab_add_mex
+      - name: Setup MATLAB
         uses: matlab-actions/setup-matlab@v2
         with:
-          release: R2023b
-          cache: true
-      - name: Generate Windows mex file
-        if: runner.os == 'Windows'
-        run: |
-          export PATH=/d/hostedtoolcache/windows/MATLAB/2023.2.999/x64/bin/win64:$PATH
-          export PATH=/c/msys64/usr/bin:$PATH
-          export PATH=/c/msys64/mingw64/bin:$PATH
-          export MW_MINGW64_LOC=/c/msys64/mingw64
-          pacman -Sy --noconfirm make mingw-w64-x86_64-toolchain mingw-w64-x86_64-fftw
-          mex -setup:.github/workflows/mex_C++_win64.xml C++
-          cp make-platforms/make.inc.windows_msys make.inc
-          sed -i '/  LIBSFFT/a \ \ LIBSFFT := `g++ --print-file-name libfftw3.a` `g++ --print-file-name libfftw3f.a` `g++ --print-file-name libfftw3_omp.a` `g++ --print-file-name libfftw3f_omp.a` `g++ --print-file-name libm.a` `g++ --print-file-name libgomp.a`' makefile
-          /c/msys64/usr/bin/make matlab
-        shell: C:\msys64\usr\bin\bash.exe {0}
-      - name: Generate macOS mex file
+          products: MATLAB
+
+      # macOS: OpenMP runtime and multi-target matrix
+      - name: Install libomp (macOS) and set env
         if: runner.os == 'macOS'
+        shell: bash
         run: |
-          brew install fftw libomp
-          sed 's/\/Applications\/MATLAB_R20\*\*.app/\/Users\/runner\/hostedtoolcache\/MATLAB\/2023.2.999\/arm64\/MATLAB.app/' make-platforms/make.inc.macosx_arm64 > make.inc
-          sed -i -e 's/  LIBSFFT.*/\ \ LIBSFFT := \/opt\/homebrew\/opt\/fftw\/lib\/libfftw3\.a \/opt\/homebrew\/opt\/fftw\/lib\/libfftw3f\.a \/opt\/homebrew\/opt\/fftw\/lib\/libfftw3_omp.a \/opt\/homebrew\/opt\/fftw\/lib\/libfftw3f_omp\.a -L\/Users\/runner\/hostedtoolcache\/MATLAB\/2023.2.999\/arm64\/MATLAB.app\/bin\/maca64\/lib -lomp/' makefile
-          make matlab
-      - name: Generate Linux mex file
-        if: runner.os == 'Linux'
+          export HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_INSTALL_CLEANUP=1
+          brew install libomp
+          {
+            echo "LDFLAGS=-L$(brew --prefix libomp)/lib"
+            echo "CPPFLAGS=-I$(brew --prefix libomp)/include"
+            echo "LIBRARY_PATH=$(brew --prefix libomp)/lib"
+            echo "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib"
+            echo "CMAKE_PREFIX_PATH=$(brew --prefix libomp)"
+            echo "MAC_TARGETS=12.0 13.0"
+          } >> "$GITHUB_ENV"
+
+      # -------- Linux & Windows (unified) --------
+      - name: Configure & Build (Linux/Windows, DUCC0)
+        if: runner.os != 'macOS'
+        shell: bash
         run: |
-          sudo apt install libfftw3-dev
-          sed -i '/  LIBSFFT/a \ \ LIBSFFT := `g++ --print-file-name libfftw3.a` `g++ --print-file-name libfftw3f.a` `g++ --print-file-name libfftw3_omp.a` `g++ --print-file-name libfftw3f_omp.a` -lm -lgomp' makefile
-          make matlab
-      - name: Run Matlab test
-        uses: matlab-actions/run-command@v2
+          cmake -S . -B build -G Ninja \
+            -DFINUFFT_USE_DUCC0=ON \
+            -DFINUFFT_MATLAB_INSTALL=ON
+          cmake --build build --target finufft_mex --parallel
+
+      - name: Run fullmathtest.m (Linux/Windows)
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          # locate built MEX folder and run test
+          MEX_DIR="$(dirname "$(find build -type f -name 'finufft.mex*' -print -quit)")"
+          matlab -batch "addpath('matlab'); addpath('${MEX_DIR}'); run('matlab/test/fullmathtest.m');"
+
+      - name: Package (Linux/Windows) with CPack (TGZ)
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          mkdir -p dist
+          os_tag=$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]')
+          (cd build && cpack -G TGZ -B ../dist -D CPACK_PACKAGE_FILE_NAME="finufft-matlab-mex-${os_tag}")
+
+      # -------- macOS (multi-target) --------
+      - name: Configure & Build (macOS; DUCC0, multi-target)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tgt in ${MAC_TARGETS}; do
+            bdir="build_mac_${tgt}"
+            cmake -S . -B "${bdir}" -G Ninja \
+              -DFINUFFT_USE_DUCC0=ON \
+              -DFINUFFT_MATLAB_INSTALL=ON \
+              -DCMAKE_OSX_DEPLOYMENT_TARGET="${tgt}"
+            cmake --build "${bdir}" --target finufft_mex --parallel
+          done
+
+      - name: Run fullmathtest.m (macOS per target)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tgt in ${MAC_TARGETS}; do
+            MEX_DIR="$(dirname "$(find "build_mac_${tgt}" -type f -name 'finufft.mex*' -print -quit)")"
+            matlab -batch "addpath('matlab'); addpath('${MEX_DIR}'); run('matlab/test/fullmathtest.m');"
+          done
+
+      - name: Package (macOS) with CPack (TGZ per target)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for tgt in ${MAC_TARGETS}; do
+            (cd "build_mac_${tgt}" && cpack -G TGZ -B ../dist -D CPACK_PACKAGE_FILE_NAME="finufft-matlab-mex-macos-${tgt}")
+          done
+
+      # Upload archives
+      - uses: actions/upload-artifact@v4
         with:
-          command: addpath(genpath('matlab')), check_finufft
-      - name: Upload mex files
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{matrix.os}}-R2023b-finufft-mex
-          path: ${{runner.workspace}}/finufft/matlab/finufft.mex*
-      - name: Setup tmate session
-        if: ${{ failure() }}
-        uses: mxschmitt/action-tmate@v3
+          name: finufft-matlab-mex-${{ matrix.os }}
+          path: dist/**
+          if-no-files-found: error
