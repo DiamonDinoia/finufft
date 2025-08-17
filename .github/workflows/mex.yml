@@ -4,11 +4,29 @@ on: [push, pull_request]
 
 jobs:
   matlab-mex:
-    name: ${{ matrix.os }} (MATLAB CPU MEX via DUCC0)
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-14]
+        include:
+          # Linux: GCC 11 (ABI compatible with MATLAB R2023b libstdc++)
+          - os: ubuntu-22.04
+            compiler: gcc
+            compiler_version: '11'
+            cc: gcc-11
+            cxx: g++-11
+          # Windows: MSVC (setup-cpp will set vcvarsall)
+          - os: windows-latest
+            compiler: msvc
+            compiler_version: ''
+            cc: cl
+            cxx: cl
+          # macOS 14: LLVM/Clang
+          - os: macos-14
+            compiler: llvm
+            compiler_version: ''
+            cc: clang
+            cxx: clang++
+
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -18,20 +36,21 @@ jobs:
       - name: Setup C++ toolchain
         uses: aminya/setup-cpp@v1.7.1
         with:
+          compiler: ${{ matrix.compiler }}        # gcc / msvc / llvm
+          version: ${{ matrix.compiler_version }} # '11' for gcc, empty otherwise
           cmake: true
           ninja: true
-          vcvarsall: true
+          vcvarsall: ${{ matrix.compiler == 'msvc' }}
 
-      # Linux: use GCC 11 (keeps GLIBCXX requirements compatible with MATLAB R2023b)
-      - name: Select GCC 11 (Linux)
+      # Linux: ensure gcc-11/g++-11 are present (avoid "g++-11: not found")
+      - name: Install GCC 11 (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          echo "CC=gcc-11" >> "$GITHUB_ENV"
-          echo "CXX=g++-11" >> "$GITHUB_ENV"
-          g++-11 --version
+          sudo apt-get update
+          sudo apt-get install -y gcc-11 g++-11
 
-      # MATLAB available for find_package(Matlab)/matlab_add_mex and tests
+      # MATLAB for find_package(Matlab) and tests
       - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v2
         with:
@@ -39,7 +58,7 @@ jobs:
           products: MATLAB
           cache: true
 
-      # macOS: install OpenMP runtime & set deployment targets
+      # macOS: OpenMP runtime + multi-target matrix
       - name: Install libomp (macOS) and set env
         if: runner.os == 'macOS'
         shell: bash
@@ -63,16 +82,17 @@ jobs:
         run: |
           set -euo pipefail
           EXTRA_FLAGS=""
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            EXTRA_FLAGS="-DCMAKE_C_COMPILER=gcc-11 -DCMAKE_CXX_COMPILER=g++-11"
+          if [ "$RUNNER_OS" != "Windows" ]; then
+            EXTRA_FLAGS="-DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}"
           fi
           cmake -S . -B build -G Ninja \
+            -DFINUFFT_USE_CPU=ON \            # ensure CPU MEX target exists
             -DFINUFFT_USE_DUCC0=ON \
             -DFINUFFT_MATLAB_INSTALL=ON \
             ${EXTRA_FLAGS}
           cmake --build build --target finufft_mex --parallel
 
-      # Tests: prefer MATLAB's own libstdc++ at runtime (Linux only)
+      # Tests: favor MATLAB's libstdc++ at runtime (Linux only)
       - name: Run fullmathtest.m (Linux/Windows)
         if: runner.os != 'macOS'
         uses: matlab-actions/run-command@v2
@@ -82,10 +102,10 @@ jobs:
         with:
           command: |
             addpath(genpath('matlab'));
-            addpath(genpath('build'));
+            addpath(genpath('build'));  % contains MEX + .m files after post-build copy
             fullmathtest
 
-      # Package via CPack (creates build/finufft-matlab-mex-*.zip or *.tar.gz)
+      # Package via CPack (archives contain only top-level "matlab/")
       - name: Package (Linux/Windows) with CPack
         if: runner.os != 'macOS'
         shell: bash
@@ -104,9 +124,11 @@ jobs:
           for tgt in ${MAC_TARGETS}; do
             bdir="build_mac_${tgt}"
             cmake -S . -B "${bdir}" -G Ninja \
+              -DFINUFFT_USE_CPU=ON \          # ensure CPU MEX target exists
               -DFINUFFT_USE_DUCC0=ON \
               -DFINUFFT_MATLAB_INSTALL=ON \
-              -DCMAKE_OSX_DEPLOYMENT_TARGET="${tgt}"
+              -DCMAKE_OSX_DEPLOYMENT_TARGET="${tgt}" \
+              -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
             cmake --build "${bdir}" --target finufft_mex --parallel
           done
 
@@ -137,7 +159,7 @@ jobs:
           echo "Produced packages:"
           ls -l build_mac_*/finufft-matlab-mex-macos-*.tar.gz || true
 
-      # Upload only CPack-produced archives
+      # Upload only CPack-produced archives (clean)
       - uses: actions/upload-artifact@v4
         with:
           name: finufft-matlab-mex-${{ matrix.os }}

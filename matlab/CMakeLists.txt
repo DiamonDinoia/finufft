@@ -1,5 +1,3 @@
-# matlab/CMakeLists.txt
-
 find_package(Matlab REQUIRED COMPONENTS MEX_COMPILER MX_LIBRARY)
 set(MEX_EXT "${Matlab_MEX_EXTENSION}")
 set(FINUFFT_MEX_DEFS R2008OO)
@@ -35,9 +33,10 @@ if(FINUFFT_USE_CUDA)
     target_link_libraries(cufinufft_mex PRIVATE cufinufft Matlab::mex Matlab::mx)
 endif()
 
-# MATLAB assets
+# MATLAB assets (.m and .docsrc files)
 file(GLOB MATLAB_MFILES "${CMAKE_CURRENT_SOURCE_DIR}/*.m" "${CMAKE_CURRENT_SOURCE_DIR}/*.docsrc")
 
+# Copy .m files next to built MEX(es) for in-tree testing
 if(TARGET finufft_mex)
     add_custom_command(
         TARGET finufft_mex
@@ -53,6 +52,7 @@ if(TARGET cufinufft_mex)
     )
 endif()
 
+# RPATH for installed artifacts
 foreach(tgt IN ITEMS finufft_mex cufinufft_mex)
     if(TARGET ${tgt})
         if(APPLE)
@@ -63,20 +63,42 @@ foreach(tgt IN ITEMS finufft_mex cufinufft_mex)
     endif()
 endforeach()
 
+# ---------------- Install & CPack ----------------
 if(FINUFFT_MATLAB_INSTALL)
-    set(CPACK_GENERATOR "TGZ;ZIP")
-    set(CPACK_PACKAGE_NAME "finufft-matlab")
-    # We want the archive to contain only `matlab/` at the root:
-    set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
+    # Install MATLAB assets
+    install(FILES ${MATLAB_MFILES} DESTINATION matlab)
+    # Install class folder (if present)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/@gpuArray")
+        install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/@gpuArray" DESTINATION matlab)
+    endif()
 
-    # OS-specific archive choice + filename
+    # Install the MEX targets into matlab/
+    if(TARGET finufft_mex)
+        install(
+            TARGETS finufft_mex
+            RUNTIME
+                DESTINATION
+                    matlab # .mexw64 on Windows
+            LIBRARY
+                DESTINATION
+                    matlab # .mexa64/.mexmaci64 on Linux/macOS
+            ARCHIVE
+                DESTINATION
+                    matlab # (rarely used for MEX, but harmless)
+        )
+    endif()
+    if(TARGET cufinufft_mex)
+        install(TARGETS cufinufft_mex RUNTIME DESTINATION matlab LIBRARY DESTINATION matlab ARCHIVE DESTINATION matlab)
+    endif()
+
+    # CPack: produce a clean archive with ONLY top-level "matlab/"
+    set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
     if(WIN32)
         set(CPACK_GENERATOR "ZIP")
         set(CPACK_PACKAGE_FILE_NAME "finufft-matlab-mex-windows")
     elseif(APPLE)
-        # If you’re building multiple macOS deployment targets in separate build dirs,
-        # CMAKE_OSX_DEPLOYMENT_TARGET is set per build dir, so we bake it in:
         set(CPACK_GENERATOR "TGZ")
+        # Each mac build dir uses its own deployment target; bake it into filename:
         set(CPACK_PACKAGE_FILE_NAME "finufft-matlab-mex-macos-${CMAKE_OSX_DEPLOYMENT_TARGET}")
     else()
         set(CPACK_GENERATOR "TGZ")
