@@ -8,15 +8,12 @@ jobs:
     name: Linux (manylinux2014)
     runs-on: ubuntu-22.04
     container:
-      image: quay.io/pypa/manylinux2014_x86_64
+      image: quay.io/pypa/manylinux_2_28_x86_64
     steps:
       # Prep container so actions work & tools are available
       - name: Prepare container (git, basics, enable gcc10)
         shell: bash
         run: |
-          # Newer GCC if available (ok if no-op)
-          source /opt/rh/devtoolset-10/enable || true
-          # Pick a Python and add its bin to PATH
           PYBIN_DIR="$(ls -d /opt/python/cp3*-cp3*/bin | sort | tail -n1)"
           echo "Using PYBIN_DIR=$PYBIN_DIR"
           echo "$PYBIN_DIR" >> "$GITHUB_PATH"
