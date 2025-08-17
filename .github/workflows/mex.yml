@@ -3,19 +3,33 @@ name: Build MATLAB MEX
 on: [push, pull_request]
 
 jobs:
-  # ---------- LINUX (UBI8 container; dnf/microdnf cmake+ninja; gcc-toolset-11) ----------
-  linux-manylinux2014:
-    name: Linux (UBI8 + GCC 11)
+  # ---------- LINUX (Ubuntu 22.04 container; glibc 2.35; GCC 11) ----------
+  linux-ubuntu-22_04:
+    name: Linux (Ubuntu 22.04 + GCC 11, glibc 2.35)
     runs-on: ubuntu-22.04
     container:
-      image: registry.access.redhat.com/ubi8/ubi:latest
+      image: ubuntu:22.04
+      options: --security-opt seccomp=unconfined
     steps:
-      - name: Install deps with dnf/microdnf (CMake, Ninja, GCC 11)
+      - name: Install deps with apt (CMake, Ninja, GCC 11)
         shell: bash
         run: |
-          dnf -y install git which tar gzip xz make cmake ninja-build gcc gcc-c++
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git which tar gzip xz-utils make \
+            cmake ninja-build gcc g++ pkg-config
+          # Ensure 'ninja' is on PATH (Ubuntu calls it ninja-build)
           command -v ninja >/dev/null 2>&1 || ln -s /usr/bin/ninja-build /usr/bin/ninja
+
+          # Sanity checks: confirm glibc 2.35 and GCC 11
+          getconf GNU_LIBC_VERSION
+          /usr/bin/ldd --version || true
+          gcc --version
+          g++ --version
+
       - uses: actions/checkout@v4
+
       - name: Set up MATLAB (inside container)
         uses: matlab-actions/setup-matlab@v2
         with:
@@ -26,8 +40,6 @@ jobs:
       - name: Configure & Build (DUCC0) with GCC 11
         shell: bash
         run: |
-          # Enable GCC 11 from gcc-toolset-11
-          source /opt/rh/gcc-toolset-11/enable
           # Ensure MATLAB is on PATH
           export PATH="${MATLAB_ROOT}/bin:${PATH}"
 
@@ -58,11 +70,12 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: finufft-matlab-mex-linux-manylinux2014
+          name: finufft-matlab-mex-linux-ubuntu22_04
           path: |
             build/*.zip
             build/*.tar.gz
           if-no-files-found: error
+
 
   # ---------- WINDOWS ----------
   windows:
