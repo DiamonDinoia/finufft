@@ -13,20 +13,8 @@ jobs:
       - name: Install deps with dnf/microdnf (CMake, Ninja, GCC 11)
         shell: bash
         run: |
-          # Ensure dnf is available (microdnf can't do module enable properly)
-          if ! command -v dnf >/dev/null 2>&1; then
-          microdnf install -y dnf
-          fi
-          dnf -y install git which tar gzip xz make cmake ninja-build
-          dnf clean all
-          # Ensure 'ninja' exists even if package provides 'ninja-build'
+          dnf -y install git which tar gzip xz make cmake ninja-build gcc gcc-c++
           command -v ninja >/dev/null 2>&1 || ln -s /usr/bin/ninja-build /usr/bin/ninja
-          # Show available streams (useful for debugging)
-          dnf -y module list gcc-toolset || true
-          # Enable the GCC 11 stream and install the toolchain
-          dnf -y module enable gcc-toolset:11
-          dnf -y install gcc-toolset-11 gcc-toolset-11-gcc gcc-toolset-11-gcc-c++
-
       - uses: actions/checkout@v4
       - name: Set up MATLAB (inside container)
         uses: matlab-actions/setup-matlab@v2
@@ -40,7 +28,6 @@ jobs:
         run: |
           # Enable GCC 11 from gcc-toolset-11
           source /opt/rh/gcc-toolset-11/enable
-
           # Ensure MATLAB is on PATH
           export PATH="${MATLAB_ROOT}/bin:${PATH}"
 
