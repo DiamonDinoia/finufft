@@ -14,6 +14,13 @@ jobs:
       - name: Prepare container (git, basics, enable gcc10)
         shell: bash
         run: |
+          if command -v microdnf >/dev/null 2>&1; then
+            microdnf install -y sudo which tar unzip
+          elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y sudo which tar unzip
+          else
+            yum install -y sudo which tar unzip
+          fi
           PYBIN_DIR="$(ls -d /opt/python/cp3*-cp3*/bin | sort | tail -n1)"
           echo "Using PYBIN_DIR=$PYBIN_DIR"
           echo "$PYBIN_DIR" >> "$GITHUB_PATH"
