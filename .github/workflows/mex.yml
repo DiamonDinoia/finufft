@@ -86,7 +86,7 @@ jobs:
             EXTRA_FLAGS="-DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}"
           fi
           cmake -S . -B build -G Ninja \
-            -DFINUFFT_USE_CPU=ON \            # ensure CPU MEX target exists
+            -DFINUFFT_USE_CPU=ON \
             -DFINUFFT_USE_DUCC0=ON \
             -DFINUFFT_MATLAB_INSTALL=ON \
             ${EXTRA_FLAGS}
@@ -124,7 +124,7 @@ jobs:
           for tgt in ${MAC_TARGETS}; do
             bdir="build_mac_${tgt}"
             cmake -S . -B "${bdir}" -G Ninja \
-              -DFINUFFT_USE_CPU=ON \          # ensure CPU MEX target exists
+              -DFINUFFT_USE_CPU=ON \
               -DFINUFFT_USE_DUCC0=ON \
               -DFINUFFT_MATLAB_INSTALL=ON \
               -DCMAKE_OSX_DEPLOYMENT_TARGET="${tgt}" \
