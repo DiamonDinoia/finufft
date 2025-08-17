@@ -57,12 +57,12 @@ mark_as_advanced(
 )
 
 # ----------------------------------------------------------------------------- #
-# Find tools
+# Find tools (soft — never fail the configure step)
 # ----------------------------------------------------------------------------- #
 find_program(IWYU_BIN NAMES include-what-you-use iwyu)
 find_program(IWYU_TOOL NAMES iwyu_tool.py iwyu_tool)
 find_program(IWYU_FIX NAMES fix_includes.py fix_includes)
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
+find_package(Python3 COMPONENTS Interpreter) # no REQUIRED, soft fail with message
 
 # If scripts not found, try beside IWYU_BIN
 if(IWYU_BIN AND (NOT IWYU_TOOL OR NOT IWYU_FIX))
@@ -98,7 +98,7 @@ endfunction()
 # Detect whether fix_includes.py supports --quiet; sets IWYU_FIX_QUIET_ARG.
 function(_iwyu_detect_fix_quiet)
     set(IWYU_FIX_QUIET_ARG "" PARENT_SCOPE)
-    if(NOT IWYU_FIX)
+    if(NOT IWYU_FIX OR NOT Python3_Interpreter_FOUND OR NOT Python3_EXECUTABLE)
         return()
     endif()
     execute_process(
@@ -172,12 +172,23 @@ endfunction()
 # ----------------------------------------------------------------------------- #
 function(add_iwyu_fix_target tgt)
     if(NOT TARGET ${tgt})
-        message(FATAL_ERROR "[IWYU] Target '${tgt}' not found")
+        message(STATUS "[IWYU] IWYU not enabled: target '${tgt}' not found")
+        return()
     endif()
 
     get_target_property(_type ${tgt} TYPE)
     if(_type STREQUAL "INTERFACE_LIBRARY")
         message(STATUS "[IWYU] Skipping INTERFACE target '${tgt}'")
+        return()
+    endif()
+
+    # Ensure compile_commands.json exists (iwyu_tool.py requires it)
+    set(_CC_JSON "${CMAKE_BINARY_DIR}/compile_commands.json")
+    if(NOT EXISTS "${_CC_JSON}")
+        message(
+            STATUS
+            "[IWYU] IWYU not enabled: compile_commands.json not found (enable with -DCMAKE_EXPORT_COMPILE_COMMANDS=ON)"
+        )
         return()
     endif()
 
@@ -217,26 +228,35 @@ function(add_iwyu_fix_target tgt)
         return()
     endif()
 
-    # Tools availability and health
-    set(_have_iwyu TRUE)
-    if(NOT IWYU_BIN OR NOT IWYU_TOOL)
-        set(_have_iwyu FALSE)
-    endif()
-    if(_have_iwyu)
-        _iwyu_check_binary(_ok)
-        if(NOT _ok)
-            set(_have_iwyu FALSE)
-        endif()
+    # Tools availability and health (degrade gracefully, never fail)
+    # We need Python for iwyu_tool.py and fix_includes.py.
+    if(NOT Python3_Interpreter_FOUND OR NOT Python3_EXECUTABLE)
+        message(STATUS "[IWYU] IWYU not enabled: Python3 interpreter not found")
+        return()
     endif()
 
+    if(NOT IWYU_BIN)
+        message(STATUS "[IWYU] IWYU not enabled: include-what-you-use binary not found")
+        return()
+    endif()
+
+    if(NOT IWYU_TOOL)
+        message(STATUS "[IWYU] IWYU not enabled: iwyu_tool.py not found")
+        return()
+    endif()
+
+    # Health check the IWYU binary
+    _iwyu_check_binary(_ok)
+    if(NOT _ok)
+        message(STATUS "[IWYU] IWYU not enabled: probe compile failed")
+        return()
+    endif()
+
+    # We can still run analysis if fix_includes.py is missing.
     set(_have_fix TRUE)
     if(NOT IWYU_FIX)
         set(_have_fix FALSE)
-    endif()
-
-    if(NOT _have_iwyu)
-        message(STATUS "[IWYU] IWYU not available/working; not adding iwyu-${tgt}")
-        return()
+        message(STATUS "[IWYU] fix_includes.py not found: will run analysis only (no auto-fix)")
     endif()
 
     # Normalize to absolute paths for iwyu_tool.py
@@ -287,7 +307,7 @@ function(add_iwyu_fix_target tgt)
     file(MAKE_DIRECTORY "${_LOG_DIR}")
     set(_LOG_FILE "${_LOG_DIR}/iwyu-${tgt}.out")
 
-    # Ensure iwyu_tool.py resolves *our* IWYU via PATH
+    # Ensure iwyu_tool.py resolves the correct IWYU via PATH
     _iwyu_prepare_shim(_PATH_FRONT)
 
     # Base command (force IWYU output format!)
