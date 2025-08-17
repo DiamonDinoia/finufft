@@ -17,7 +17,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y --no-install-recommends \
-            ca-certificates git which tar gzip xz-utils make \
+            ca-certificates git tar gzip xz-utils make \
             cmake ninja-build gcc g++ pkg-config
           # Ensure 'ninja' is on PATH (Ubuntu calls it ninja-build)
           command -v ninja >/dev/null 2>&1 || ln -s /usr/bin/ninja-build /usr/bin/ninja
