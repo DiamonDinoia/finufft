@@ -162,17 +162,26 @@ jobs:
               -DCMAKE_OSX_DEPLOYMENT_TARGET="${tgt}"
             cmake --build "${bdir}" --target finufft_mex --parallel
           done
-      - name: Run fullmathtest.m (per target)
+      - name: Run fullmathtest.m (macOS)
         uses: matlab-actions/run-command@v2
         with:
           command: |
             addpath(genpath('matlab'));
-            targets = regexp(getenv('MAC_TARGETS'), '\s+', 'split');
+            v = strtrim(getenv('MAC_TARGETS'));
+            assert(~isempty(v), 'MAC_TARGETS not set');
+            targets = strsplit(v);
+
             for i = 1:numel(targets)
-              tgt = strtrim(targets{i});
-              addpath(genpath(fullfile('build_mac_', tgt)));
+              tgt = targets{i};
+              bdir = ['build_mac_' tgt];
+              if ~isfolder(bdir)
+                error('Build dir not found: %s', bdir);
+              end
+              addpath(genpath(bdir));
               fullmathtest;
+              rmpath(genpath(bdir));
             end
+            clear v targets tgt i;
       - name: Package with CPack (per target)
         shell: bash
         run: |
