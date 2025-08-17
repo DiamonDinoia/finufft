@@ -2,6 +2,13 @@ find_package(Matlab REQUIRED COMPONENTS MEX_COMPILER MX_LIBRARY)
 set(MEX_EXT "${Matlab_MEX_EXTENSION}")
 set(FINUFFT_MEX_DEFS R2008OO)
 
+function(make_mex_self_contained tgt)
+    if(UNIX AND NOT APPLE)
+        # Avoid MATLAB's older libstdc++ at runtime
+        target_link_options(${tgt} PRIVATE -static-libstdc++ -static-libgcc)
+    endif()
+endfunction()
+
 # --- CPU MEX ---
 if(FINUFFT_USE_CPU)
     matlab_add_mex(
@@ -13,6 +20,7 @@ if(FINUFFT_USE_CPU)
     )
     target_compile_definitions(finufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
     target_include_directories(finufft_mex PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
+    make_mex_self_contained(finufft_mex)
 endif()
 
 # --- CUDA MEX ---
@@ -31,6 +39,7 @@ if(FINUFFT_USE_CUDA)
     target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
     target_include_directories(cufinufft_mex PRIVATE ${Matlab_INCLUDE_DIRS})
     target_link_libraries(cufinufft_mex PRIVATE cufinufft Matlab::mex Matlab::mx)
+    make_mex_self_contained(cufinufft_mex)
 endif()
 
 # MATLAB assets (.m and .docsrc files)
