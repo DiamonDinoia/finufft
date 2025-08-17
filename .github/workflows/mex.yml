@@ -3,28 +3,37 @@ name: Build MATLAB MEX
 on: [push, pull_request]
 
 jobs:
-  # ---------- LINUX (Ubuntu 22.04 container; glibc 2.35; GCC 11) ----------
+  # ---------- LINUX (Ubuntu 22.04 container; glibc 2.35; CMake >= 3.24) ----------
   linux-ubuntu-22_04:
-    name: Linux (Ubuntu 22.04 + GCC 11, glibc 2.35)
+    name: Linux glibc 2.35
     runs-on: ubuntu-22.04
     container:
       image: ubuntu:22.04
       options: --security-opt seccomp=unconfined
     steps:
-      - name: Install deps with apt (CMake, Ninja, GCC 11)
+      - name: Install build deps + Kitware CMake
         shell: bash
         run: |
-          export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y --no-install-recommends \
-            ca-certificates git tar gzip xz-utils make \
-            cmake ninja-build gcc g++ pkg-config
-          # Ensure 'ninja' is on PATH (Ubuntu calls it ninja-build)
+            ca-certificates git wget gpg \
+            tar gzip xz-utils make \
+            ninja-build gcc g++ pkg-config
+
+          # Add Kitware APT repo for modern CMake (>=3.24)
+          wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
+            | gpg --dearmor -o /usr/share/keyrings/kitware-archive-keyring.gpg
+          echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' \
+            > /etc/apt/sources.list.d/kitware.list
+          apt-get update
+          apt-get install -y --no-install-recommends cmake
+
+          # Ensure 'ninja' is on PATH (Ubuntu names the binary ninja-build)
           command -v ninja >/dev/null 2>&1 || ln -s /usr/bin/ninja-build /usr/bin/ninja
 
-          # Sanity checks: confirm glibc 2.35 and GCC 11
-          getconf GNU_LIBC_VERSION
-          /usr/bin/ldd --version || true
+          # Sanity checks
+          getconf GNU_LIBC_VERSION            # expect: glibc 2.35
+          cmake --version                     # expect: 3.24+
           gcc --version
           g++ --version
 
@@ -40,13 +49,7 @@ jobs:
       - name: Configure & Build (DUCC0) with GCC 11
         shell: bash
         run: |
-          # Ensure MATLAB is on PATH
           export PATH="${MATLAB_ROOT}/bin:${PATH}"
-
-          # Verify compilers
-          gcc --version
-          g++ --version
-
           cmake -S . -B build -G Ninja \
             -DFINUFFT_USE_DUCC0=ON \
             -DFINUFFT_MATLAB_INSTALL=ON \
