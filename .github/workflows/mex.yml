@@ -32,13 +32,16 @@ jobs:
           release: R2023b
           products: MATLAB
           cache: true
-
-      # macOS: keep OpenMP ON, but do NOT preload Homebrew's libomp.
-      # We rely on MATLAB's libiomp5.dylib via use_matlab_openmp().
       - name: Set macOS deployment target
         if: runner.os == 'macOS'
         shell: bash
         run: |
+          brew install fftw libomp
+          echo "LDFLAGS=-L$(brew --prefix libomp)/lib" >> $GITHUB_ENV
+          echo "CPPFLAGS=-I$(brew --prefix libomp)/include" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=$(brew --prefix libomp)/lib" >> $GITHUB_ENV
+          echo "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix):$(brew --prefix libomp)" >> $GITHUB_ENV
           ver="${{ matrix.os }}"; ver="${ver#macos-}"
           echo "MACOSX_DEPLOYMENT_TARGET=${ver}.0" >> "$GITHUB_ENV"
 
