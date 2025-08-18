@@ -45,6 +45,7 @@ jobs:
         with:
           cuda: '12.4.0'
           method: 'network'
+          use-github-cache: 'false' #it is not working at the moment https://github.com/Jimver/cuda-toolkit/issues/390
 
       - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v2
@@ -74,6 +75,10 @@ jobs:
             ${CUDA_FLAG}
 
           cmake --build build --target finufft_mex --parallel
+
+          if [ "${RUNNER_OS}" != "macOS" ]; then
+            cmake --build build --target cufinufft_mex --parallel
+          fi
 
       - name: Run fullmathtest.m
         uses: matlab-actions/run-command@v2
