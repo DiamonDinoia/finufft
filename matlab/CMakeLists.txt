@@ -36,7 +36,6 @@ endif()
 
 # --- CUDA MEX (already manual, keyword-only) ---
 if(FINUFFT_USE_CUDA)
-    target_link_libraries(cufinufft_mex PRIVATE)
     add_library(cufinufft_mex MODULE "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu")
     set_target_properties(
         cufinufft_mex
