@@ -1,22 +1,87 @@
+# matlab/CMakeLists.txt
+cmake_minimum_required(VERSION 3.16)
+
+# Ensure MATLAB is on PATH if provided by setup-matlab
 find_package(Matlab REQUIRED COMPONENTS MEX_COMPILER MX_LIBRARY)
+
+# MEX extension and common defines
 set(MEX_EXT "${Matlab_MEX_EXTENSION}")
 set(FINUFFT_MEX_DEFS R2008OO)
 
-# --- CPU MEX ---
+# ------------------------------------------------------------
+# Helper: prefer MATLAB's bundled OpenMP if available
+# - Links against libiomp5 from the MATLAB installation
+# - Uses keyword target_link_libraries (PRIVATE) to avoid mixed signatures
+function(use_matlab_openmp tgt)
+    if(NOT FINUFFT_USE_OPENMP)
+        return()
+    endif()
+
+    # Derive Matlab root if not set by FindMatlab
+    if(NOT Matlab_ROOT_DIR)
+        # Guess from include path: <MATLAB>/extern/include
+        list(GET Matlab_INCLUDE_DIRS 0 _mat_inc)
+        get_filename_component(_extern_dir "${_mat_inc}" DIRECTORY) # .../extern
+        get_filename_component(Matlab_ROOT_DIR "${_extern_dir}" DIRECTORY) # <MATLAB>
+    endif()
+
+    if(WIN32)
+        set(_MAT_BIN_SUBDIR "win64")
+        set(_MAT_OMP_NAME "libiomp5md.lib")
+    elseif(APPLE)
+        set(_MAT_BIN_SUBDIR "maci64")
+        set(_MAT_OMP_NAME "libiomp5.dylib")
+    else()
+        set(_MAT_BIN_SUBDIR "glnxa64")
+        set(_MAT_OMP_NAME "libiomp5.so")
+    endif()
+
+    set(_MAT_OMP_PATH "${Matlab_ROOT_DIR}/bin/${_MAT_BIN_SUBDIR}/${_MAT_OMP_NAME}")
+
+    if(EXISTS "${_MAT_OMP_PATH}")
+        # Link to MATLAB's OpenMP runtime (keyword signature only)
+        target_link_libraries(${tgt} PRIVATE "${_MAT_OMP_PATH}")
+        message(STATUS "Using MATLAB-supplied OpenMP for target '${tgt}': ${_MAT_OMP_PATH}")
+
+        # Helpful on UNIX-y platforms so the runtime is found at run time:
+        get_filename_component(_MAT_OMP_DIR "${_MAT_OMP_PATH}" DIRECTORY)
+        if(APPLE)
+            set_property(TARGET ${tgt} APPEND PROPERTY BUILD_RPATH "${_MAT_OMP_DIR}")
+        elseif(UNIX AND NOT APPLE)
+            set_property(TARGET ${tgt} APPEND PROPERTY BUILD_RPATH "${_MAT_OMP_DIR}")
+        endif()
+    else()
+        message(STATUS "MATLAB OpenMP not found at ${_MAT_OMP_PATH}; skipping MATLAB OpenMP setup for '${tgt}'")
+    endif()
+endfunction()
+
+# Make MEX self-contained where we can
+function(make_mex_self_contained tgt)
+    if(UNIX AND NOT APPLE)
+        # Avoid MATLAB's older libstdc++ at runtime
+        target_link_options(${tgt} PRIVATE -static-libstdc++ -static-libgcc)
+    endif()
+endfunction()
+
+# ------------------------------------------------------------
+# --- CPU MEX (manual target, keyword-only) ---
 if(FINUFFT_USE_CPU)
-    matlab_add_mex(
-        NAME finufft_mex
-        SRC "${CMAKE_CURRENT_SOURCE_DIR}/finufft.cpp"
-        OUTPUT_NAME finufft
-        R2018a
-        LINK_TO finufft
+    add_library(finufft_mex MODULE "${CMAKE_CURRENT_SOURCE_DIR}/finufft.cpp")
+    set_target_properties(
+        finufft_mex
+        PROPERTIES PREFIX "" SUFFIX ".${MEX_EXT}" OUTPUT_NAME "finufft" POSITION_INDEPENDENT_CODE ON
     )
     target_compile_definitions(finufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
-    target_include_directories(finufft_mex PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
+    target_include_directories(
+        finufft_mex
+        PRIVATE ${Matlab_INCLUDE_DIRS} $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+    )
+    target_link_libraries(finufft_mex PRIVATE finufft Matlab::mex Matlab::mx)
+    use_matlab_openmp(finufft_mex)
     make_mex_self_contained(finufft_mex)
 endif()
 
-# --- CUDA MEX ---
+# --- CUDA MEX (already manual, keyword-only) ---
 if(FINUFFT_USE_CUDA)
     add_library(cufinufft_mex MODULE "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu")
     set_target_properties(
@@ -31,10 +96,12 @@ if(FINUFFT_USE_CUDA)
     )
     target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
     target_include_directories(cufinufft_mex PRIVATE ${Matlab_INCLUDE_DIRS})
-    target_link_libraries(cufinufft_mex cufinufft Matlab::mex Matlab::mx)
+    target_link_libraries(cufinufft_mex PRIVATE cufinufft Matlab::mex Matlab::mx)
+    use_matlab_openmp(cufinufft_mex)
     make_mex_self_contained(cufinufft_mex)
 endif()
 
+# ------------------------------------------------------------
 # MATLAB assets (.m and .docsrc files)
 file(GLOB MATLAB_MFILES "${CMAKE_CURRENT_SOURCE_DIR}/*.m" "${CMAKE_CURRENT_SOURCE_DIR}/*.docsrc")
 
@@ -54,34 +121,24 @@ if(TARGET cufinufft_mex)
     )
 endif()
 
+# ------------------------------------------------------------
 # RPATH for installed artifacts
 foreach(tgt IN ITEMS finufft_mex cufinufft_mex)
     if(TARGET ${tgt})
         if(APPLE)
-            # Append @loader_path to whatever FindMatlab already set
-            get_target_property(_old_rpath ${tgt} INSTALL_RPATH)
-            if(NOT _old_rpath)
-                set(_old_rpath "")
-            endif()
-            set_target_properties(
-                ${tgt}
-                PROPERTIES INSTALL_RPATH "${_old_rpath};@loader_path" BUILD_WITH_INSTALL_RPATH OFF
-            )
+            set_target_properties(${tgt} PROPERTIES INSTALL_RPATH "@loader_path" BUILD_WITH_INSTALL_RPATH ON)
         elseif(UNIX AND NOT APPLE)
-            # Similarly, append $ORIGIN on Linux without wiping existing rpaths
-            get_target_property(_old_rpath ${tgt} INSTALL_RPATH)
-            if(NOT _old_rpath)
-                set(_old_rpath "")
-            endif()
-            set_target_properties(${tgt} PROPERTIES INSTALL_RPATH "${_old_rpath};\$ORIGIN" BUILD_WITH_INSTALL_RPATH OFF)
+            set_target_properties(${tgt} PROPERTIES INSTALL_RPATH "\$ORIGIN")
         endif()
     endif()
 endforeach()
 
-# ---------------- Install & CPack ----------------
+# ------------------------------------------------------------
+# Install & CPack (optional)
 if(FINUFFT_MATLAB_INSTALL)
     # Install MATLAB assets
     install(FILES ${MATLAB_MFILES} DESTINATION matlab)
+
     # Install class folder (if present)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/@gpuArray")
         install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/@gpuArray" DESTINATION matlab)
