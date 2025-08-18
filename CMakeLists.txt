@@ -51,7 +51,6 @@ endif()
 if(FINUFFT_MATLAB_INSTALL)
     set(FINUFFT_BUILD_MATLAB ON)
     set(FINUFFT_ENABLE_INSTALL OFF)
-    include(setupOpenMP)
 endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

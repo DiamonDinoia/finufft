@@ -18,11 +18,7 @@ else()
     set(FINUFFT_FFTLIBS ${FINUFFT_FFTW_LIBRARIES})
 endif()
 if(FINUFFT_USE_OPENMP)
-    if(FINUFFT_MATLAB_INSTALL)
-        ensure_openmp_targets(PREFER_MATLAB)
-    else()
-        find_package(OpenMP COMPONENTS C CXX REQUIRED)
-    endif()
+    find_package(OpenMP COMPONENTS C CXX REQUIRED)
 endif()
 
 set(FINUFFT_SOURCES
