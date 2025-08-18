@@ -37,8 +37,11 @@ jobs:
         shell: bash
         run: |
           brew install fftw libomp
-          # headers only; no link-time paths to libomp
+          echo "LDFLAGS=-L$(brew --prefix libomp)/lib" >> $GITHUB_ENV
           echo "CPPFLAGS=-I$(brew --prefix libomp)/include" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=$(brew --prefix libomp)/lib" >> $GITHUB_ENV
+          echo "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix):$(brew --prefix libomp)" >> $GITHUB_ENV
           ver="${{ matrix.os }}"; ver="${ver#macos-}"
           echo "MACOSX_DEPLOYMENT_TARGET=${ver}.0" >> "$GITHUB_ENV"
 

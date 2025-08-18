@@ -1,67 +1,8 @@
 # Ensure MATLAB is on PATH if provided by setup-matlab
 find_package(Matlab REQUIRED COMPONENTS MEX_COMPILER MX_LIBRARY)
-
-find_package(OpenMP)
-
-# Example for your core library target 'finufft' (adjust if different):
-if(OpenMP_CXX_FOUND)
-    # Use only compile flags; do NOT link OpenMP::OpenMP_CXX on macOS
-    target_compile_options(finufft PRIVATE ${OpenMP_CXX_FLAGS})
-    target_compile_definitions(finufft PRIVATE _OPENMP)
-    message(STATUS "OpenMP found: ${OpenMP_CXX_FLAGS}")
-endif()
-
 # MEX extension and common defines
 set(MEX_EXT "${Matlab_MEX_EXTENSION}")
 set(FINUFFT_MEX_DEFS R2008OO)
-
-# ------------------------------------------------------------
-# Helper: prefer MATLAB's bundled OpenMP if available
-# - Links against libiomp5 from the MATLAB installation
-# - Uses keyword target_link_libraries (PRIVATE) to avoid mixed signatures
-function(use_matlab_openmp tgt)
-    # Derive Matlab root if not set by FindMatlab
-    if(NOT Matlab_ROOT_DIR)
-        # Guess from include path: <MATLAB>/extern/include
-        list(GET Matlab_INCLUDE_DIRS 0 _mat_inc)
-        get_filename_component(_extern_dir "${_mat_inc}" DIRECTORY) # .../extern
-        get_filename_component(Matlab_ROOT_DIR "${_extern_dir}" DIRECTORY) # <MATLAB>
-    endif()
-
-    if(WIN32)
-        set(_MAT_BIN_SUBDIR "win64")
-        set(_MAT_OMP_NAME "libiomp5md.lib")
-    elseif(APPLE)
-        # Distinguish Intel vs Apple Silicon: maci64 (Intel), maca64 (Apple Silicon)
-        if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
-            set(_MAT_BIN_SUBDIR "maca64")
-        else()
-            set(_MAT_BIN_SUBDIR "maci64")
-        endif()
-        set(_MAT_OMP_NAME "libiomp5.dylib")
-    else()
-        set(_MAT_BIN_SUBDIR "glnxa64")
-        set(_MAT_OMP_NAME "libiomp5.so")
-    endif()
-
-    set(_MAT_OMP_PATH "${Matlab_ROOT_DIR}/bin/${_MAT_BIN_SUBDIR}/${_MAT_OMP_NAME}")
-
-    if(EXISTS "${_MAT_OMP_PATH}")
-        # Link to MATLAB's OpenMP runtime (keyword signature only)
-        target_link_libraries(${tgt} PRIVATE "${_MAT_OMP_PATH}")
-        message(STATUS "Using MATLAB-supplied OpenMP for target '${tgt}': ${_MAT_OMP_PATH}")
-
-        # Helpful on UNIX-y platforms so the runtime is found at run time:
-        get_filename_component(_MAT_OMP_DIR "${_MAT_OMP_PATH}" DIRECTORY)
-        if(APPLE)
-            set_property(TARGET ${tgt} APPEND PROPERTY BUILD_RPATH "${_MAT_OMP_DIR}")
-        elseif(UNIX AND NOT APPLE)
-            set_property(TARGET ${tgt} APPEND PROPERTY BUILD_RPATH "${_MAT_OMP_DIR}")
-        endif()
-    else()
-        message(STATUS "MATLAB OpenMP not found at ${_MAT_OMP_PATH}; skipping MATLAB OpenMP setup for '${tgt}'")
-    endif()
-endfunction()
 
 # Make MEX self-contained where we can
 function(make_mex_self_contained tgt)
@@ -90,8 +31,6 @@ if(FINUFFT_USE_CPU)
     if(WIN32)
         target_link_options(finufft_mex PRIVATE "/EXPORT:mexFunction")
     endif()
-
-    use_matlab_openmp(finufft_mex)
     make_mex_self_contained(finufft_mex)
 endif()
 
@@ -115,8 +54,6 @@ if(FINUFFT_USE_CUDA)
     if(WIN32)
         target_link_options(cufinufft_mex PRIVATE "/EXPORT:mexFunction")
     endif()
-
-    use_matlab_openmp(cufinufft_mex)
     make_mex_self_contained(cufinufft_mex)
 endif()
 
