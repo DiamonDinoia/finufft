@@ -1,7 +1,15 @@
-cmake_minimum_required(VERSION 3.16)
-
 # Ensure MATLAB is on PATH if provided by setup-matlab
 find_package(Matlab REQUIRED COMPONENTS MEX_COMPILER MX_LIBRARY)
+
+find_package(OpenMP)
+
+# Example for your core library target 'finufft' (adjust if different):
+if(OpenMP_CXX_FOUND)
+    # Use only compile flags; do NOT link OpenMP::OpenMP_CXX on macOS
+    target_compile_options(finufft PRIVATE ${OpenMP_CXX_FLAGS})
+    target_compile_definitions(finufft PRIVATE _OPENMP)
+    message(STATUS "OpenMP found: ${OpenMP_CXX_FLAGS}")
+endif()
 
 # MEX extension and common defines
 set(MEX_EXT "${Matlab_MEX_EXTENSION}")
@@ -12,10 +20,6 @@ set(FINUFFT_MEX_DEFS R2008OO)
 # - Links against libiomp5 from the MATLAB installation
 # - Uses keyword target_link_libraries (PRIVATE) to avoid mixed signatures
 function(use_matlab_openmp tgt)
-    if(NOT FINUFFT_USE_OPENMP)
-        return()
-    endif()
-
     # Derive Matlab root if not set by FindMatlab
     if(NOT Matlab_ROOT_DIR)
         # Guess from include path: <MATLAB>/extern/include
