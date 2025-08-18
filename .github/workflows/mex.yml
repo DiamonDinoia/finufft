@@ -3,142 +3,39 @@ name: Build MATLAB MEX
 on: [push, pull_request]
 
 jobs:
-  # ---------- LINUX (Ubuntu 22.04 container; glibc 2.35; CMake >= 3.24) ----------
-  linux-ubuntu-22_04:
-    name: Linux glibc 2.35
-    runs-on: ubuntu-22.04
-    container:
-      image: ubuntu:22.04
-      options: --security-opt seccomp=unconfined
-    steps:
-      - name: Install build deps + Kitware CMake
-        shell: bash
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            ca-certificates git wget gpg \
-            tar gzip xz-utils make \
-            ninja-build gcc g++ pkg-config
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+          - os: windows-2022
+          - os: macos-13
+          - os: macos-14
+          - os: macos-15
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
 
-          # Add Kitware APT repo for modern CMake (>=3.24)
-          wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
-            | gpg --dearmor -o /usr/share/keyrings/kitware-archive-keyring.gpg
-          echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' \
-            > /etc/apt/sources.list.d/kitware.list
-          apt-get update
-          apt-get install -y --no-install-recommends cmake
-
-          # Ensure 'ninja' is on PATH (Ubuntu names the binary ninja-build)
-          command -v ninja >/dev/null 2>&1 || ln -s /usr/bin/ninja-build /usr/bin/ninja
-
-          # Sanity checks
-          getconf GNU_LIBC_VERSION            # expect: glibc 2.35
-          cmake --version                     # expect: 3.24+
-          gcc --version
-          g++ --version
-
-      - uses: actions/checkout@v4
-
-      - name: Set up MATLAB (inside container)
-        uses: matlab-actions/setup-matlab@v2
-        with:
-          release: R2023b
-          products: MATLAB
-          cache: true
-
-      - name: Configure & Build (DUCC0) with GCC 11
-        shell: bash
-        run: |
-          export PATH="${MATLAB_ROOT}/bin:${PATH}"
-          cmake -S . -B build -G Ninja \
-            -DFINUFFT_USE_DUCC0=ON \
-            -DFINUFFT_MATLAB_INSTALL=ON \
-            -DCMAKE_C_COMPILER=gcc \
-            -DCMAKE_CXX_COMPILER=g++
-          cmake --build build --target finufft_mex --parallel
-
-      - name: Run fullmathtest.m
-        uses: matlab-actions/run-command@v2
-        with:
-          command: |
-            addpath(genpath('matlab'));
-            addpath(genpath('build'));
-            fullmathtest
-
-      - name: Package with CPack
-        shell: bash
-        run: |
-          cmake --build build --target package
-          ls -l build/*.zip build/*.tar.gz 2>/dev/null || true
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: finufft-matlab-mex-linux-ubuntu22_04
-          path: |
-            build/*.zip
-            build/*.tar.gz
-          if-no-files-found: error
-
-
-  # ---------- WINDOWS ----------
-  windows:
-    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Setup C++ toolchain
         uses: aminya/setup-cpp@v1.7.1
         with:
           cmake: true
           ninja: true
           vcvarsall: true
-      - name: Set up MATLAB
-        uses: matlab-actions/setup-matlab@v2
-        with:
-          release: R2023b
-          products: MATLAB
-          cache: true
-      - name: Configure & Build (DUCC0)
-        shell: bash
-        run: |
-          cmake -S . -B build -G Ninja \
-            -DFINUFFT_USE_DUCC0=ON \
-            -DFINUFFT_MATLAB_INSTALL=ON
-          cmake --build build --target finufft_mex --parallel
-      - name: Run fullmathtest.m
-        uses: matlab-actions/run-command@v2
-        with:
-          command: |
-            addpath(genpath('matlab'));
-            addpath(genpath('build'));
-            fullmathtest
-      - name: Package with CPack
-        shell: bash
-        run: cmake --build build --target package
-      - uses: actions/upload-artifact@v4
-        with:
-          name: finufft-matlab-mex-windows
-          path: |
-            build/*.zip
-            build/*.tar.gz
-          if-no-files-found: error
 
-  # ---------- macOS ----------
-  macos:
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup C++ toolchain
-        uses: aminya/setup-cpp@v1.7.1
-        with:
-          cmake: true
-          ninja: true
       - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v2
         with:
           release: R2023b
           products: MATLAB
           cache: true
-      - name: Install libomp and env
+
+        # macOS needs OpenMP runtime + per-OS deployment target
+      - name: Install libomp and set mac env
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           export HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_INSTALL_CLEANUP=1
@@ -149,47 +46,35 @@ jobs:
             echo "LIBRARY_PATH=$(brew --prefix libomp)/lib"
             echo "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib"
             echo "CMAKE_PREFIX_PATH=$(brew --prefix libomp)"
-            echo "MAC_TARGETS=12.0 13.0"
+            # CMake initializes CMAKE_OSX_DEPLOYMENT_TARGET from this env var on first configure
+            echo "MACOSX_DEPLOYMENT_TARGET=${{ format('{0}.0', replace(matrix.os, 'macos-', '')) }}"
           } >> "$GITHUB_ENV"
-      - name: Configure & Build (per target)
+
+      - name: Configure & Build
         shell: bash
         run: |
-          for tgt in ${MAC_TARGETS}; do
-            bdir="build_mac_${tgt}"
-            cmake -S . -B "${bdir}" -G Ninja \
-              -DFINUFFT_USE_DUCC0=ON \
-              -DFINUFFT_MATLAB_INSTALL=ON \
-              -DCMAKE_OSX_DEPLOYMENT_TARGET="${tgt}"
-            cmake --build "${bdir}" --target finufft_mex --parallel
-          done
-      - name: Run fullmathtest.m (macOS)
+          # Ensure MATLAB is on PATH if provided by setup-matlab
+          if [ -n "${MATLAB_ROOT:-}" ]; then export PATH="${MATLAB_ROOT}/bin:${PATH}"; fi
+          cmake -S . -B build -G Ninja -DFINUFFT_USE_DUCC0=ON -DFINUFFT_MATLAB_INSTALL=ON
+          cmake --build build --target finufft_mex --parallel
+      # --- Test (same on all OSes)
+      - name: Run fullmathtest.m
         uses: matlab-actions/run-command@v2
         with:
           command: |
             addpath(genpath('matlab'));
-            v = strtrim(getenv('MAC_TARGETS'));
-            assert(~isempty(v), 'MAC_TARGETS not set');
-            targets = strsplit(v);
+            addpath(genpath('build'));
+            fullmathtest
 
-            for i = 1:numel(targets)
-              tgt = targets{i};
-              bdir = ['build_mac_' tgt];
-              if ~isfolder(bdir)
-                error('Build dir not found: %s', bdir);
-              end
-              addpath(genpath(bdir));
-              fullmathtest;
-              rmpath(genpath(bdir));
-            end
-            clear v targets tgt i;
-      - name: Package with CPack (per target)
+      # --- Package & upload (same on all OSes)
+      - name: Package with CPack
         shell: bash
-        run: |
-          for tgt in ${MAC_TARGETS}; do
-            cmake --build "build_mac_${tgt}" --target package
-          done
+        run: cmake --build build --target package
+
       - uses: actions/upload-artifact@v4
         with:
-          name: finufft-matlab-mex-macos
-          path: build_mac_*/finufft-matlab-mex-macos-*.tar.gz
+          name: finufft-matlab-mex-${{ matrix.os }}
+          path: |
+            build/*.zip
+            build/*.tar.gz
           if-no-files-found: error
