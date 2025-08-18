@@ -86,10 +86,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-22.04, toolchain: gcc-10, c_compiler: gcc,   cxx_compiler: g++ }
-          - { os: ubuntu-22.04, toolchain: gcc-11, c_compiler: gcc,   cxx_compiler: g++ }
-          - { os: ubuntu-22.04, toolchain: gcc-12, c_compiler: gcc,   cxx_compiler: g++ }
-          - { os: ubuntu-22.04, toolchain: gcc-13, c_compiler: gcc,   cxx_compiler: g++ }
+          - { os: ubuntu-22.04, toolchain: gcc-10,  c_compiler: gcc,   cxx_compiler: g++ }
+          - { os: ubuntu-22.04, toolchain: gcc-11,  c_compiler: gcc,   cxx_compiler: g++ }
+          - { os: ubuntu-22.04, toolchain: gcc-12,  c_compiler: gcc,   cxx_compiler: g++ }
+          - { os: ubuntu-22.04, toolchain: gcc-13,  c_compiler: gcc,   cxx_compiler: g++ }
           - { os: ubuntu-22.04, toolchain: clang-16, c_compiler: clang, cxx_compiler: clang++ }
           - { os: ubuntu-22.04, toolchain: clang-17, c_compiler: clang, cxx_compiler: clang++ }
           - { os: ubuntu-22.04, toolchain: clang-18, c_compiler: clang, cxx_compiler: clang++ }
@@ -141,31 +141,15 @@ jobs:
             echo "LIBRARY_PATH=$(brew --prefix libomp)/lib"
             echo "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib"
             echo "CMAKE_PREFIX_PATH=$(brew --prefix libomp)"
-            # CMake initializes CMAKE_OSX_DEPLOYMENT_TARGET from this env var on first configure
             ver="${{ matrix.os }}"; ver="${ver#macos-}"
-            echo "MACOSX_DEPLOYMENT_TARGET=${ver}.0" >> "$GITHUB_ENV"
+            echo "MACOSX_DEPLOYMENT_TARGET=${ver}.0"
           } >> "$GITHUB_ENV"
-          if [[ "${{ matrix.toolchain }}" =~ ^gcc ]]; then
-            echo "CC=$(brew --prefix)/bin/${{ matrix.toolchain }}"      >> $GITHUB_ENV
-            echo "CXX=$(brew --prefix)/bin/${{ matrix.toolchain }}"     >> $GITHUB_ENV
-            echo "FC=$(brew --prefix)/bin/gfortran-14" >> $GITHUB_ENV
-            echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH:$(brew --prefix)" >> $GITHUB_ENV
-          fi
-          # Match runner’s macOS version for deployment target
-          ver="${{ matrix.os }}"; ver="${ver#macos-}"
-          echo "MACOSX_DEPLOYMENT_TARGET=${ver}.0" >> $GITHUB_ENV
 
       - name: Install fftw (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt update
           sudo apt install -y libfftw3-dev
-
-      - name: Select compilers (non-Windows)
-        if: runner.os != 'Windows'
-        run: |
-          echo "CC=${{ matrix.c_compiler }}" >> $GITHUB_ENV
-          echo "CXX=${{ matrix.cxx_compiler }}" >> $GITHUB_ENV
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -204,13 +188,13 @@ jobs:
               build_dir="build_${build_type}_${ducc_fft}_${arch_dir}"
 
               cmake -E make_directory "$build_dir"
-
               cmake -S . -B "$build_dir" \
                 -DCMAKE_BUILD_TYPE=$build_type \
                 -DFINUFFT_ARCH_FLAGS="$arch" \
                 -DFINUFFT_USE_DUCC0=$ducc_fft \
                 -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
                 -DCMAKE_POLICY_DEFAULT_CMP0141=NEW
+                # CMake will pick the toolchain set by setup-cpp (and macOS brew block for gcc-14).
 
               cmake --build "$build_dir" --config "$build_type"
               (cd "$build_dir" && ctest -C "$build_type")

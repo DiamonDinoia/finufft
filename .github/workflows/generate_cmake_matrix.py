@@ -20,7 +20,11 @@ combinations = [
         ["msvc", "clang-19"],
     ),
     (
+        "macos-13",
+        ["llvm", "gcc-14"],
         "macos-14",
+        ["llvm", "gcc-14"],
+        "macos-15",
         ["llvm", "gcc-14"],
     ),
 ]

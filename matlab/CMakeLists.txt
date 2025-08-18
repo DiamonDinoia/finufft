@@ -1,4 +1,3 @@
-# matlab/CMakeLists.txt
 cmake_minimum_required(VERSION 3.16)
 
 # Ensure MATLAB is on PATH if provided by setup-matlab
@@ -29,7 +28,12 @@ function(use_matlab_openmp tgt)
         set(_MAT_BIN_SUBDIR "win64")
         set(_MAT_OMP_NAME "libiomp5md.lib")
     elseif(APPLE)
-        set(_MAT_BIN_SUBDIR "maci64")
+        # Distinguish Intel vs Apple Silicon: maci64 (Intel), maca64 (Apple Silicon)
+        if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+            set(_MAT_BIN_SUBDIR "maca64")
+        else()
+            set(_MAT_BIN_SUBDIR "maci64")
+        endif()
         set(_MAT_OMP_NAME "libiomp5.dylib")
     else()
         set(_MAT_BIN_SUBDIR "glnxa64")
@@ -77,6 +81,12 @@ if(FINUFFT_USE_CPU)
         PRIVATE ${Matlab_INCLUDE_DIRS} $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     )
     target_link_libraries(finufft_mex PRIVATE finufft Matlab::mex Matlab::mx)
+
+    # Ensure mexFunction is exported on Windows so MATLAB can find the gateway
+    if(WIN32)
+        target_link_options(finufft_mex PRIVATE "/EXPORT:mexFunction")
+    endif()
+
     use_matlab_openmp(finufft_mex)
     make_mex_self_contained(finufft_mex)
 endif()
@@ -97,6 +107,11 @@ if(FINUFFT_USE_CUDA)
     target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
     target_include_directories(cufinufft_mex PRIVATE ${Matlab_INCLUDE_DIRS})
     target_link_libraries(cufinufft_mex PRIVATE cufinufft Matlab::mex Matlab::mx)
+
+    if(WIN32)
+        target_link_options(cufinufft_mex PRIVATE "/EXPORT:mexFunction")
+    endif()
+
     use_matlab_openmp(cufinufft_mex)
     make_mex_self_contained(cufinufft_mex)
 endif()

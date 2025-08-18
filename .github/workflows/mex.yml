@@ -33,32 +33,26 @@ jobs:
           products: MATLAB
           cache: true
 
-        # macOS needs OpenMP runtime + per-OS deployment target
-      - name: Install libomp and set mac env
+      # macOS: keep OpenMP ON, but do NOT preload Homebrew's libomp.
+      # We rely on MATLAB's libiomp5.dylib via use_matlab_openmp().
+      - name: Set macOS deployment target
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          export HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_INSTALL_CLEANUP=1
-          brew install libomp
-          {
-            echo "LDFLAGS=-L$(brew --prefix libomp)/lib"
-            echo "CPPFLAGS=-I$(brew --prefix libomp)/include"
-            echo "LIBRARY_PATH=$(brew --prefix libomp)/lib"
-            echo "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib"
-            echo "CMAKE_PREFIX_PATH=$(brew --prefix libomp)"
-            # CMake initializes CMAKE_OSX_DEPLOYMENT_TARGET from this env var on first configure
-            ver="${{ matrix.os }}"; ver="${ver#macos-}"
-            echo "MACOSX_DEPLOYMENT_TARGET=${ver}.0" >> "$GITHUB_ENV"
-          } >> "$GITHUB_ENV"
+          ver="${{ matrix.os }}"; ver="${ver#macos-}"
+          echo "MACOSX_DEPLOYMENT_TARGET=${ver}.0" >> "$GITHUB_ENV"
 
       - name: Configure & Build
         shell: bash
         run: |
           # Ensure MATLAB is on PATH if provided by setup-matlab
           if [ -n "${MATLAB_ROOT:-}" ]; then export PATH="${MATLAB_ROOT}/bin:${PATH}"; fi
-          cmake -S . -B build -G Ninja -DFINUFFT_USE_DUCC0=ON -DFINUFFT_MATLAB_INSTALL=ON
+          cmake -S . -B build -G Ninja \
+            -DFINUFFT_USE_DUCC0=ON \
+            -DFINUFFT_USE_OPENMP=ON \
+            -DFINUFFT_MATLAB_INSTALL=ON
           cmake --build build --target finufft_mex --parallel
-      # --- Test (same on all OSes)
+
       - name: Run fullmathtest.m
         uses: matlab-actions/run-command@v2
         with:
@@ -67,7 +61,6 @@ jobs:
             addpath(genpath('build'));
             fullmathtest
 
-      # --- Package & upload (same on all OSes)
       - name: Package with CPack
         shell: bash
         run: cmake --build build --target package
