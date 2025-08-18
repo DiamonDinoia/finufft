@@ -32,6 +32,7 @@ jobs:
           release: R2023b
           products: MATLAB
           cache: true
+
       - name: Set macOS deployment target
         if: runner.os == 'macOS'
         shell: bash
@@ -45,15 +46,33 @@ jobs:
           ver="${{ matrix.os }}"; ver="${ver#macos-}"
           echo "MACOSX_DEPLOYMENT_TARGET=${ver}.0" >> "$GITHUB_ENV"
 
+      # Install CUDA on non-macOS runners
+      - name: Install CUDA Toolkit (non-macOS)
+        if: runner.os != 'macOS'
+        uses: Jimver/cuda-toolkit@v0.2.26
+        with:
+          cuda: '12.4.0'
+
       - name: Configure & Build
         shell: bash
         run: |
           # Ensure MATLAB is on PATH if provided by setup-matlab
           if [ -n "${MATLAB_ROOT:-}" ]; then export PATH="${MATLAB_ROOT}/bin:${PATH}"; fi
+
+          # Enable CUDA only on non-macOS
+          CUDA_FLAG=""
+          if [ "${RUNNER_OS}" != "macOS" ]; then
+            CUDA_FLAG="-DFINUFFT_USE_CUDA=ON"
+            # Optional: show nvcc version for debugging
+            if command -v nvcc >/dev/null 2>&1; then nvcc --version || true; fi
+          fi
+
           cmake -S . -B build -G Ninja \
             -DFINUFFT_USE_DUCC0=ON \
             -DFINUFFT_USE_OPENMP=ON \
-            -DFINUFFT_MATLAB_INSTALL=ON
+            -DFINUFFT_MATLAB_INSTALL=ON \
+            ${CUDA_FLAG}
+
           cmake --build build --target finufft_mex --parallel
 
       - name: Run fullmathtest.m
