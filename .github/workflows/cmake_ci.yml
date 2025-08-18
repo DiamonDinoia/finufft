@@ -74,22 +74,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     needs: [cache, pip-requirements]
     env:
-      # Global env to simplify commands:
       CMAKE_GENERATOR: Ninja
       CPM_SOURCE_CACHE: cpm
       CTEST_OUTPUT_ON_FAILURE: "1"
-      # sccache GitHub Actions integration (incl. Windows)
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_VERSION: "0"
-      # Always pass MACOSX_DEPLOYMENT_TARGET (ignored off macOS)
-      MACOSX_DEPLOYMENT_TARGET: ${{ startsWith(matrix.os, 'macos-') && replace(matrix.os, 'macos-', '') || '' }}
-      # Use sccache via environment (as requested)
       CMAKE_C_COMPILER_LAUNCHER: sccache
       CMAKE_CXX_COMPILER_LAUNCHER: sccache
       CMAKE_CUDA_COMPILER_LAUNCHER: sccache
-      # Moved from script into global env (for reuse in commands below)
-      CMAKE_COMMON: "-DFINUFFT_BUILD_TESTS=ON -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded -DCMAKE_POLICY_DEFAULT_CMP0141=NEW"
-      PIP_CMAKE_COMMON: "-C cmake.define.FINUFFT_BUILD_TESTS=ON -C cmake.define.CMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded -C cmake.define.CMAKE_POLICY_DEFAULT_CMP0141=NEW"
     strategy:
       fail-fast: false
       matrix:
@@ -141,15 +133,12 @@ jobs:
           cppcheck: false
           clangtidy: false
 
-      # macOS: install deps (no global LDFLAGS/CPPFLAGS so builds without OpenMP aren't polluted)
       - name: Install fftw + OpenMP (macOS)
         if: startsWith(matrix.os, 'macos-')
         run: |
           brew install fftw libomp
-          # Avoid setting LDFLAGS/CPPFLAGS/DYLD_LIBRARY_PATH globally to not force OpenMP.
-          # Allow CMake to find libomp only when OpenMP is requested.
           echo "CMAKE_PREFIX_PATH=$(brew --prefix):$(brew --prefix libomp)" >> $GITHUB_ENV
-          echo "MACOSX_DEPLOYMENT_TARGET=${{ format('{0}.0', replace(matrix.os, 'macos-', '')) }}" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=${{ matrix.os#macos- }}.0" >> "$GITHUB_ENV"
 
       - name: Install fftw (Linux)
         if: runner.os == 'Linux'
@@ -178,11 +167,6 @@ jobs:
       - name: Build and test configurations
         shell: bash
         run: |
-          set -euo pipefail
-
-          # Build configs:
-          # - Linux/macOS: DUCC0 {On,Off} × BuildType {Release,Debug}
-          # - Windows:     DUCC0 {On} × BuildType {Release,Debug}
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             configs=("build_type=Release ducc_fft=On" "build_type=Debug ducc_fft=On")
           else
@@ -190,7 +174,6 @@ jobs:
                      "build_type=Debug ducc_fft=On"  "build_type=Debug ducc_fft=Off")
           fi
 
-          # Architecture flags by toolchain/OS
           if [[ "${{ matrix.toolchain }}" == "msvc" ]]; then
             arch_flags=("/arch:AVX2" "/arch:SSE2" "native")
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
@@ -205,30 +188,25 @@ jobs:
               eval "$cfg"
               build_dir="build_${build_type}_${ducc_fft}_${arch_dir}"
 
-              # Reuse the build directory to enable incremental configure/compile.
-              # NOTE: Safe only if env vars that affect the build (compilers, PATH/SDK,
-              # MACOSX_DEPLOYMENT_TARGET, flags injected via env) stay the same within
-              # this loop iteration.
               cmake -E make_directory "$build_dir"
 
               cmake -S . -B "$build_dir" \
                 -DCMAKE_BUILD_TYPE=$build_type \
-                -DFINUFFT_ARCH_FLAGS=$arch \
+                -DFINUFFT_ARCH_FLAGS="$arch" \
                 -DFINUFFT_USE_DUCC0=$ducc_fft \
-                -DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET} \
-                ${CMAKE_COMMON}
+                -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
+                -DCMAKE_POLICY_DEFAULT_CMP0141=NEW
 
               cmake --build "$build_dir" --config "$build_type"
               (cd "$build_dir" && ctest -C "$build_type")
 
-              # Build & test Python package with matching CMake options
               python3 -m pip install \
                 --verbose \
                 -C cmake.define.CMAKE_BUILD_TYPE=$build_type \
-                -C cmake.define.FINUFFT_ARCH_FLAGS=$arch \
+                -C cmake.define.FINUFFT_ARCH_FLAGS="$arch" \
                 -C cmake.define.FINUFFT_USE_DUCC0=$ducc_fft \
-                -C cmake.define.CMAKE_OSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET} \
-                ${PIP_CMAKE_COMMON} \
+                -C cmake.define.CMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
+                -C cmake.define.CMAKE_POLICY_DEFAULT_CMP0141=NEW \
                 python/finufft
 
               python3 -m pytest python/finufft/test

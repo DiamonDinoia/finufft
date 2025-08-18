@@ -47,7 +47,7 @@ jobs:
             echo "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib"
             echo "CMAKE_PREFIX_PATH=$(brew --prefix libomp)"
             # CMake initializes CMAKE_OSX_DEPLOYMENT_TARGET from this env var on first configure
-            echo "MACOSX_DEPLOYMENT_TARGET=${{ format('{0}.0', replace(matrix.os, 'macos-', '')) }}"
+            echo "MACOSX_DEPLOYMENT_TARGET=${{ matrix.os#macos- }}.0" >> "$GITHUB_ENV"
           } >> "$GITHUB_ENV"
 
       - name: Configure & Build
