@@ -133,27 +133,24 @@ jobs:
       - name: Install toolchain + FFTW (macOS)
         if: startsWith(matrix.os, 'macos-')
         run: |
-          # Base packages
-          brew install fftw
-
-          if [[ "${{ matrix.toolchain }}" == "gcc-14" ]]; then
-            # True GNU compilers; OpenMP comes via libgomp (no libomp needed)
-            brew install gcc
-            echo "CC=$(brew --prefix)/bin/gcc-14"      >> $GITHUB_ENV
-            echo "CXX=$(brew --prefix)/bin/g++-14"     >> $GITHUB_ENV
+          export HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_INSTALL_CLEANUP=1
+          brew install libomp fftw
+          {
+            echo "LDFLAGS=-L$(brew --prefix libomp)/lib"
+            echo "CPPFLAGS=-I$(brew --prefix libomp)/include"
+            echo "LIBRARY_PATH=$(brew --prefix libomp)/lib"
+            echo "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib"
+            echo "CMAKE_PREFIX_PATH=$(brew --prefix libomp)"
+            # CMake initializes CMAKE_OSX_DEPLOYMENT_TARGET from this env var on first configure
+            ver="${{ matrix.os }}"; ver="${ver#macos-}"
+            echo "MACOSX_DEPLOYMENT_TARGET=${ver}.0" >> "$GITHUB_ENV"
+          } >> "$GITHUB_ENV"
+          if [[ "${{ matrix.toolchain }}" =~ ^gcc ]]; then
+            echo "CC=$(brew --prefix)/bin/${{ matrix.toolchain }}"      >> $GITHUB_ENV
+            echo "CXX=$(brew --prefix)/bin/${{ matrix.toolchain }}"     >> $GITHUB_ENV
             echo "FC=$(brew --prefix)/bin/gfortran-14" >> $GITHUB_ENV
-            echo "CMAKE_PREFIX_PATH=$(brew --prefix)"  >> $GITHUB_ENV
-          else
-            # AppleClang (Xcode) + libomp for OpenMP
-            brew install libomp
-            echo "CC=clang"   >> $GITHUB_ENV
-            echo "CXX=clang++" >> $GITHUB_ENV
-            # Help CMake/Clang find OpenMP (AppleClang needs -Xpreprocessor -fopenmp and -lomp)
-            echo "CMAKE_PREFIX_PATH=$(brew --prefix):$(brew --prefix libomp)" >> $GITHUB_ENV
-            echo "CPPFLAGS=-I$(brew --prefix libomp)/include" >> $GITHUB_ENV
-            echo "LDFLAGS=-L$(brew --prefix libomp)/lib"     >> $GITHUB_ENV
+            echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH:$(brew --prefix)" >> $GITHUB_ENV
           fi
-
           # Match runner’s macOS version for deployment target
           ver="${{ matrix.os }}"; ver="${ver#macos-}"
           echo "MACOSX_DEPLOYMENT_TARGET=${ver}.0" >> $GITHUB_ENV

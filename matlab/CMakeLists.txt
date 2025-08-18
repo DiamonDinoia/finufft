@@ -2,53 +2,6 @@ find_package(Matlab REQUIRED COMPONENTS MEX_COMPILER MX_LIBRARY)
 set(MEX_EXT "${Matlab_MEX_EXTENSION}")
 set(FINUFFT_MEX_DEFS R2008OO)
 
-# Helper: prefer MATLAB's bundled OpenMP if available
-# - Enables OpenMP compile flags
-# - Links against libiomp5 from the MATLAB installation
-function(use_matlab_openmp tgt)
-    if(NOT FINUFFT_USE_OPENMP)
-        return()
-    endif()
-    # Derive Matlab root if not set by FindMatlab
-    if(NOT Matlab_ROOT_DIR)
-        # Guess from include path: <MATLAB>/extern/include
-        list(GET Matlab_INCLUDE_DIRS 0 _mat_inc)
-        get_filename_component(_extern_dir "${_mat_inc}" DIRECTORY) # .../extern
-        get_filename_component(Matlab_ROOT_DIR "${_extern_dir}" DIRECTORY) # <MATLAB>
-    endif()
-
-    if(WIN32)
-        set(_MAT_BIN_SUBDIR "win64")
-        set(_MAT_OMP_NAME "libiomp5md.lib")
-    elseif(APPLE)
-        set(_MAT_BIN_SUBDIR "maci64")
-        set(_MAT_OMP_NAME "libiomp5.dylib")
-    else()
-        set(_MAT_BIN_SUBDIR "glnxa64")
-        set(_MAT_OMP_NAME "libiomp5.so")
-    endif()
-
-    set(_MAT_OMP_PATH "${Matlab_ROOT_DIR}/bin/${_MAT_BIN_SUBDIR}/${_MAT_OMP_NAME}")
-
-    if(EXISTS "${_MAT_OMP_PATH}")
-        get_filename_component(_MAT_OMP_DIR "${_MAT_OMP_PATH}" DIRECTORY)
-        # Link to MATLAB's OpenMP runtime
-        target_link_libraries(${tgt} "${_MAT_OMP_PATH}")
-        target_link_libraries(${tgt} PRIVATE "${_MAT_OMP_PATH}")
-
-        message(STATUS "Using MATLAB-supplied OpenMP for target '${tgt}': ${_MAT_OMP_PATH}")
-    else()
-        message(STATUS "MATLAB OpenMP not found at ${_MAT_OMP_PATH}; skipping MATLAB OpenMP setup for '${tgt}'")
-    endif()
-endfunction()
-
-function(make_mex_self_contained tgt)
-    if(UNIX AND NOT APPLE)
-        # Avoid MATLAB's older libstdc++ at runtime
-        target_link_options(${tgt} PRIVATE -static-libstdc++ -static-libgcc)
-    endif()
-endfunction()
-
 # --- CPU MEX ---
 if(FINUFFT_USE_CPU)
     matlab_add_mex(
@@ -60,7 +13,6 @@ if(FINUFFT_USE_CPU)
     )
     target_compile_definitions(finufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
     target_include_directories(finufft_mex PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
-    use_matlab_openmp(finufft_mex)
     make_mex_self_contained(finufft_mex)
 endif()
 
@@ -80,7 +32,6 @@ if(FINUFFT_USE_CUDA)
     target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
     target_include_directories(cufinufft_mex PRIVATE ${Matlab_INCLUDE_DIRS})
     target_link_libraries(cufinufft_mex cufinufft Matlab::mex Matlab::mx)
-    use_matlab_openmp(cufinufft_mex)
     make_mex_self_contained(cufinufft_mex)
 endif()
 
@@ -107,9 +58,22 @@ endif()
 foreach(tgt IN ITEMS finufft_mex cufinufft_mex)
     if(TARGET ${tgt})
         if(APPLE)
-            set_target_properties(${tgt} PROPERTIES INSTALL_RPATH "@loader_path" BUILD_WITH_INSTALL_RPATH ON)
+            # Append @loader_path to whatever FindMatlab already set
+            get_target_property(_old_rpath ${tgt} INSTALL_RPATH)
+            if(NOT _old_rpath)
+                set(_old_rpath "")
+            endif()
+            set_target_properties(
+                ${tgt}
+                PROPERTIES INSTALL_RPATH "${_old_rpath};@loader_path" BUILD_WITH_INSTALL_RPATH OFF
+            )
         elseif(UNIX AND NOT APPLE)
-            set_target_properties(${tgt} PROPERTIES INSTALL_RPATH "\$ORIGIN")
+            # Similarly, append $ORIGIN on Linux without wiping existing rpaths
+            get_target_property(_old_rpath ${tgt} INSTALL_RPATH)
+            if(NOT _old_rpath)
+                set(_old_rpath "")
+            endif()
+            set_target_properties(${tgt} PROPERTIES INSTALL_RPATH "${_old_rpath};\$ORIGIN" BUILD_WITH_INSTALL_RPATH OFF)
         endif()
     endif()
 endforeach()
