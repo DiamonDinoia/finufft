@@ -41,17 +41,16 @@ jobs:
       # Install CUDA on non-macOS runners
       - name: Install CUDA Toolkit (non-macOS)
         if: runner.os != 'macOS'
-        uses: Jimver/cuda-toolkit@v0.2.21
+        uses: Jimver/cuda-toolkit@v0.2.26
         with:
           cuda: '12.4.0'
-          method: 'local'
-          linux-local-args: '["--toolkit"]'
+          method: 'network'
 
       - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v2
         with:
           release: R2023b
-          products: MATLAB
+          products: Parallel_Computing_Toolbox
           cache: true
 
       - name: Configure & Build
@@ -63,7 +62,7 @@ jobs:
           # Enable CUDA only on non-macOS
           CUDA_FLAG=""
           if [ "${RUNNER_OS}" != "macOS" ]; then
-            CUDA_FLAG="-DFINUFFT_USE_CUDA=ON"
+            CUDA_FLAG="-DFINUFFT_USE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=50;60;70;80;89;90"
             # Optional: show nvcc version for debugging
             if command -v nvcc >/dev/null 2>&1; then nvcc --version || true; fi
           fi

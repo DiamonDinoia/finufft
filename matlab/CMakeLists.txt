@@ -36,6 +36,7 @@ endif()
 
 # --- CUDA MEX (already manual, keyword-only) ---
 if(FINUFFT_USE_CUDA)
+    target_link_libraries(cufinufft_mex PRIVATE)
     add_library(cufinufft_mex MODULE "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu")
     set_target_properties(
         cufinufft_mex
@@ -49,8 +50,7 @@ if(FINUFFT_USE_CUDA)
     )
     target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
     target_include_directories(cufinufft_mex PRIVATE ${Matlab_INCLUDE_DIRS})
-    target_link_libraries(cufinufft_mex PRIVATE cufinufft Matlab::mex Matlab::mx)
-
+    target_link_libraries(cufinufft_mex PRIVATE cufinufft Matlab::mex Matlab::mx CUDA::cudart)
     if(WIN32)
         target_link_options(cufinufft_mex PRIVATE "/EXPORT:mexFunction")
     endif()
