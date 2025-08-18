@@ -69,7 +69,7 @@ jobs:
           fi
 
           cmake -S . -B build -G Ninja \
-            -CMAKE_BUILD_TYPE=Release \
+            -DCMAKE_BUILD_TYPE=Release \
             -DFINUFFT_USE_DUCC0=ON \
             -DFINUFFT_USE_OPENMP=ON \
             -DFINUFFT_MATLAB_INSTALL=ON \
