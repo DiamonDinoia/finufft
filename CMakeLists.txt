@@ -40,6 +40,9 @@ cmake_dependent_option(FINUFFT_SHARED_LINKING "Shared should be the opposite of 
 cmake_dependent_option(FINUFFT_INTERPROCEDURAL_OPTIMIZATION "LTO should be the opposite of static linking" ON "NOT FINUFFT_STATIC_LINKING" OFF)
 # gersemi: on
 
+# Use the folder that contains this CMakeLists.txt, not the project root
+list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
+
 # When building shared libraries, we need to build with -fPIC in all cases
 if(FINUFFT_SHARED_LINKING)
     set(FINUFFT_POSITION_INDEPENDENT_CODE ON)
@@ -48,12 +51,10 @@ endif()
 if(FINUFFT_MATLAB_INSTALL)
     set(FINUFFT_BUILD_MATLAB ON)
     set(FINUFFT_ENABLE_INSTALL OFF)
+    include(setupOpenMP)
 endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-# Use the folder that contains this CMakeLists.txt, not the project root
-list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 
 include(utils) # finds cmake/utils.cmake
 include(toolchain) # finds cmake/toolchain.cmake
