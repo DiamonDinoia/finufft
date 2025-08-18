@@ -106,6 +106,9 @@ endforeach()
 # ------------------------------------------------------------
 # Install & CPack (optional)
 if(FINUFFT_MATLAB_INSTALL)
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        set(CPACK_STRIP_FILES TRUE)
+    endif()
     # Install MATLAB assets
     install(FILES ${MATLAB_MFILES} DESTINATION matlab)
 

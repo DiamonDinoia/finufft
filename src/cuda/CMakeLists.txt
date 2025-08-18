@@ -81,7 +81,7 @@ if(FINUFFT_SHARED_LINKING)
 endif()
 
 # link CUDA dependencies privately and expose only for shared builds
-if(WIN32 OR FINUFFT_BUILD_TESTS OR CIBUILDWHEEL)
+if(WIN32 OR FINUFFT_BUILD_TESTS OR CIBUILDWHEEL OR FINUFFT_MATLAB_INSTALL)
     set_target_properties(cufinufft PROPERTIES CUDA_RUNTIME_LIBRARY Shared WINDOWS_EXPORT_ALL_SYMBOLS OFF)
     target_link_libraries(cufinufft PRIVATE CUDA::cudart CUDA::cufft)
     if(NOT FINUFFT_STATIC_LINKING)
