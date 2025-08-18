@@ -138,7 +138,8 @@ jobs:
         run: |
           brew install fftw libomp
           echo "CMAKE_PREFIX_PATH=$(brew --prefix):$(brew --prefix libomp)" >> $GITHUB_ENV
-          echo "MACOSX_DEPLOYMENT_TARGET=${{ matrix.os#macos- }}.0" >> "$GITHUB_ENV"
+          ver="${{ matrix.os }}"; ver="${ver#macos-}"
+          echo "MACOSX_DEPLOYMENT_TARGET=${ver}.0" >> "$GITHUB_ENV"
 
       - name: Install fftw (Linux)
         if: runner.os == 'Linux'
