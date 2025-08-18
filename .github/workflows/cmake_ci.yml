@@ -126,20 +126,37 @@ jobs:
         uses: aminya/setup-cpp@v1
         with:
           compiler: ${{ matrix.toolchain }}
-          vcvarsall: ${{ contains(matrix.os, 'windows') }}
+          vcvarsall: true
           cmake: true
           ninja: true
-          vcpkg: false
-          cppcheck: false
-          clangtidy: false
 
-      - name: Install fftw + OpenMP (macOS)
+      - name: Install toolchain + FFTW (macOS)
         if: startsWith(matrix.os, 'macos-')
         run: |
-          brew install fftw libomp
-          echo "CMAKE_PREFIX_PATH=$(brew --prefix):$(brew --prefix libomp)" >> $GITHUB_ENV
+          # Base packages
+          brew install fftw
+
+          if [[ "${{ matrix.toolchain }}" == "gcc-14" ]]; then
+            # True GNU compilers; OpenMP comes via libgomp (no libomp needed)
+            brew install gcc
+            echo "CC=$(brew --prefix)/bin/gcc-14"      >> $GITHUB_ENV
+            echo "CXX=$(brew --prefix)/bin/g++-14"     >> $GITHUB_ENV
+            echo "FC=$(brew --prefix)/bin/gfortran-14" >> $GITHUB_ENV
+            echo "CMAKE_PREFIX_PATH=$(brew --prefix)"  >> $GITHUB_ENV
+          else
+            # AppleClang (Xcode) + libomp for OpenMP
+            brew install libomp
+            echo "CC=clang"   >> $GITHUB_ENV
+            echo "CXX=clang++" >> $GITHUB_ENV
+            # Help CMake/Clang find OpenMP (AppleClang needs -Xpreprocessor -fopenmp and -lomp)
+            echo "CMAKE_PREFIX_PATH=$(brew --prefix):$(brew --prefix libomp)" >> $GITHUB_ENV
+            echo "CPPFLAGS=-I$(brew --prefix libomp)/include" >> $GITHUB_ENV
+            echo "LDFLAGS=-L$(brew --prefix libomp)/lib"     >> $GITHUB_ENV
+          fi
+
+          # Match runner’s macOS version for deployment target
           ver="${{ matrix.os }}"; ver="${ver#macos-}"
-          echo "MACOSX_DEPLOYMENT_TARGET=${ver}.0" >> "$GITHUB_ENV"
+          echo "MACOSX_DEPLOYMENT_TARGET=${ver}.0" >> $GITHUB_ENV
 
       - name: Install fftw (Linux)
         if: runner.os == 'Linux'
