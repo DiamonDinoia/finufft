@@ -1,5 +1,5 @@
 # Ensure MATLAB is on PATH if provided by setup-matlab
-find_package(Matlab REQUIRED COMPONENTS MEX_COMPILER MX_LIBRARY ENG_LIBRARY)
+find_package(Matlab REQUIRED COMPONENTS MEX_COMPILER MX_LIBRARY)
 
 # MEX extension and common defines
 set(MEX_EXT "${Matlab_MEX_EXTENSION}")
@@ -17,7 +17,7 @@ endfunction()
 # --- CPU MEX via CMake's Matlab API ---
 if(FINUFFT_USE_CPU)
     # Everything that needs to be linked beyond Matlab::mex
-    set(link_to_cpu finufft Matlab::mx Matlab::eng Matlab::mex)
+    set(link_to_cpu finufft Matlab::mx Matlab::mex)
 
     matlab_add_mex(
         NAME finufft_mex
@@ -60,15 +60,15 @@ if(FINUFFT_USE_CUDA)
 
     # Search recursively from ${Matlab_ROOT_DIR} for the MWGPU library
     if(WIN32)
-        file(GLOB_RECURSE _hits LIST_DIRECTORIES false "${Matlab_ROOT_DIR}/mwgpu.lib")
+        file(GLOB_RECURSE _hits LIST_DIRECTORIES false "${Matlab_ROOT_DIR}/**/mwgpu.lib")
     elseif(APPLE)
-        file(GLOB_RECURSE _hits LIST_DIRECTORIES false "${Matlab_ROOT_DIR}/libmwgpu.dylib")
+        file(GLOB_RECURSE _hits LIST_DIRECTORIES false "${Matlab_ROOT_DIR}/**/libmwgpu.dylib")
     else() # Linux / UNIX
         file(
             GLOB_RECURSE _hits
             LIST_DIRECTORIES false
-            "${Matlab_ROOT_DIR}/libmwgpu.so"
-            "${Matlab_ROOT_DIR}/libmwgpu.so.*"
+            "${Matlab_ROOT_DIR}/**/libmwgpu.so"
+            "${Matlab_ROOT_DIR}/**/libmwgpu.so.*"
         )
     endif()
 
@@ -83,10 +83,9 @@ if(FINUFFT_USE_CUDA)
     # GPU libraries to link (Matlab::mex is added by matlab_add_mex automatically)
     set(link_to_cuda
         cufinufft
-        Matlab::mx
-        Matlab::eng
         CUDA::cudart
         Matlab::mex
+        Matlab::mx
         ${Matlab_MWGPU_LIBRARY}
     )
 
@@ -135,9 +134,17 @@ endif()
 foreach(tgt IN ITEMS finufft_mex cufinufft_mex)
     if(TARGET ${tgt})
         if(APPLE)
-            set_target_properties(${tgt} PROPERTIES INSTALL_RPATH "@loader_path" BUILD_WITH_INSTALL_RPATH ON)
-        elseif(UNIX AND NOT APPLE)
-            set_target_properties(${tgt} PROPERTIES INSTALL_RPATH "\$ORIGIN")
+            # Let the loader find deps next to the MEX at runtime
+            set_target_properties(
+                ${tgt}
+                PROPERTIES BUILD_WITH_INSTALL_RPATH ON BUILD_RPATH "@loader_path" INSTALL_RPATH "@loader_path"
+            )
+        elseif(UNIX)
+            # Same idea on Linux
+            set_target_properties(
+                ${tgt}
+                PROPERTIES BUILD_WITH_INSTALL_RPATH ON BUILD_RPATH "\$ORIGIN" INSTALL_RPATH "\$ORIGIN"
+            )
         endif()
     endif()
 endforeach()
