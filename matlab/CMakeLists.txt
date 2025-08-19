@@ -41,6 +41,21 @@ endif()
 # ------------------------------------------------------------
 # --- CUDA MEX (uses 'mexcuda' via matlab_add_mex) ---
 if(FINUFFT_USE_CUDA)
+    find_path(
+        Matlab_GPU_INCLUDE_DIR
+        NAMES gpu/mxGPUArray.h
+        HINTS
+            "${Matlab_ROOT_DIR}/extern/include"
+            "${Matlab_ROOT_DIR}/toolbox/parallel/gpu/extern/include"
+            "${Matlab_ROOT_DIR}/toolbox/distcomp/gpu/extern/include"
+    )
+    if(NOT Matlab_GPU_INCLUDE_DIR)
+        message(
+            FATAL_ERROR
+            "MATLAB GPU header mxGPUArray.h not found. \
+            Ensure Parallel Computing Toolbox is installed, or add its include path."
+        )
+    endif()
     matlab_add_mex(
         NAME cufinufft_mex
         SRC "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu"
@@ -50,6 +65,7 @@ if(FINUFFT_USE_CUDA)
     )
     target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
     target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
+    target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${Matlab_GPU_INCLUDE_DIR}>)
     make_mex_self_contained(cufinufft_mex)
 endif()
 
