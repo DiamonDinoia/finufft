@@ -78,11 +78,12 @@ if(FINUFFT_USE_CUDA)
         SRC "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu"
         OUTPUT_NAME "cufinufft"
         R2018a
-        LINK_TO cufinufft ${Matlab_MXGPU_LIBRARY}
+        LINK_TO cufinufft Matlab::mex Matlab::mx CUDA::cudart ${Matlab_MXGPU_LIBRARY}
     )
     target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
     target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
     target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${Matlab_GPU_INCLUDE_DIR}>)
+    target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${Matlab_INCLUDE_DIRS}>)
     make_mex_self_contained(cufinufft_mex)
 endif()
 
