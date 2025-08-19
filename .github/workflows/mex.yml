@@ -47,8 +47,8 @@ jobs:
           method: 'network'
           linux-local-args: '["--toolkit"]'
           log-file-suffix: '${{matrix.os}}-cuda-install.txt'
-          sub-packages: '["nvcc","cudart"]'
-          non-cuda-sub-packages: '["libcufft", "libcufft-dev"]'
+          sub-packages: ${{runner.os == 'Linux' && '["nvcc", "cudart"]' || '["nvcc", "cudart", "cufft", "cufft_dev"]'}}
+          non-cuda-sub-packages: ${{runner.os == 'Linux' && '["libcufft","libcufft-dev"]' || '[]'}}
           use-local-cache: 'false'
           use-github-cache: 'false' #it is not working at the moment https://github.com/Jimver/cuda-toolkit/issues/390
 
