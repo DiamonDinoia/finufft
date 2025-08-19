@@ -51,6 +51,17 @@ if(FINUFFT_USE_CUDA)
             Ensure Parallel Computing Toolbox is installed, or add its include path."
         )
     endif()
+    # Locate MATLAB GPU library (mwgpu)
+    if(WIN32)
+        set(_MATLAB_GPU_LIB_DIR "${Matlab_ROOT_DIR}/toolbox/parallel/gpu/extern/lib/win64/microsoft")
+        set(_MWGPU_NAMES mwgpu.lib mwgpu)
+    elseif(UNIX) # Linux
+        set(_MATLAB_GPU_LIB_DIR "${Matlab_ROOT_DIR}/toolbox/parallel/gpu/extern/lib/glnxa64")
+        set(_MWGPU_NAMES mwgpu libmwgpu.so)
+    endif()
+
+    find_library(Matlab_MWGPU_LIBRARY NAMES ${_MWGPU_NAMES} PATHS "${_MATLAB_GPU_LIB_DIR}" NO_DEFAULT_PATH)
+
     add_library(cufinufft_mex MODULE "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu")
     set_target_properties(
         cufinufft_mex
@@ -64,7 +75,10 @@ if(FINUFFT_USE_CUDA)
     )
     target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
     target_include_directories(cufinufft_mex PRIVATE ${Matlab_INCLUDE_DIRS} ${Matlab_GPU_INCLUDE_DIR})
-    target_link_libraries(cufinufft_mex PRIVATE cufinufft Matlab::mex Matlab::mx CUDA::cudart)
+    target_link_libraries(
+        cufinufft_mex
+        PRIVATE cufinufft Matlab::mex Matlab::mx ${Matlab_MWGPU_LIBRARY} CUDA::cudart
+    )
     if(WIN32)
         target_link_options(cufinufft_mex PRIVATE "/EXPORT:mexFunction")
     endif()

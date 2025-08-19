@@ -62,7 +62,8 @@ set_target_properties(
         CXX_VISIBILITY_PRESET ${FINUFFT_CUDA_VISIBILITY_PRESET}
         CUDA_VISIBILITY_PRESET ${FINUFFT_CUDA_VISIBILITY_PRESET}
         VISIBILITY_INLINES_HIDDEN YES
-        WINDOWS_EXPORT_ALL_SYMBOLS YES
+        CUDA_RUNTIME_LIBRARY Shared
+        WINDOWS_EXPORT_ALL_SYMBOLS NO
 )
 
 if(DEFINED ENV{GITHUB_ACTIONS} AND "$ENV{GITHUB_ACTIONS}" STREQUAL "true" AND MSVC)
@@ -80,20 +81,12 @@ if(FINUFFT_SHARED_LINKING)
     endif()
 endif()
 
-# link CUDA dependencies privately and expose only for shared builds
-if(WIN32 OR FINUFFT_BUILD_TESTS OR CIBUILDWHEEL OR FINUFFT_MATLAB_INSTALL)
-    set_target_properties(cufinufft PROPERTIES CUDA_RUNTIME_LIBRARY Shared WINDOWS_EXPORT_ALL_SYMBOLS OFF)
-    target_link_libraries(cufinufft PRIVATE CUDA::cudart CUDA::cufft)
-    if(NOT FINUFFT_STATIC_LINKING)
-        target_link_libraries(cufinufft PUBLIC CUDA::cudart CUDA::cufft)
-    endif()
-else()
-    set_target_properties(cufinufft PROPERTIES CUDA_RUNTIME_LIBRARY Static)
-    target_link_libraries(cufinufft PRIVATE CUDA::cudart_static CUDA::cufft_static)
-    if(NOT FINUFFT_STATIC_LINKING)
-        target_link_libraries(cufinufft PUBLIC CUDA::cudart_static CUDA::cufft_static)
-    endif()
+target_link_libraries(cufinufft PRIVATE CUDA::cudart CUDA::cufft)
+# Expose only when not doing fully static linking
+if(NOT FINUFFT_STATIC_LINKING)
+    target_link_libraries(cufinufft PUBLIC CUDA::cudart CUDA::cufft)
 endif()
+
 target_link_libraries(cufinufft PRIVATE CCCL::CCCL)
 if(NOT FINUFFT_STATIC_LINKING)
     target_link_libraries(cufinufft INTERFACE CCCL::CCCL)
