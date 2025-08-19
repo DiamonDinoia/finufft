@@ -67,7 +67,7 @@ if(FINUFFT_USE_CUDA)
         )
         if(NOT _ps_status EQUAL 0 OR NOT EXISTS "${Matlab_MXGPU_LIBRARY}")
             message(
-                FATAL_ERROR
+                WARNING
                 "mxgpu.lib not found anywhere under ${Matlab_ROOT_DIR}. Is Parallel Computing Toolbox installed?"
             )
         endif()
