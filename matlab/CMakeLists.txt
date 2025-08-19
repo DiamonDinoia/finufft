@@ -56,12 +56,28 @@ if(FINUFFT_USE_CUDA)
             Ensure Parallel Computing Toolbox is installed, or add its include path."
         )
     endif()
+    if(WIN32)
+        set(_MATLAB_GPU_LIB_HINTS
+            "${Matlab_ROOT_DIR}/toolbox/parallel/gpu/extern/lib/win64/microsoft"
+            "${Matlab_ROOT_DIR}/toolbox/distcomp/gpu/extern/lib/win64/microsoft"
+            "${Matlab_ROOT_DIR}/extern/lib/win64/microsoft"
+        )
+        find_library(Matlab_MXGPU_LIBRARY NAMES mxgpu libmxgpu HINTS ${_MATLAB_GPU_LIB_HINTS})
+
+        if(NOT Matlab_MXGPU_LIBRARY)
+            message(
+                FATAL_ERROR
+                "MATLAB GPU import library (mxgpu) not found.\n"
+                "Install Parallel Computing Toolbox or set Matlab_MXGPU_LIBRARY to the full path of mxgpu.lib"
+            )
+        endif()
+    endif()
     matlab_add_mex(
         NAME cufinufft_mex
         SRC "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu"
         OUTPUT_NAME "cufinufft"
         R2018a
-        LINK_TO cufinufft
+        LINK_TO cufinufft ${Matlab_MXGPU_LIBRARY}
     )
     target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
     target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
