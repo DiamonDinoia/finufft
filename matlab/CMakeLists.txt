@@ -1,5 +1,6 @@
 # Ensure MATLAB is on PATH if provided by setup-matlab
 find_package(Matlab REQUIRED COMPONENTS MEX_COMPILER MX_LIBRARY)
+
 # MEX extension and common defines
 set(MEX_EXT "${Matlab_MEX_EXTENSION}")
 set(FINUFFT_MEX_DEFS R2008OO)
@@ -13,29 +14,34 @@ function(make_mex_self_contained tgt)
 endfunction()
 
 # ------------------------------------------------------------
-# --- CPU MEX (manual target, keyword-only) ---
+# --- CPU MEX via CMake's Matlab API ---
 if(FINUFFT_USE_CPU)
-    add_library(finufft_mex MODULE "${CMAKE_CURRENT_SOURCE_DIR}/finufft.cpp")
-    set_target_properties(
-        finufft_mex
-        PROPERTIES PREFIX "" SUFFIX ".${MEX_EXT}" OUTPUT_NAME "finufft" POSITION_INDEPENDENT_CODE ON
-    )
-    target_compile_definitions(finufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
-    target_include_directories(
-        finufft_mex
-        PRIVATE ${Matlab_INCLUDE_DIRS} $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
-    )
-    target_link_libraries(finufft_mex PRIVATE finufft Matlab::mex Matlab::mx)
+    # Everything that needs to be linked beyond Matlab::mex
+    set(link_to_cpu finufft Matlab::mx)
 
-    # Ensure mexFunction is exported on Windows so MATLAB can find the gateway
+    matlab_add_mex(
+        NAME finufft_mex
+        SRC "${CMAKE_CURRENT_SOURCE_DIR}/finufft.cpp"
+        OUTPUT_NAME finufft
+        LINK_TO ${link_to_cpu}
+        # R2017b enforces large array dims while keeping the separate complex API
+        R2017b
+    )
+
+    target_compile_definitions(finufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
+    target_include_directories(finufft_mex PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
+
+    # Ensure mexFunction is exported on Windows (typically not needed with matlab_add_mex, but keep if required)
     if(WIN32)
-        target_link_options(finufft_mex PRIVATE "/EXPORT:mexFunction")
+        # target_link_options(finufft_mex PRIVATE "/EXPORT:mexFunction")
     endif()
+
     make_mex_self_contained(finufft_mex)
 endif()
 
-# --- CUDA MEX (already manual, keyword-only) ---
+# --- CUDA MEX via CMake's Matlab API ---
 if(FINUFFT_USE_CUDA)
+    # Locate MATLAB GPU header (mxGPUArray.h)
     find_path(
         Matlab_GPU_INCLUDE_DIR
         NAMES gpu/mxGPUArray.h
@@ -47,36 +53,46 @@ if(FINUFFT_USE_CUDA)
     if(NOT Matlab_GPU_INCLUDE_DIR)
         message(
             FATAL_ERROR
-            "MATLAB GPU header mxGPUArray.h not found. \
-            Ensure Parallel Computing Toolbox is installed, or add its include path."
+            "MATLAB GPU header mxGPUArray.h not found. "
+            "Ensure Parallel Computing Toolbox is installed, or add its include path."
         )
     endif()
-    # Locate MATLAB GPU library (mwgpu)
 
-    add_library(cufinufft_mex MODULE "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu")
-    set_target_properties(
-        cufinufft_mex
-        PROPERTIES
-            PREFIX ""
-            SUFFIX ".${MEX_EXT}"
-            OUTPUT_NAME "cufinufft"
-            POSITION_INDEPENDENT_CODE ON
-            CUDA_SEPARABLE_COMPILATION ON
-            LINKER_LANGUAGE CUDA
-    )
-    target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
-    target_include_directories(cufinufft_mex PRIVATE ${Matlab_INCLUDE_DIRS} ${Matlab_GPU_INCLUDE_DIR})
-    target_link_libraries(cufinufft_mex PRIVATE cufinufft Matlab::mex Matlab::mx CUDA::cudart)
+    # GPU libraries to link (Matlab::mex is added by matlab_add_mex automatically)
+    set(link_to_cuda cufinufft Matlab::mx CUDA::cudart)
+
     if(WIN32)
         set(_MATLAB_GPU_LIB_DIR
             "${Matlab_ROOT_DIR}/toolbox/parallel/gpu/extern/lib/win64/microsoft"
             "${Matlab_ROOT_DIR}/toolbox/distcomp/gpu/extern/lib/win64/microsoft"
             "${Matlab_ROOT_DIR}/extern/lib/win64/microsoft"
+            "${Matlab_ROOT_DIR}/toolbox/parallel/gpu/extern/lib/win64"
+            "${Matlab_ROOT_DIR}/toolbox/distcomp/gpu/extern/lib/win64"
+            "${Matlab_ROOT_DIR}/extern/lib/win64"
         )
         find_library(Matlab_MWGPU_LIBRARY NAMES mwgpu.lib mwgpu PATHS ${_MATLAB_GPU_LIB_DIR} NO_DEFAULT_PATH)
-        target_link_options(cufinufft_mex PRIVATE "/EXPORT:mexFunction")
-        target_link_libraries(cufinufft_mex PRIVATE ${Matlab_MWGPU_LIBRARY})
+        if(Matlab_MWGPU_LIBRARY)
+            list(APPEND link_to_cuda ${Matlab_MWGPU_LIBRARY})
+        endif()
     endif()
+
+    matlab_add_mex(
+        NAME cufinufft_mex
+        SRC "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu"
+        OUTPUT_NAME cufinufft
+        LINK_TO ${link_to_cuda}
+        # R2017b enforces large array dims while keeping the separate complex API
+        R2017b
+    )
+
+    target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
+    target_include_directories(cufinufft_mex PRIVATE ${Matlab_GPU_INCLUDE_DIR})
+
+    # On Windows: export symbol if needed (usually unnecessary)
+    if(WIN32)
+        # target_link_options(cufinufft_mex PRIVATE "/EXPORT:mexFunction")
+    endif()
+
     make_mex_self_contained(cufinufft_mex)
 endif()
 
@@ -118,6 +134,7 @@ if(FINUFFT_MATLAB_INSTALL)
     if(CMAKE_BUILD_TYPE STREQUAL "Release")
         set(CPACK_STRIP_FILES TRUE)
     endif()
+
     # Install MATLAB assets
     install(FILES ${MATLAB_MFILES} DESTINATION matlab)
 
