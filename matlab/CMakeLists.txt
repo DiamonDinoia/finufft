@@ -40,7 +40,7 @@ endif()
 
 # ------------------------------------------------------------
 # --- CUDA MEX (uses 'mexcuda' via matlab_add_mex) ---
-if(FINUFFT_USE_CUDA)
+if(FINUFFT_USE_CUDA AND NOT WIN32)
     find_path(
         Matlab_GPU_INCLUDE_DIR
         NAMES gpu/mxGPUArray.h
@@ -56,35 +56,12 @@ if(FINUFFT_USE_CUDA)
             Ensure Parallel Computing Toolbox is installed, or add its include path."
         )
     endif()
-    if(WIN32)
-        execute_process(
-            COMMAND
-                powershell -NoProfile -ExecutionPolicy Bypass -Command
-                [===[
-                    $f = Get-ChildItem -Path "${Matlab_ROOT_DIR}\*" -Recurse `
-                        -Include 'mxgpu.dll','libmxgpu.dll','mxgpu.lib','libmxgpu.lib','mwgpu.dll','libmwgpu.dll','mwgpu.lib','libmwgpu.lib' `
-                        -File -ErrorAction SilentlyContinue |
-                        Select-Object -First 1 -ExpandProperty FullName
-                    if ($f) { Write-Output $f } else { exit 1 }
-                ]===]
-            OUTPUT_VARIABLE Matlab_MXGPU_LIBRARY
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            RESULT_VARIABLE _ps_status
-        )
-        if(NOT _ps_status EQUAL 0 OR NOT EXISTS "${Matlab_MXGPU_LIBRARY}")
-            message(
-                WARNING
-                "mxgpu.lib not found anywhere under ${Matlab_ROOT_DIR}. Is Parallel Computing Toolbox installed?"
-            )
-        endif()
-        message(STATUS "Found mxgpu lib: ${Matlab_MXGPU_LIBRARY}")
-    endif()
     matlab_add_mex(
         NAME cufinufft_mex
         SRC "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu"
         OUTPUT_NAME "cufinufft"
         R2018a
-        LINK_TO cufinufft Matlab::mex Matlab::mx CUDA::cudart ${Matlab_MXGPU_LIBRARY}
+        LINK_TO cufinufft Matlab::mex Matlab::mx CUDA::cudart
     )
     target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
     target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
@@ -92,7 +69,50 @@ if(FINUFFT_USE_CUDA)
     target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${Matlab_INCLUDE_DIRS}>)
     make_mex_self_contained(cufinufft_mex)
 endif()
+if(FINUFFT_USE_CUDA AND WIN32)
+    find_program(
+        MEXCUDA_EXECUTABLE
+        NAMES mexcuda mexcuda.bat
+        HINTS "${Matlab_ROOT_DIR}/bin/win64"
+        PATH_SUFFIXES bin/win64 NO_CACHE
+    )
+    if(NOT MEXCUDA_EXECUTABLE)
+        message(FATAL_ERROR "mexcuda not found. Set Matlab_ROOT_DIR or add MATLAB/bin/win64 to PATH.")
+    endif()
+    find_path(
+        Matlab_GPU_INCLUDE_DIR
+        NAMES gpu/mxGPUArray.h
+        HINTS
+            "${Matlab_ROOT_DIR}/extern/include"
+            "${Matlab_ROOT_DIR}/toolbox/parallel/gpu/extern/include"
+            "${Matlab_ROOT_DIR}/toolbox/distcomp/gpu/extern/include"
+    )
+    if(NOT Matlab_GPU_INCLUDE_DIR)
+        message(
+            FATAL_ERROR
+            "MATLAB GPU header mxGPUArray.h not found. \
+            Ensure Parallel Computing Toolbox is installed, or add its include path."
+        )
+    endif()
 
+    set(_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/matlab")
+    file(MAKE_DIRECTORY "${_OUT_DIR}")
+
+    # Build the MEX via mexcuda; pass the actual .lib for your NUFFT library
+    add_custom_command(
+        OUTPUT "${_OUT_DIR}/cufinufft.mexw64"
+        COMMAND
+            "${MEXCUDA_EXECUTABLE}" -v -output "${_OUT_DIR}/cufinufft"
+            "$<SHELL_PATH:${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu>" -I "$<SHELL_PATH:${PROJECT_SOURCE_DIR}/include>" -I
+            "$<SHELL_PATH:${Matlab_GPU_INCLUDE_DIR}>" "$<SHELL_PATH:$<TARGET_LINKER_FILE:cufinufft>>" -lcufft -lcudart
+        DEPENDS cufinufft "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu"
+        BYPRODUCTS "${_OUT_DIR}/cufinufft.mexw64"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMENT "Building cufinufft.mexw64 via mexcuda"
+        VERBATIM
+    )
+    add_custom_target(cufinufft_mex ALL DEPENDS "${_OUT_DIR}/cufinufft.mexw64")
+endif()
 # ------------------------------------------------------------
 # MATLAB assets (.m and .docsrc files)
 file(GLOB MATLAB_MFILES "${CMAKE_CURRENT_SOURCE_DIR}/*.m" "${CMAKE_CURRENT_SOURCE_DIR}/*.docsrc")
