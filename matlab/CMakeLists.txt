@@ -14,24 +14,21 @@ function(make_mex_self_contained tgt)
 endfunction()
 
 # ------------------------------------------------------------
-# --- CPU MEX via CMake's Matlab API ---
+# --- CPU MEX (manual target, keyword-only) ---
 if(FINUFFT_USE_CPU)
-    # Everything that needs to be linked beyond Matlab::mex
-    set(link_to_cpu finufft Matlab::mx Matlab::mex)
-
-    matlab_add_mex(
-        NAME finufft_mex
-        SRC "${CMAKE_CURRENT_SOURCE_DIR}/finufft.cpp"
-        OUTPUT_NAME finufft
-        LINK_TO ${link_to_cpu}
-        # R2017b enforces large array dims while keeping the separate complex API
-        R2017b
+    add_library(finufft_mex MODULE "${CMAKE_CURRENT_SOURCE_DIR}/finufft.cpp")
+    set_target_properties(
+        finufft_mex
+        PROPERTIES PREFIX "" SUFFIX ".${MEX_EXT}" OUTPUT_NAME "finufft" POSITION_INDEPENDENT_CODE ON
     )
-
     target_compile_definitions(finufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
-    target_include_directories(finufft_mex PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
+    target_include_directories(
+        finufft_mex
+        PRIVATE ${Matlab_INCLUDE_DIRS} $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+    )
+    target_link_libraries(finufft_mex PRIVATE finufft Matlab::mex Matlab::mx)
 
-    # Ensure mexFunction is exported on Windows (typically not needed with matlab_add_mex, but keep if required)
+    # Ensure mexFunction is exported on Windows so MATLAB can find the gateway
     if(WIN32)
         target_link_options(finufft_mex PRIVATE "/EXPORT:mexFunction")
     endif()
@@ -39,74 +36,70 @@ if(FINUFFT_USE_CPU)
     make_mex_self_contained(finufft_mex)
 endif()
 
-# --- CUDA MEX via CMake's Matlab API ---
+# ------------------------------------------------------------
+# --- CUDA MEX (hybrid: use mexcuda on Windows if available) ---
 if(FINUFFT_USE_CUDA)
-    # Locate MATLAB GPU header (mxGPUArray.h)
-    find_path(
-        Matlab_GPU_INCLUDE_DIR
-        NAMES gpu/mxGPUArray.h
-        HINTS
-            "${Matlab_ROOT_DIR}/extern/include"
-            "${Matlab_ROOT_DIR}/toolbox/parallel/gpu/extern/include"
-            "${Matlab_ROOT_DIR}/toolbox/distcomp/gpu/extern/include"
-    )
-    if(NOT Matlab_GPU_INCLUDE_DIR)
-        message(
-            FATAL_ERROR
-            "MATLAB GPU header mxGPUArray.h not found. "
-            "Ensure Parallel Computing Toolbox is installed, or add its include path."
+    # On Windows, prefer matlab_add_mex (which uses mexcuda under the hood)
+    if(WIN32 AND COMMAND matlab_add_mex)
+        matlab_add_mex(
+            NAME cufinufft_mex
+            SRC "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu"
+            OUTPUT_NAME "cufinufft"
+            R2018a
+            LINK_TO cufinufft
         )
-    endif()
-
-    # Search recursively from ${Matlab_ROOT_DIR} for the MWGPU library
-    if(WIN32)
-        file(GLOB_RECURSE _hits LIST_DIRECTORIES false "${Matlab_ROOT_DIR}/**/mwgpu.lib")
-    elseif(APPLE)
-        file(GLOB_RECURSE _hits LIST_DIRECTORIES false "${Matlab_ROOT_DIR}/**/libmwgpu.dylib")
-    else() # Linux / UNIX
-        file(
-            GLOB_RECURSE _hits
-            LIST_DIRECTORIES false
-            "${Matlab_ROOT_DIR}/**/libmwgpu.so"
-            "${Matlab_ROOT_DIR}/**/libmwgpu.so.*"
-        )
-    endif()
-
-    list(REMOVE_DUPLICATES _hits)
-    if(_hits)
-        list(GET _hits 0 Matlab_MWGPU_LIBRARY)
-        set(Matlab_MWGPU_LIBRARY "${Matlab_MWGPU_LIBRARY}" CACHE FILEPATH "MATLAB MWGPU library")
-        message(STATUS "Found MWGPU: ${Matlab_MWGPU_LIBRARY}")
+        target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
+        # Add your include dirs if your CUDA source needs project headers
+        target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
+        make_mex_self_contained(cufinufft_mex)
     else()
-        message(FATAL_ERROR "Could not find MWGPU under ${Matlab_ROOT_DIR}")
+        # Non-Windows (or no matlab_add_mex): manual CUDA target
+        # Locate MATLAB GPU header (mxGPUArray.h) when building manually
+        find_path(
+            Matlab_GPU_INCLUDE_DIR
+            NAMES gpu/mxGPUArray.h
+            HINTS
+                "${Matlab_ROOT_DIR}/extern/include"
+                "${Matlab_ROOT_DIR}/toolbox/parallel/gpu/extern/include"
+                "${Matlab_ROOT_DIR}/toolbox/distcomp/gpu/extern/include"
+        )
+        if(NOT Matlab_GPU_INCLUDE_DIR)
+            message(
+                FATAL_ERROR
+                "MATLAB GPU header mxGPUArray.h not found. \
+                Ensure Parallel Computing Toolbox is installed, or add its include path."
+            )
+        endif()
+
+        add_library(cufinufft_mex MODULE "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu")
+        set_target_properties(
+            cufinufft_mex
+            PROPERTIES
+                PREFIX ""
+                SUFFIX ".${MEX_EXT}"
+                OUTPUT_NAME "cufinufft"
+                POSITION_INDEPENDENT_CODE ON
+                CUDA_SEPARABLE_COMPILATION ON
+                LINKER_LANGUAGE CUDA
+        )
+        target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
+        target_include_directories(
+            cufinufft_mex
+            PRIVATE ${Matlab_INCLUDE_DIRS} ${Matlab_GPU_INCLUDE_DIR} $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+        )
+        # Link the CUDA runtime + MATLAB mex/mx. Add cuFFT/cuBLAS as needed.
+        target_link_libraries(cufinufft_mex PRIVATE cufinufft Matlab::mex Matlab::mx CUDA::cudart)
+
+        # (Optional) If you hit device-runtime unresolveds on some toolchains, also add:
+        # target_link_libraries(cufinufft_mex PRIVATE CUDA::cudadevrt)
+
+        # Windows manual path (normally not hit in this branch)
+        if(WIN32)
+            target_link_options(cufinufft_mex PRIVATE "/EXPORT:mexFunction")
+        endif()
+
+        make_mex_self_contained(cufinufft_mex)
     endif()
-    # GPU libraries to link (Matlab::mex is added by matlab_add_mex automatically)
-    set(link_to_cuda
-        cufinufft
-        CUDA::cudart
-        Matlab::mex
-        Matlab::mx
-        ${Matlab_MWGPU_LIBRARY}
-    )
-
-    matlab_add_mex(
-        NAME cufinufft_mex
-        SRC "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu"
-        OUTPUT_NAME cufinufft
-        LINK_TO ${link_to_cuda}
-        # R2017b enforces large array dims while keeping the separate complex API
-        R2017b
-    )
-
-    target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
-    target_include_directories(cufinufft_mex PRIVATE ${Matlab_GPU_INCLUDE_DIR})
-
-    # On Windows: export symbol if needed (usually unnecessary)
-    if(WIN32)
-        target_link_options(cufinufft_mex PRIVATE "/EXPORT:mexFunction")
-    endif()
-
-    make_mex_self_contained(cufinufft_mex)
 endif()
 
 # ------------------------------------------------------------
@@ -131,20 +124,23 @@ endif()
 
 # ------------------------------------------------------------
 # RPATH for installed artifacts
+# Option A (macOS): don't overwrite MATLAB's rpaths; allow link-line rpaths to propagate.
 foreach(tgt IN ITEMS finufft_mex cufinufft_mex)
     if(TARGET ${tgt})
         if(APPLE)
-            # Let the loader find deps next to the MEX at runtime
+            # Keep defaults from FindMatlab/Matlab::mex; do not replace with @loader_path
             set_target_properties(
                 ${tgt}
-                PROPERTIES BUILD_WITH_INSTALL_RPATH ON BUILD_RPATH "@loader_path" INSTALL_RPATH "@loader_path"
+                PROPERTIES
+                    BUILD_WITH_INSTALL_RPATH OFF
+                    INSTALL_RPATH
+                        "" # don't clobber
+                    INSTALL_RPATH_USE_LINK_PATH
+                        TRUE # propagate from link dirs/rpaths
             )
-        elseif(UNIX)
-            # Same idea on Linux
-            set_target_properties(
-                ${tgt}
-                PROPERTIES BUILD_WITH_INSTALL_RPATH ON BUILD_RPATH "\$ORIGIN" INSTALL_RPATH "\$ORIGIN"
-            )
+        elseif(UNIX AND NOT APPLE)
+            # Side-by-side loading on Linux
+            set_target_properties(${tgt} PROPERTIES INSTALL_RPATH "\$ORIGIN")
         endif()
     endif()
 endforeach()
