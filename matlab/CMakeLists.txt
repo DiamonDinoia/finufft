@@ -57,20 +57,21 @@ if(FINUFFT_USE_CUDA)
         )
     endif()
     if(WIN32)
-        set(_MATLAB_GPU_LIB_HINTS
-            "${Matlab_ROOT_DIR}/toolbox/parallel/gpu/extern/lib/win64/microsoft"
-            "${Matlab_ROOT_DIR}/toolbox/distcomp/gpu/extern/lib/win64/microsoft"
-            "${Matlab_ROOT_DIR}/extern/lib/win64/microsoft"
+        execute_process(
+            COMMAND
+                powershell -NoProfile -ExecutionPolicy Bypass -Command
+                "$f = Get-ChildItem -Path '${Matlab_ROOT_DIR}\*' -Recurse -Include 'mxgpu.lib','libmxgpu.lib' -File -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName; if ($f) { Write-Output $f } else { exit 1 }"
+            OUTPUT_VARIABLE Matlab_MXGPU_LIBRARY
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE _ps_status
         )
-        find_library(Matlab_MXGPU_LIBRARY NAMES mxgpu libmxgpu HINTS ${_MATLAB_GPU_LIB_HINTS})
-
-        if(NOT Matlab_MXGPU_LIBRARY)
+        if(NOT _ps_status EQUAL 0 OR NOT EXISTS "${Matlab_MXGPU_LIBRARY}")
             message(
                 FATAL_ERROR
-                "MATLAB GPU import library (mxgpu) not found.\n"
-                "Install Parallel Computing Toolbox or set Matlab_MXGPU_LIBRARY to the full path of mxgpu.lib"
+                "mxgpu.lib not found anywhere under ${Matlab_ROOT_DIR}. Is Parallel Computing Toolbox installed?"
             )
         endif()
+        message(STATUS "Found mxgpu lib: ${Matlab_MXGPU_LIBRARY}")
     endif()
     matlab_add_mex(
         NAME cufinufft_mex
