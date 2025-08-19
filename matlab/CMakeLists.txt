@@ -1,5 +1,5 @@
 # Ensure MATLAB is on PATH if provided by setup-matlab
-find_package(Matlab REQUIRED COMPONENTS MEX_COMPILER MX_LIBRARY)
+find_package(Matlab REQUIRED COMPONENTS MEX_COMPILER MX_LIBRARY ENG_LIBRARY)
 
 # MEX extension and common defines
 set(MEX_EXT "${Matlab_MEX_EXTENSION}")
@@ -17,7 +17,7 @@ endfunction()
 # --- CPU MEX via CMake's Matlab API ---
 if(FINUFFT_USE_CPU)
     # Everything that needs to be linked beyond Matlab::mex
-    set(link_to_cpu finufft Matlab::mx)
+    set(link_to_cpu finufft Matlab::mx Matlab::eng Matlab::mex)
 
     matlab_add_mex(
         NAME finufft_mex
@@ -33,7 +33,7 @@ if(FINUFFT_USE_CPU)
 
     # Ensure mexFunction is exported on Windows (typically not needed with matlab_add_mex, but keep if required)
     if(WIN32)
-        # target_link_options(finufft_mex PRIVATE "/EXPORT:mexFunction")
+        target_link_options(finufft_mex PRIVATE "/EXPORT:mexFunction")
     endif()
 
     make_mex_self_contained(finufft_mex)
@@ -58,23 +58,37 @@ if(FINUFFT_USE_CUDA)
         )
     endif()
 
-    # GPU libraries to link (Matlab::mex is added by matlab_add_mex automatically)
-    set(link_to_cuda cufinufft Matlab::mx CUDA::cudart)
-
+    # Search recursively from ${Matlab_ROOT_DIR} for the MWGPU library
     if(WIN32)
-        set(_MATLAB_GPU_LIB_DIR
-            "${Matlab_ROOT_DIR}/toolbox/parallel/gpu/extern/lib/win64/microsoft"
-            "${Matlab_ROOT_DIR}/toolbox/distcomp/gpu/extern/lib/win64/microsoft"
-            "${Matlab_ROOT_DIR}/extern/lib/win64/microsoft"
-            "${Matlab_ROOT_DIR}/toolbox/parallel/gpu/extern/lib/win64"
-            "${Matlab_ROOT_DIR}/toolbox/distcomp/gpu/extern/lib/win64"
-            "${Matlab_ROOT_DIR}/extern/lib/win64"
+        file(GLOB_RECURSE _hits LIST_DIRECTORIES false "${Matlab_ROOT_DIR}/mwgpu.lib")
+    elseif(APPLE)
+        file(GLOB_RECURSE _hits LIST_DIRECTORIES false "${Matlab_ROOT_DIR}/libmwgpu.dylib")
+    else() # Linux / UNIX
+        file(
+            GLOB_RECURSE _hits
+            LIST_DIRECTORIES false
+            "${Matlab_ROOT_DIR}/libmwgpu.so"
+            "${Matlab_ROOT_DIR}/libmwgpu.so.*"
         )
-        find_library(Matlab_MWGPU_LIBRARY NAMES mwgpu.lib mwgpu PATHS ${_MATLAB_GPU_LIB_DIR} NO_DEFAULT_PATH)
-        if(Matlab_MWGPU_LIBRARY)
-            list(APPEND link_to_cuda ${Matlab_MWGPU_LIBRARY})
-        endif()
     endif()
+
+    list(REMOVE_DUPLICATES _hits)
+    if(_hits)
+        list(GET _hits 0 Matlab_MWGPU_LIBRARY)
+        set(Matlab_MWGPU_LIBRARY "${Matlab_MWGPU_LIBRARY}" CACHE FILEPATH "MATLAB MWGPU library")
+        message(STATUS "Found MWGPU: ${Matlab_MWGPU_LIBRARY}")
+    else()
+        message(FATAL_ERROR "Could not find MWGPU under ${Matlab_ROOT_DIR}")
+    endif()
+    # GPU libraries to link (Matlab::mex is added by matlab_add_mex automatically)
+    set(link_to_cuda
+        cufinufft
+        Matlab::mx
+        Matlab::eng
+        CUDA::cudart
+        Matlab::mex
+        ${Matlab_MWGPU_LIBRARY}
+    )
 
     matlab_add_mex(
         NAME cufinufft_mex
@@ -90,7 +104,7 @@ if(FINUFFT_USE_CUDA)
 
     # On Windows: export symbol if needed (usually unnecessary)
     if(WIN32)
-        # target_link_options(cufinufft_mex PRIVATE "/EXPORT:mexFunction")
+        target_link_options(cufinufft_mex PRIVATE "/EXPORT:mexFunction")
     endif()
 
     make_mex_self_contained(cufinufft_mex)
