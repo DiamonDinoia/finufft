@@ -60,7 +60,7 @@ if(FINUFFT_USE_CUDA)
         execute_process(
             COMMAND
                 powershell -NoProfile -ExecutionPolicy Bypass -Command
-                "$f = Get-ChildItem -Path '${Matlab_ROOT_DIR}\*' -Recurse -Include 'mxgpu.lib','libmxgpu.lib' -File -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName; if ($f) { Write-Output $f } else { exit 1 }"
+                "$f = Get-ChildItem -Path '${Matlab_ROOT_DIR}\*' -Recurse -Include 'mxgpu.dll', 'libmxgpu.dll', 'mxgpu.lib','libmxgpu.lib' -File -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName; if ($f) { Write-Output $f } else { exit 1 }"
             OUTPUT_VARIABLE Matlab_MXGPU_LIBRARY
             OUTPUT_STRIP_TRAILING_WHITESPACE
             RESULT_VARIABLE _ps_status
