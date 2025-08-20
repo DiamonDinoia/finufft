@@ -49,7 +49,7 @@ jobs:
           method: 'network'
           linux-local-args: '["--toolkit"]'
           log-file-suffix: '${{ matrix.os }}-cuda-install.txt'
-          sub-packages: ${{ runner.os == 'Linux' && '["nvcc", "cudart"]' || '["nvcc", "cudart", "cufft", "cufft_dev"]' }}
+          sub-packages: ${{ runner.os == 'Linux' && '["nvcc", "cudart"]' || '["nvcc", "cufft", "cufft_dev", "cudart"]' }}
           non-cuda-sub-packages: ${{ runner.os == 'Linux' && '["libcufft","libcufft-dev"]' || '[]' }}
           use-local-cache: 'false'
           use-github-cache: 'false' # cache currently unreliable
@@ -67,9 +67,11 @@ jobs:
         with:
           command: |
             % --- Pass through environment variables into MATLAB's process ---
-            keys = {'PATH','LDFLAGS','CPPFLAGS','LIBRARY_PATH','DYLD_LIBRARY_PATH','CMAKE_PREFIX_PATH','RUNNER_OS','NUMBER_OF_PROCESSORS'};
-            for k = 1:numel(keys), v = getenv(keys{k}); if ~isempty(v), setenv(keys{k}, v); end, end
-            % Ensure MATLAB-provided PATH (if any) is visible too
+            keys = {'PATH','LDFLAGS','CPPFLAGS','LIBRARY_PATH','DYLD_LIBRARY_PATH','CMAKE_PREFIX_PATH','RUNNER_OS','NUMBER_OF_PROCESSORS','MATLAB_ROOT'};
+            for k = 1:numel(keys)
+              v = getenv(keys{k});
+              if ~isempty(v), setenv(keys{k}, v); end
+            end
             mr = getenv('MATLAB_ROOT');
             if ~isempty(mr)
               setenv('PATH', [fullfile(mr,'bin') pathsep getenv('PATH')]);
@@ -78,8 +80,10 @@ jobs:
             % --- CUDA flag only on non-macOS ---
             ismacrunner = contains(getenv('RUNNER_OS'), 'macOS');
             if ~ismacrunner
-              cudaFlag = ['-DFINUFFT_USE_CUDA=ON ', ...
-                          '-DCMAKE_CUDA_ARCHITECTURES=50;60;70;80;89 '];
+              % IMPORTANT: quote the semicolon-separated list so the shell
+              % doesn't treat semicolons as command separators.
+              cudaArch = '"50;60;70;80;89"';
+              cudaFlag = sprintf('-DFINUFFT_USE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=%s ', cudaArch);
               % Optional: show nvcc version for debugging (ignore failure)
               try, system('nvcc --version', '-echo'); catch, end
             else
