@@ -1,13 +1,10 @@
+cmake_minimum_required(VERSION 3.18)
+
 # MATLAB: we also need MAIN_PROGRAM for `matlab -batch`
 find_package(Matlab REQUIRED COMPONENTS MAIN_PROGRAM MEX_COMPILER MX_LIBRARY)
-# Keep this check for the CPU path which uses CMake's matlab_add_mex
-if(NOT COMMAND matlab_add_mex)
-    message(
-        FATAL_ERROR
-        "FindMatlab found, but 'matlab_add_mex' is not available.\n"
-        "Please use CMake >= 3.18 and a MATLAB version that supports mex/mexcuda integration."
-    )
-endif()
+
+# Bring in mexcuda helper (builds via `matlab -batch mexcuda`)
+include("${CMAKE_SOURCE_DIR}/cmake/MexCUDA.cmake")
 
 # MEX extension and common defines
 set(MEX_EXT "${Matlab_MEX_EXTENSION}")
@@ -16,6 +13,15 @@ set(FINUFFT_MEX_DEFS R2008OO)
 # ------------------------------------------------------------
 # --- CPU MEX (uses CMake's 'matlab_add_mex' → mex) ---
 if(FINUFFT_USE_CPU)
+    # Only require CMake's matlab_add_mex when building the CPU mex
+    if(NOT COMMAND matlab_add_mex)
+        message(
+            FATAL_ERROR
+            "FindMatlab found, but 'matlab_add_mex' is not available.\n"
+            "Use CMake >= 3.18 and a MATLAB version that supports the MEX integration."
+        )
+    endif()
+
     matlab_add_mex(
         NAME finufft_mex
         SRC "${CMAKE_CURRENT_SOURCE_DIR}/finufft.cpp"
@@ -23,15 +29,18 @@ if(FINUFFT_USE_CPU)
         R2018a
         LINK_TO finufft
     )
+
     target_compile_definitions(finufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
     target_include_directories(finufft_mex PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
     if(UNIX AND NOT APPLE)
         target_link_options(finufft_mex PRIVATE -static-libstdc++ -static-libgcc)
     endif()
+
+    # RPATH fix for CPU mex (POST_BUILD on real target)
+    make_mex_self_contained(finufft_mex)
 endif()
 
 # ------------------------------------------------------------
-# --- CUDA MEX (now uses 'matlab_add_mexcuda' → matlab -batch mexcuda) ---
 # --- CUDA MEX (uses mexcuda via matlab_add_mexcuda) ---
 if(FINUFFT_USE_CUDA)
     find_path(
@@ -50,6 +59,9 @@ if(FINUFFT_USE_CUDA)
         )
     endif()
 
+    # If you prefer, you can set your own list; module falls back to CMAKE_CUDA_ARCHITECTURES.
+    # set(FINUFFT_CUDA_ARCHS "75;80;86" CACHE STRING "CUDA SM versions for cufinufft_mex")
+
     matlab_add_mexcuda(
         NAME cufinufft_mex
         SRC "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu"
@@ -64,8 +76,12 @@ if(FINUFFT_USE_CUDA)
         LINK_OPTIONS
             $<$<AND:$<BOOL:UNIX>,$<NOT:$<BOOL:APPLE>>>:-static-libstdc++>
             $<$<AND:$<BOOL:UNIX>,$<NOT:$<BOOL:APPLE>>>:-static-libgcc>
+        # Either of the following is fine:
         CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES}
+        # or e.g.: GPU_ARCH 75 80 86
     )
+
+    # RPATH fix for CUDA mex (creates <name>__fixrpath target that depends on the mex)
     make_mex_self_contained(cufinufft_mex)
 endif()
 
@@ -84,18 +100,20 @@ endif()
 
 if(TARGET cufinufft_mex)
     get_target_property(CUFINUFFT_MEX_PATH cufinufft_mex MEX_OUTPUT)
-    get_filename_component(CUFINUFFT_MEX_DIR "${CUFINUFFT_MEX_PATH}" DIRECTORY)
-    add_custom_target(
-        cufinufft_mex_copy
-        ALL
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MATLAB_MFILES} "${CUFINUFFT_MEX_DIR}"
-        DEPENDS cufinufft_mex
-        COMMENT "Copy MATLAB .m files next to cufinufft MEX"
-    )
+    if(CUFINUFFT_MEX_PATH)
+        get_filename_component(CUFINUFFT_MEX_DIR "${CUFINUFFT_MEX_PATH}" DIRECTORY)
+        add_custom_target(
+            cufinufft_mex_copy
+            ALL
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MATLAB_MFILES} "${CUFINUFFT_MEX_DIR}"
+            DEPENDS cufinufft_mex
+            COMMENT "Copy MATLAB .m files next to cufinufft MEX"
+        )
+    endif()
 endif()
+
 # ------------------------------------------------------------
-# RPATH for installed artifacts
-# Keep the behavior for finufft_mex; cufinufft_mex rpath is handled by make_mex_self_contained()
+# RPATH for installed artifacts (CPU target only; CUDA handled by make_mex_self_contained)
 foreach(tgt IN ITEMS finufft_mex)
     if(TARGET ${tgt})
         if(APPLE)

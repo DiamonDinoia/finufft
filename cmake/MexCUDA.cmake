@@ -196,25 +196,46 @@ end
     )
 
     _mexcuda_get_mexext(_mexext)
+    # Fallback to FindMatlab's extension if mexext couldn't be queried at configure time
+    if(NOT _mexext AND DEFINED Matlab_MEX_EXTENSION)
+        set(_mexext "${Matlab_MEX_EXTENSION}")
+    endif()
     if(_mexext)
         set(_mex_output "${_outdir}/${_output_name}.${_mexext}")
     else()
         set(_mex_output "")
+        message(
+            STATUS
+            "[mexcuda] Could not determine mex extension at configure time; continuing with stamp-only dependencies."
+        )
     endif()
 
     # Use a stamp file as the declared OUTPUT to avoid duplicate-output issues in Ninja
     set(_mex_stamp "${_outdir}/${_output_name}.mexbuilt")
 
-    add_custom_command(
-        OUTPUT "${_mex_stamp}"
-        COMMAND "${Matlab_MAIN_PROGRAM}" -batch "run('${_script}')"
-        COMMAND ${CMAKE_COMMAND} -E touch "${_mex_stamp}"
-        BYPRODUCTS "${_mex_output}"
-        DEPENDS ${_abs_srcs} ${_dep_targets}
-        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
-        COMMENT "[mexcuda] Building MEX ${_output_name}"
-        VERBATIM
-    )
+    # Build rule: run MATLAB to build the MEX, then touch the stamp
+    if(_mex_output)
+        add_custom_command(
+            OUTPUT "${_mex_stamp}"
+            COMMAND "${Matlab_MAIN_PROGRAM}" -batch "run('${_script}')"
+            COMMAND ${CMAKE_COMMAND} -E touch "${_mex_stamp}"
+            BYPRODUCTS "${_mex_output}"
+            DEPENDS ${_abs_srcs} ${_dep_targets}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+            COMMENT "[mexcuda] Building MEX ${_output_name}"
+            VERBATIM
+        )
+    else()
+        add_custom_command(
+            OUTPUT "${_mex_stamp}"
+            COMMAND "${Matlab_MAIN_PROGRAM}" -batch "run('${_script}')"
+            COMMAND ${CMAKE_COMMAND} -E touch "${_mex_stamp}"
+            DEPENDS ${_abs_srcs} ${_dep_targets}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+            COMMENT "[mexcuda] Building MEX ${_output_name}"
+            VERBATIM
+        )
+    endif()
 
     add_custom_target(${_target} DEPENDS "${_mex_stamp}")
     add_custom_target(${_target}__build ALL DEPENDS "${_mex_stamp}")
@@ -227,15 +248,12 @@ endfunction()
 
 # Add an rpath-fix target that runs after the MEX is built
 function(make_mex_self_contained tgt)
-    # Supports both: (a) custom mexcuda targets created by matlab_add_mexcuda (with MEX_OUTPUT)
-    # and (b) normal compiled MEX targets (e.g., created by CMake's matlab_add_mex),
-    # where $<TARGET_FILE:tgt> resolves to the built .mex* file.
-
+    # Supports both custom mexcuda targets (with MEX_OUTPUT) and real compiled MEX targets.
     get_target_property(_mex_file ${tgt} MEX_OUTPUT)
     get_target_property(_type ${tgt} TYPE)
 
     if(_mex_file)
-        # mexcuda custom target path — use a separate fix target that depends on the mex target
+        # Custom target path (matlab_add_mexcuda)
         if(APPLE)
             find_program(INSTALL_NAME_TOOL install_name_tool)
             if(INSTALL_NAME_TOOL)
@@ -266,7 +284,13 @@ function(make_mex_self_contained tgt)
             # Windows: nothing to do
         endif()
     else()
-        # Compilable/real target (CPU mex path) — do POST_BUILD on the target's output file
+        # If this isn't a real compilable target (e.g., custom/utility), we cannot use $<TARGET_FILE:>
+        if(NOT _type OR _type STREQUAL "UTILITY")
+            message(STATUS "[mexcuda] Skipping rpath tweak for ${tgt}: no MEX_OUTPUT and non-compilable target.")
+            return()
+        endif()
+
+        # Compilable/real target path (CPU mex via matlab_add_mex)
         if(APPLE)
             find_program(INSTALL_NAME_TOOL install_name_tool)
             if(INSTALL_NAME_TOOL)
