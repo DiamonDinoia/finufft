@@ -43,6 +43,7 @@ endif()
 
 # ------------------------------------------------------------
 # --- CUDA MEX (now uses 'matlab_add_mexcuda' → matlab -batch mexcuda) ---
+# --- CUDA MEX (uses mexcuda via matlab_add_mexcuda) ---
 if(FINUFFT_USE_CUDA)
     find_path(
         Matlab_GPU_INCLUDE_DIR
@@ -60,31 +61,24 @@ if(FINUFFT_USE_CUDA)
         )
     endif()
 
-    # Build the CUDA MEX via our helper
     matlab_add_mexcuda(
         NAME cufinufft_mex
         SRC "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu"
         OUTPUT_NAME "cufinufft"
         R2018a
-        LINK_TO cufinufft Matlab::mex Matlab::mx CUDA::cudart
-        MEX_FLAGS -largeArrayDims -v
-    )
-
-    # Normal CMake properties still apply and will be forwarded to mexcuda:
-    target_compile_definitions(cufinufft_mex INTERFACE ${FINUFFT_MEX_DEFS})
-    target_include_directories(
-        cufinufft_mex
-        INTERFACE
+        INCLUDES
             $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
             $<BUILD_INTERFACE:${Matlab_GPU_INCLUDE_DIR}>
             $<BUILD_INTERFACE:${Matlab_INCLUDE_DIRS}>
+        DEFINES ${FINUFFT_MEX_DEFS}
+        LINK_TO cufinufft Matlab::mex Matlab::mx CUDA::cudart
+        LINK_OPTIONS
+            $<$<AND:$<BOOL:UNIX>,$<NOT:$<BOOL:APPLE>>>:-static-libstdc++>
+            $<$<AND:$<BOOL:UNIX>,$<NOT:$<BOOL:APPLE>>>:-static-libgcc>
+        CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES}
     )
 
-    set_property(TARGET cufinufft_mex PROPERTY CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
-    # Keep your Linux static linking preference; now forwarded into mexcuda:
-    make_mex_self_contained(cufinufft_mex)
-    # Also add rpaths for side-by-side loading (patchelf/@loader_path)
-    # This function is defined in MexCUDA.cmake
+    # Set rpath side-by-side loader tweaks (creates cufinufft_mex__fixrpath target)
     make_mex_self_contained(cufinufft_mex)
 endif()
 
@@ -101,17 +95,17 @@ if(TARGET finufft_mex)
     )
 endif()
 
-# For cufinufft_mex (custom target), use the generated MEX_OUTPUT path
 if(TARGET cufinufft_mex)
     get_target_property(CUFINUFFT_MEX_PATH cufinufft_mex MEX_OUTPUT)
     get_filename_component(CUFINUFFT_MEX_DIR "${CUFINUFFT_MEX_PATH}" DIRECTORY)
-    add_custom_command(
-        TARGET cufinufft_mex
-        POST_BUILD
+    add_custom_target(
+        cufinufft_mex_copy
+        ALL
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MATLAB_MFILES} "${CUFINUFFT_MEX_DIR}"
+        DEPENDS cufinufft_mex
+        COMMENT "Copy MATLAB .m files next to cufinufft MEX"
     )
 endif()
-
 # ------------------------------------------------------------
 # RPATH for installed artifacts
 # Keep the behavior for finufft_mex; cufinufft_mex rpath is handled by make_mex_self_contained()

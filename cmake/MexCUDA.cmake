@@ -1,26 +1,32 @@
 # MexCUDA.cmake — CMake module to build CUDA MEX via MATLAB's `mexcuda`
 #
-# Highlights
-# - Creates a normal-looking CMake target but builds via: `matlab -batch mexcuda ...`.
-# - Respects target properties you set with CMake commands:
-#     * INCLUDE_DIRECTORIES  (from target_include_directories)
-#     * COMPILE_DEFINITIONS  (from target_compile_definitions)
-#     * CUDA_ARCHITECTURES   (from set_property/target_compile_features etc.)
-#       → mapped to `-gpu=sm_XX` flags; explicit GPU_ARCH argument overrides this.
-# - Lets you add libraries/targets to the MEX link via LINK_TO (recommended).
-# - Provides `make_mex_self_contained()` to set rpaths for portable loading.
+# Design
+# - Creates a pair of custom targets:
+#     <name>           : a phony target you can depend on or invoke
+#     <name>__build    : actually builds the MEX by running `matlab -batch` with `mexcuda`
+# - You pass includes/defines/link options/etc. as arguments to the function (no need to call
+#   target_* on <name>). This avoids INTERFACE/custom-target "non-compilable" issues.
+# - Still supports LINK_TO CMake targets or absolute library files (their linker files are expanded).
+# - `CUDA_ARCHITECTURES` can be passed (digits like 75;80;86) or we fall back to CMAKE_CUDA_ARCHITECTURES.
+# - `GPU_ARCH` may also be passed (either "sm_80" or just "80"). If both are given, GPU_ARCH wins.
+# - Exposes MEX_OUTPUT, MEX_OUTDIR, MEX_OUTPUT_NAME properties on the phony <name> target.
+# - Provides make_mex_self_contained(<name>) which creates an extra <name>__fixrpath target that
+#   depends on <name> and adjusts rpaths on the built file (works with custom targets).
 #
 # Usage:
 #   include("${CMAKE_SOURCE_DIR}/cmake/MexCUDA.cmake")
-#
 #   matlab_add_mexcuda(
-#       NAME <target>
-#       SRC <.cu files...>
-#       [OUTPUT_NAME <basename>]   # defaults to NAME
-#       [R2018a]                   # adds -R2018a (unified MEX API)
-#       [GPU_ARCH <sm_80;sm_75;...>]
-#       [LINK_TO <cmake_targets_or_full_lib_paths...>]
-#       [MEX_FLAGS <extra mexcuda flags...>]   # e.g. -largeArrayDims -v -O
+#     NAME <target>
+#     SRC <.cu files...>
+#     [OUTPUT_NAME <basename>]
+#     [R2018a]
+#     [INCLUDES <dirs...>]
+#     [DEFINES <macros...>]
+#     [LINK_OPTIONS <opts...>]
+#     [MEX_FLAGS <flags...>]
+#     [LINK_TO <cmake_targets_or_full_libs...>]
+#     [GPU_ARCH <sm_80;sm_75;... | 80;75;...>]
+#     [CUDA_ARCHITECTURES <80;75;...>]  # falls back to CMAKE_CUDA_ARCHITECTURES if not set
 #   )
 #
 # Example:
@@ -29,17 +35,16 @@
 #     SRC         "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu"
 #     OUTPUT_NAME "cufinufft"
 #     R2018a
+#     INCLUDES    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+#                 $<BUILD_INTERFACE:${Matlab_GPU_INCLUDE_DIR}>
+#                 $<BUILD_INTERFACE:${Matlab_INCLUDE_DIRS}>
+#     DEFINES     R2008OO
 #     LINK_TO     cufinufft Matlab::mex Matlab::mx CUDA::cudart
+#     LINK_OPTIONS $<$<AND:$<BOOL:UNIX>,$<NOT:$<BOOL:APPLE>>>:-static-libstdc++>
+#                  $<$<AND:$<BOOL:UNIX>,$<NOT:$<BOOL:APPLE>>>:-static-libgcc>
+#     CUDA_ARCHITECTURES 75;80;86
 #   )
-#   target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
-#   target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
-#   target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${Matlab_GPU_INCLUDE_DIR}>)
-#   target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${Matlab_INCLUDE_DIRS}>)
 #   make_mex_self_contained(cufinufft_mex)
-#
-# Requirements:
-# - CMake >= 3.18 (generator expressions & CUDA_ARCHITECTURES property)
-# - MATLAB reachable via `find_package(Matlab COMPONENTS MAIN_PROGRAM)`
 #
 cmake_minimum_required(VERSION 3.18)
 
@@ -48,7 +53,7 @@ if(COMMAND matlab_add_mexcuda)
     return()
 endif()
 
-# Find MATLAB launcher
+# MATLAB launcher for -batch
 find_package(Matlab REQUIRED COMPONENTS MAIN_PROGRAM)
 
 # Helper: get mex extension once at configure time.
@@ -62,11 +67,20 @@ function(_mexcuda_get_mexext OUT_VAR)
     set(${OUT_VAR} "${_MEX_EXT}" PARENT_SCOPE)
 endfunction()
 
-# Create a MEX build target that invokes `mexcuda` under MATLAB -batch.
+# Add a CUDA MEX build driven by mexcuda
 function(matlab_add_mexcuda)
     set(_opts R2018a)
     set(_one NAME OUTPUT_NAME)
-    set(_multi SRC LINK_TO GPU_ARCH MEX_FLAGS)
+    set(_multi
+        SRC
+        INCLUDES
+        DEFINES
+        LINK_OPTIONS
+        MEX_FLAGS
+        LINK_TO
+        GPU_ARCH
+        CUDA_ARCHITECTURES
+    )
     cmake_parse_arguments(MAM "${_opts}" "${_one}" "${_multi}" ${ARGN})
 
     if(NOT MAM_NAME)
@@ -85,62 +99,70 @@ function(matlab_add_mexcuda)
     set(_outdir "${CMAKE_CURRENT_BINARY_DIR}/mex")
     file(MAKE_DIRECTORY "${_outdir}")
 
-    # Absolute paths to sources
+    # Absolute sources
     set(_abs_srcs)
     foreach(_s IN LISTS MAM_SRC)
         get_filename_component(_abs "${_s}" ABSOLUTE)
         list(APPEND _abs_srcs "${_abs}")
     endforeach()
 
-    # Build list of link inputs from LINK_TO: use linker file of CMake targets, or pass absolute paths directly.
+    # Resolve LINK_TO: CMake targets → their linker files; absolute files passed through
     set(_link_inputs)
     set(_dep_targets)
     foreach(_lib IN LISTS MAM_LINK_TO)
         if(TARGET ${_lib})
-            list(APPEND _link_inputs "$<SHELL_PATH:$<TARGET_LINKER_FILE:${_lib}>>")
+            list(APPEND _link_inputs "'$<SHELL_PATH:$<TARGET_LINKER_FILE:${_lib}>>'")
             list(APPEND _dep_targets ${_lib})
         elseif(IS_ABSOLUTE "${_lib}")
-            list(APPEND _link_inputs "$<SHELL_PATH:${_lib}>")
+            list(APPEND _link_inputs "'$<SHELL_PATH:${_lib}>'")
         else()
             message(
                 WARNING
-                "matlab_add_mexcuda(${_target}): LINK_TO entry '${_lib}' is neither a CMake target nor an absolute path; ignored. Prefer CMake targets (cufinufft, Matlab::mx, CUDA::cudart) or absolute library files."
+                "matlab_add_mexcuda(${_target}): LINK_TO entry '${_lib}' is neither a CMake target nor an absolute path; ignored."
             )
         endif()
     endforeach()
+    string(JOIN " " _link_inputs_str ${_link_inputs})
 
-    # Generator-expressions for includes and defines captured from target properties
-    set(_inc_expr
-        "$<$<BOOL:$<TARGET_PROPERTY:${_target},INCLUDE_DIRECTORIES>>: -I$<JOIN:$<TARGET_PROPERTY:${_target},INCLUDE_DIRECTORIES>,\\\" -I\\\">> $<$<BOOL:$<TARGET_PROPERTY:${_target},INTERFACE_INCLUDE_DIRECTORIES>>: -I$<JOIN:$<TARGET_PROPERTY:${_target},INTERFACE_INCLUDE_DIRECTORIES>,\\\" -I\\\">>"
-    )
-    set(_def_expr
-        "$<$<BOOL:$<TARGET_PROPERTY:${_target},COMPILE_DEFINITIONS>>: -D$<JOIN:$<TARGET_PROPERTY:${_target},COMPILE_DEFINITIONS>,\\\" -D\\\">> $<$<BOOL:$<TARGET_PROPERTY:${_target},INTERFACE_COMPILE_DEFINITIONS>>: -D$<JOIN:$<TARGET_PROPERTY:${_target},INTERFACE_COMPILE_DEFINITIONS>,\\\" -D\\\">>"
-    )
-    # Also forward target_link_options via LINK_OPTIONS property
-    set(_linkopt_expr
-        "$<$<BOOL:$<TARGET_PROPERTY:${_target},LINK_OPTIONS>>: $<JOIN:$<TARGET_PROPERTY:${_target},LINK_OPTIONS>,\\\" \\"
-        >>
-        $<$<BOOL:$<TARGET_PROPERTY:${_target},INTERFACE_LINK_OPTIONS>>:
-        $<JOIN:$<TARGET_PROPERTY:${_target},INTERFACE_LINK_OPTIONS>,\\\"
-        \\">>"
-    )
-
-    # CUDA architectures — 2 ways: — 2 ways:
-    # 1) Explicit GPU_ARCH passed to the function → produce literal -gpu flags now.
-    # 2) Otherwise, read the target's CUDA_ARCHITECTURES property at generate time and
-    #    translate in MATLAB (strips '-real'/'-virtual', keeps only digits).
-    set(_gpu_flags_str "")
-    foreach(_g IN LISTS MAM_GPU_ARCH)
-        string(APPEND _gpu_flags_str " -gpu=sm_${_g}")
+    # Includes/defines/link options (allow generator expressions; quote paths)
+    set(_inc_flags)
+    foreach(_inc IN LISTS MAM_INCLUDES)
+        list(APPEND _inc_flags "-I'$<SHELL_PATH:${_inc}>'")
     endforeach()
+    string(JOIN " " _inc_flags_str ${_inc_flags})
 
-    # Raw arch list from target property; evaluated by file(GENERATE) at generate-time.
-    set(_cuda_arch_expr "$<JOIN:$<TARGET_PROPERTY:${_target},CUDA_ARCHITECTURES>,;>")
+    set(_def_flags)
+    foreach(_d IN LISTS MAM_DEFINES)
+        list(APPEND _def_flags "-D${_d}")
+    endforeach()
+    string(JOIN " " _def_flags_str ${_def_flags})
 
-    # Extra mex flags
-    string(JOIN " " _mexflags ${MAM_MEX_FLAGS})
+    string(JOIN " " _linkopt_flags_str ${MAM_LINK_OPTIONS})
+    string(JOIN " " _mexflags_str ${MAM_MEX_FLAGS})
 
-    # Compose list strings for MATLAB script
+    # GPU arch flags
+    set(_gpu_flags_str "")
+    if(MAM_GPU_ARCH)
+        foreach(_g IN LISTS MAM_GPU_ARCH)
+            if(_g MATCHES "^sm_\\d+")
+                string(APPEND _gpu_flags_str " -gpu=${_g}")
+            else()
+                string(APPEND _gpu_flags_str " -gpu=sm_${_g}")
+            endif()
+        endforeach()
+    else()
+        set(_archs ${MAM_CUDA_ARCHITECTURES})
+        if(NOT _archs AND CMAKE_CUDA_ARCHITECTURES)
+            set(_archs ${CMAKE_CUDA_ARCHITECTURES})
+        endif()
+        foreach(_g IN LISTS _archs)
+            if(_g MATCHES "^([0-9]+)$")
+                string(APPEND _gpu_flags_str " -gpu=sm_${_g}")
+            endif()
+        endforeach()
+    endif()
+
+    # MATLAB script generation
     set(_script_dir "${CMAKE_CURRENT_BINARY_DIR}/${_target}.mexbuild")
     file(MAKE_DIRECTORY "${_script_dir}")
     set(_script "${_script_dir}/build_${_target}.m")
@@ -153,57 +175,18 @@ function(matlab_add_mexcuda)
     endforeach()
     string(JOIN " " _srcs_str ${_src_quoted})
 
-    # Link inputs string from generator-expr list
-    if(_link_inputs)
-        string(JOIN " " _link_inputs_str ${_link_inputs})
-    else()
-        set(_link_inputs_str "")
-    endif()
-
-    # MATLAB API flag
     set(_api_flag "")
     if(MAM_R2018a)
         set(_api_flag " -R2018a")
     endif()
 
-    # Generate the .m script (we build a 'mexargs' string and eval it)
     file(
         GENERATE OUTPUT
         "${_script}"
         CONTENT
-            "try
-  mexargs = '';
-  mexargs = [mexargs ' -silent -outdir ''${_outdir}'' -output ''${_output_name}''${_api_flag}'];
-  % Forwarded compile defs & include dirs from target properties
-  mexargs = [mexargs ' ${_def_expr} ${_inc_expr} ${_linkopt_expr} ${_mexflags}'];
-  % GPU archs: explicit overrides property-derived
-  gpuExplicit = '${_gpu_flags_str}';
-  mexargs = [mexargs, gpuExplicit];
-  if strlength(strtrim(gpuExplicit)) == 0
-    archesRaw = '${_cuda_arch_expr}';
-    if ~isempty(archesRaw) && ~strcmpi(archesRaw,'native') && ~strcmpi(archesRaw,'all')
-      items = strsplit(archesRaw, ';');
-      for i = 1:numel(items)
-        tok = regexp(items{i}, '(\\d+)', 'tokens', 'once');
-        if ~isempty(tok)
-          mexargs = [mexargs ' -gpu=sm_' tok{1}];
-        end
-      end
-    end
-  end
-  % Build full command line
-  mexcmd = ['mexcuda' mexargs ' ${_link_inputs_str} ${_srcs_str}'];
-  % Uncomment to debug:
-  % disp(mexcmd);
-  eval(mexcmd);
-catch e
-  disp(getReport(e));
-  exit(1);
-end
-"
+            "try\n  mexcmd = ['mexcuda -silent -outdir ''${_outdir}'' -output ''${_output_name}''${_api_flag} ${_gpu_flags_str} ${_def_flags_str} ${_inc_flags_str} ${_linkopt_flags_str} ${_mexflags_str} ${_link_inputs_str} ${_srcs_str}'];\n  % disp(mexcmd);\n  eval(mexcmd);\ncatch e\n  disp(getReport(e));\n  exit(1);\nend\n"
     )
 
-    # Determine MEX extension now for BYPRODUCTS; continue even if unknown.
     _mexcuda_get_mexext(_mexext)
     if(_mexext)
         set(_mex_output "${_outdir}/${_output_name}.${_mexext}")
@@ -221,11 +204,8 @@ end
         VERBATIM
     )
 
-    add_library(${_target} INTERFACE)
-
+    add_custom_target(${_target} DEPENDS "${_mex_output}")
     add_custom_target(${_target}__build ALL DEPENDS "${_mex_output}")
-
-    add_dependencies(${_target} ${_target}__build)
 
     set_target_properties(
         ${_target}
@@ -233,7 +213,7 @@ end
     )
 endfunction()
 
-# Convenience: set rpath so the MEX can find adjacent shared libs without LD_LIBRARY_PATH.
+# Add an rpath-fix target that runs after the MEX is built
 function(make_mex_self_contained tgt)
     get_target_property(_mex_file ${tgt} MEX_OUTPUT)
     if(NOT _mex_file)
@@ -244,14 +224,14 @@ function(make_mex_self_contained tgt)
         return()
     endif()
 
-    set(_builder "${tgt}__build")
     if(APPLE)
         find_program(INSTALL_NAME_TOOL install_name_tool)
         if(INSTALL_NAME_TOOL)
-            add_custom_command(
-                TARGET ${_builder}
-                POST_BUILD
+            add_custom_target(
+                ${tgt}__fixrpath
+                ALL
                 COMMAND ${INSTALL_NAME_TOOL} -add_rpath "@loader_path" "${_mex_file}"
+                DEPENDS ${tgt}
                 COMMENT "[mexcuda] Adding @loader_path rpath to ${_mex_file}"
             )
         else()
@@ -260,10 +240,11 @@ function(make_mex_self_contained tgt)
     elseif(UNIX)
         find_program(PATCHELF patchelf)
         if(PATCHELF)
-            add_custom_command(
-                TARGET ${_builder}
-                POST_BUILD
+            add_custom_target(
+                ${tgt}__fixrpath
+                ALL
                 COMMAND ${PATCHELF} --set-rpath "\$ORIGIN" "${_mex_file}"
+                DEPENDS ${tgt}
                 COMMENT "[mexcuda] Setting RUNPATH=$ORIGIN on ${_mex_file}"
             )
         else()
