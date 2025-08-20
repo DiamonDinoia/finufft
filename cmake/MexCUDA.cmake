@@ -144,7 +144,7 @@ function(matlab_add_mexcuda)
     set(_gpu_flags_str "")
     if(MAM_GPU_ARCH)
         foreach(_g IN LISTS MAM_GPU_ARCH)
-            if(_g MATCHES "^sm_\\d+")
+            if(_g MATCHES "^sm_[0-9]+")
                 string(APPEND _gpu_flags_str " -gpu=${_g}")
             else()
                 string(APPEND _gpu_flags_str " -gpu=sm_${_g}")
@@ -184,19 +184,31 @@ function(matlab_add_mexcuda)
         GENERATE OUTPUT
         "${_script}"
         CONTENT
-            "try\n  mexcmd = ['mexcuda -silent -outdir ''${_outdir}'' -output ''${_output_name}''${_api_flag} ${_gpu_flags_str} ${_def_flags_str} ${_inc_flags_str} ${_linkopt_flags_str} ${_mexflags_str} ${_link_inputs_str} ${_srcs_str}'];\n  % disp(mexcmd);\n  eval(mexcmd);\ncatch e\n  disp(getReport(e));\n  exit(1);\nend\n"
+            "try
+  mexcmd = ['mexcuda -silent -outdir ''${_outdir}'' -output ''${_output_name}''${_api_flag} ${_gpu_flags_str} ${_def_flags_str} ${_inc_flags_str} ${_linkopt_flags_str} ${_mexflags_str} ${_link_inputs_str} ${_srcs_str}'];
+  % disp(mexcmd);
+  eval(mexcmd);
+catch e
+  disp(getReport(e));
+  exit(1);
+end
+"
     )
 
     _mexcuda_get_mexext(_mexext)
     if(_mexext)
         set(_mex_output "${_outdir}/${_output_name}.${_mexext}")
     else()
-        set(_mex_output "${_outdir}/${_output_name}")
+        set(_mex_output "")
     endif()
 
+    # Use a stamp file as the declared OUTPUT to avoid duplicate-output issues in Ninja
+    set(_mex_stamp "${_outdir}/${_output_name}.mexbuilt")
+
     add_custom_command(
-        OUTPUT "${_mex_output}"
+        OUTPUT "${_mex_stamp}"
         COMMAND "${Matlab_MAIN_PROGRAM}" -batch "run('${_script}')"
+        COMMAND ${CMAKE_COMMAND} -E touch "${_mex_stamp}"
         BYPRODUCTS "${_mex_output}"
         DEPENDS ${_abs_srcs} ${_dep_targets}
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
@@ -204,8 +216,8 @@ function(matlab_add_mexcuda)
         VERBATIM
     )
 
-    add_custom_target(${_target} DEPENDS "${_mex_output}")
-    add_custom_target(${_target}__build ALL DEPENDS "${_mex_output}")
+    add_custom_target(${_target} DEPENDS "${_mex_stamp}")
+    add_custom_target(${_target}__build ALL DEPENDS "${_mex_stamp}")
 
     set_target_properties(
         ${_target}
@@ -215,42 +227,72 @@ endfunction()
 
 # Add an rpath-fix target that runs after the MEX is built
 function(make_mex_self_contained tgt)
-    get_target_property(_mex_file ${tgt} MEX_OUTPUT)
-    if(NOT _mex_file)
-        message(
-            WARNING
-            "make_mex_self_contained(${tgt}): target has no MEX_OUTPUT property; did you create it with matlab_add_mexcuda?"
-        )
-        return()
-    endif()
+    # Supports both: (a) custom mexcuda targets created by matlab_add_mexcuda (with MEX_OUTPUT)
+    # and (b) normal compiled MEX targets (e.g., created by CMake's matlab_add_mex),
+    # where $<TARGET_FILE:tgt> resolves to the built .mex* file.
 
-    if(APPLE)
-        find_program(INSTALL_NAME_TOOL install_name_tool)
-        if(INSTALL_NAME_TOOL)
-            add_custom_target(
-                ${tgt}__fixrpath
-                ALL
-                COMMAND ${INSTALL_NAME_TOOL} -add_rpath "@loader_path" "${_mex_file}"
-                DEPENDS ${tgt}
-                COMMENT "[mexcuda] Adding @loader_path rpath to ${_mex_file}"
-            )
+    get_target_property(_mex_file ${tgt} MEX_OUTPUT)
+    get_target_property(_type ${tgt} TYPE)
+
+    if(_mex_file)
+        # mexcuda custom target path — use a separate fix target that depends on the mex target
+        if(APPLE)
+            find_program(INSTALL_NAME_TOOL install_name_tool)
+            if(INSTALL_NAME_TOOL)
+                add_custom_target(
+                    ${tgt}__fixrpath
+                    ALL
+                    COMMAND ${INSTALL_NAME_TOOL} -add_rpath "@loader_path" "${_mex_file}"
+                    DEPENDS ${tgt}
+                    COMMENT "[mexcuda] Adding @loader_path rpath to ${_mex_file}"
+                )
+            else()
+                message(STATUS "install_name_tool not found; skipping rpath tweak for ${tgt}")
+            endif()
+        elseif(UNIX)
+            find_program(PATCHELF patchelf)
+            if(PATCHELF)
+                add_custom_target(
+                    ${tgt}__fixrpath
+                    ALL
+                    COMMAND ${PATCHELF} --set-rpath "\$ORIGIN" "${_mex_file}"
+                    DEPENDS ${tgt}
+                    COMMENT "[mexcuda] Setting RUNPATH=$ORIGIN on ${_mex_file}"
+                )
+            else()
+                message(STATUS "patchelf not found; skipping rpath tweak for ${tgt}")
+            endif()
         else()
-            message(STATUS "install_name_tool not found; skipping rpath tweak for ${tgt}")
-        endif()
-    elseif(UNIX)
-        find_program(PATCHELF patchelf)
-        if(PATCHELF)
-            add_custom_target(
-                ${tgt}__fixrpath
-                ALL
-                COMMAND ${PATCHELF} --set-rpath "\$ORIGIN" "${_mex_file}"
-                DEPENDS ${tgt}
-                COMMENT "[mexcuda] Setting RUNPATH=$ORIGIN on ${_mex_file}"
-            )
-        else()
-            message(STATUS "patchelf not found; skipping rpath tweak for ${tgt}")
+            # Windows: nothing to do
         endif()
     else()
-        # Windows: nothing to do
+        # Compilable/real target (CPU mex path) — do POST_BUILD on the target's output file
+        if(APPLE)
+            find_program(INSTALL_NAME_TOOL install_name_tool)
+            if(INSTALL_NAME_TOOL)
+                add_custom_command(
+                    TARGET ${tgt}
+                    POST_BUILD
+                    COMMAND ${INSTALL_NAME_TOOL} -add_rpath "@loader_path" $<TARGET_FILE:${tgt}>
+                    COMMENT "[mexcuda] Adding @loader_path rpath to $<TARGET_FILE:${tgt}>"
+                )
+            else()
+                message(STATUS "install_name_tool not found; skipping rpath tweak for ${tgt}")
+            endif()
+        elseif(UNIX)
+            find_program(PATCHELF patchelf)
+            if(PATCHELF)
+                add_custom_command(
+                    TARGET ${tgt}
+                    POST_BUILD
+                    COMMAND ${PATCHELF} --set-rpath "\$ORIGIN" $<TARGET_FILE:${tgt}>
+                    COMMENT "[mexcuda] Setting RUNPATH=$ORIGIN on $<TARGET_FILE:${tgt}>"
+                )
+            else()
+                message(STATUS "patchelf not found; skipping rpath tweak for ${tgt}")
+            endif()
+        else()
+            # Windows: nothing to do
+        endif()
     endif()
 endfunction()

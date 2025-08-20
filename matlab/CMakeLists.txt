@@ -66,8 +66,6 @@ if(FINUFFT_USE_CUDA)
             $<$<AND:$<BOOL:UNIX>,$<NOT:$<BOOL:APPLE>>>:-static-libgcc>
         CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES}
     )
-
-    # Set rpath side-by-side loader tweaks (creates cufinufft_mex__fixrpath target)
     make_mex_self_contained(cufinufft_mex)
 endif()
 
