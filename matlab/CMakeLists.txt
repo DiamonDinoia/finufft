@@ -17,7 +17,12 @@ set(FINUFFT_MEX_DEFS R2008OO)
 # LINK_OPTIONS are forwarded by matlab_add_mexcuda
 function(make_mex_self_contained tgt)
     if(UNIX AND NOT APPLE)
-        target_link_options(${tgt} PRIVATE -static-libstdc++ -static-libgcc)
+        get_target_property(_type ${tgt} TYPE)
+        if(_type STREQUAL "INTERFACE_LIBRARY")
+            target_link_options(${tgt} INTERFACE -static-libstdc++ -static-libgcc)
+        else()
+            target_link_options(${tgt} PRIVATE -static-libstdc++ -static-libgcc)
+        endif()
     endif()
 endfunction()
 
@@ -66,10 +71,10 @@ if(FINUFFT_USE_CUDA)
     )
 
     # Normal CMake properties still apply and will be forwarded to mexcuda:
-    target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
+    target_compile_definitions(cufinufft_mex INTERFACE ${FINUFFT_MEX_DEFS})
     target_include_directories(
         cufinufft_mex
-        PRIVATE
+        INTERFACE
             $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
             $<BUILD_INTERFACE:${Matlab_GPU_INCLUDE_DIR}>
             $<BUILD_INTERFACE:${Matlab_INCLUDE_DIRS}>

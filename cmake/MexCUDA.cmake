@@ -111,14 +111,18 @@ function(matlab_add_mexcuda)
 
     # Generator-expressions for includes and defines captured from target properties
     set(_inc_expr
-        "$<$<BOOL:$<TARGET_PROPERTY:${_target},INCLUDE_DIRECTORIES>>: -I$<JOIN:$<TARGET_PROPERTY:${_target},INCLUDE_DIRECTORIES>,\" -I\">>"
+        "$<$<BOOL:$<TARGET_PROPERTY:${_target},INCLUDE_DIRECTORIES>>: -I$<JOIN:$<TARGET_PROPERTY:${_target},INCLUDE_DIRECTORIES>,\\\" -I\\\">> $<$<BOOL:$<TARGET_PROPERTY:${_target},INTERFACE_INCLUDE_DIRECTORIES>>: -I$<JOIN:$<TARGET_PROPERTY:${_target},INTERFACE_INCLUDE_DIRECTORIES>,\\\" -I\\\">>"
     )
     set(_def_expr
-        "$<$<BOOL:$<TARGET_PROPERTY:${_target},COMPILE_DEFINITIONS>>: -D$<JOIN:$<TARGET_PROPERTY:${_target},COMPILE_DEFINITIONS>,\" -D\">>"
+        "$<$<BOOL:$<TARGET_PROPERTY:${_target},COMPILE_DEFINITIONS>>: -D$<JOIN:$<TARGET_PROPERTY:${_target},COMPILE_DEFINITIONS>,\\\" -D\\\">> $<$<BOOL:$<TARGET_PROPERTY:${_target},INTERFACE_COMPILE_DEFINITIONS>>: -D$<JOIN:$<TARGET_PROPERTY:${_target},INTERFACE_COMPILE_DEFINITIONS>,\\\" -D\\\">>"
     )
     # Also forward target_link_options via LINK_OPTIONS property
     set(_linkopt_expr
-        "$<$<BOOL:$<TARGET_PROPERTY:${_target},LINK_OPTIONS>>: $<JOIN:$<TARGET_PROPERTY:${_target},LINK_OPTIONS>,\" \">>"
+        "$<$<BOOL:$<TARGET_PROPERTY:${_target},LINK_OPTIONS>>: $<JOIN:$<TARGET_PROPERTY:${_target},LINK_OPTIONS>,\\\" \\"
+        >>
+        $<$<BOOL:$<TARGET_PROPERTY:${_target},INTERFACE_LINK_OPTIONS>>:
+        $<JOIN:$<TARGET_PROPERTY:${_target},INTERFACE_LINK_OPTIONS>,\\\"
+        \\">>"
     )
 
     # CUDA architectures — 2 ways: — 2 ways:
@@ -217,7 +221,11 @@ end
         VERBATIM
     )
 
-    add_custom_target(${_target} ALL DEPENDS "${_mex_output}")
+    add_library(${_target} INTERFACE)
+
+    add_custom_target(${_target}__build ALL DEPENDS "${_mex_output}")
+
+    add_dependencies(${_target} ${_target}__build)
 
     set_target_properties(
         ${_target}
@@ -236,11 +244,12 @@ function(make_mex_self_contained tgt)
         return()
     endif()
 
+    set(_builder "${tgt}__build")
     if(APPLE)
         find_program(INSTALL_NAME_TOOL install_name_tool)
         if(INSTALL_NAME_TOOL)
             add_custom_command(
-                TARGET ${tgt}
+                TARGET ${_builder}
                 POST_BUILD
                 COMMAND ${INSTALL_NAME_TOOL} -add_rpath "@loader_path" "${_mex_file}"
                 COMMENT "[mexcuda] Adding @loader_path rpath to ${_mex_file}"
@@ -252,7 +261,7 @@ function(make_mex_self_contained tgt)
         find_program(PATCHELF patchelf)
         if(PATCHELF)
             add_custom_command(
-                TARGET ${tgt}
+                TARGET ${_builder}
                 POST_BUILD
                 COMMAND ${PATCHELF} --set-rpath "\$ORIGIN" "${_mex_file}"
                 COMMENT "[mexcuda] Setting RUNPATH=$ORIGIN on ${_mex_file}"
@@ -261,6 +270,6 @@ function(make_mex_self_contained tgt)
             message(STATUS "patchelf not found; skipping rpath tweak for ${tgt}")
         endif()
     else()
-        # Windows: nothing to do; DLL lookup includes module directory by default
+        # Windows: nothing to do
     endif()
 endfunction()
