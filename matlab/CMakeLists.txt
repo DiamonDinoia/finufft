@@ -1,8 +1,6 @@
-project(finufft_matlab LANGUAGES C CXX)
-
-# Ensure MATLAB is on PATH if provided by setup-matlab
-find_package(Matlab REQUIRED COMPONENTS MEX_COMPILER MX_LIBRARY)
-
+# MATLAB: we also need MAIN_PROGRAM for `matlab -batch`
+find_package(Matlab REQUIRED COMPONENTS MAIN_PROGRAM MEX_COMPILER MX_LIBRARY)
+# Keep this check for the CPU path which uses CMake's matlab_add_mex
 if(NOT COMMAND matlab_add_mex)
     message(
         FATAL_ERROR
@@ -15,16 +13,16 @@ endif()
 set(MEX_EXT "${Matlab_MEX_EXTENSION}")
 set(FINUFFT_MEX_DEFS R2008OO)
 
-# Make MEX self-contained where we can
+# Make MEX self-contained where we can (static libstdc++ on Linux);
+# LINK_OPTIONS are forwarded by matlab_add_mexcuda
 function(make_mex_self_contained tgt)
     if(UNIX AND NOT APPLE)
-        # Avoid MATLAB's older libstdc++ at runtime on Linux
         target_link_options(${tgt} PRIVATE -static-libstdc++ -static-libgcc)
     endif()
 endfunction()
 
 # ------------------------------------------------------------
-# --- CPU MEX (uses 'mex' via matlab_add_mex) ---
+# --- CPU MEX (uses CMake's 'matlab_add_mex' → mex) ---
 if(FINUFFT_USE_CPU)
     matlab_add_mex(
         NAME finufft_mex
@@ -39,8 +37,8 @@ if(FINUFFT_USE_CPU)
 endif()
 
 # ------------------------------------------------------------
-# --- CUDA MEX (uses 'mexcuda' via matlab_add_mex) ---
-if(FINUFFT_USE_CUDA AND NOT WIN32)
+# --- CUDA MEX (now uses 'matlab_add_mexcuda' → matlab -batch mexcuda) ---
+if(FINUFFT_USE_CUDA)
     find_path(
         Matlab_GPU_INCLUDE_DIR
         NAMES gpu/mxGPUArray.h
@@ -52,67 +50,39 @@ if(FINUFFT_USE_CUDA AND NOT WIN32)
     if(NOT Matlab_GPU_INCLUDE_DIR)
         message(
             FATAL_ERROR
-            "MATLAB GPU header mxGPUArray.h not found. \
-            Ensure Parallel Computing Toolbox is installed, or add its include path."
+            "MATLAB GPU header mxGPUArray.h not found. "
+            "Ensure Parallel Computing Toolbox is installed, or add its include path."
         )
     endif()
-    matlab_add_mex(
+
+    # Build the CUDA MEX via our helper
+    matlab_add_mexcuda(
         NAME cufinufft_mex
         SRC "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu"
         OUTPUT_NAME "cufinufft"
         R2018a
         LINK_TO cufinufft Matlab::mex Matlab::mx CUDA::cudart
+        MEX_FLAGS -largeArrayDims -v
     )
+
+    # Normal CMake properties still apply and will be forwarded to mexcuda:
     target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
-    target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
-    target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${Matlab_GPU_INCLUDE_DIR}>)
-    target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${Matlab_INCLUDE_DIRS}>)
+    target_include_directories(
+        cufinufft_mex
+        PRIVATE
+            $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+            $<BUILD_INTERFACE:${Matlab_GPU_INCLUDE_DIR}>
+            $<BUILD_INTERFACE:${Matlab_INCLUDE_DIRS}>
+    )
+
+    set_property(TARGET cufinufft_mex PROPERTY CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
+    # Keep your Linux static linking preference; now forwarded into mexcuda:
+    make_mex_self_contained(cufinufft_mex)
+    # Also add rpaths for side-by-side loading (patchelf/@loader_path)
+    # This function is defined in MexCUDA.cmake
     make_mex_self_contained(cufinufft_mex)
 endif()
-if(FINUFFT_USE_CUDA AND WIN32)
-    find_program(
-        MEXCUDA_EXECUTABLE
-        NAMES mexcuda mexcuda.bat
-        HINTS "${Matlab_ROOT_DIR}/bin/win64"
-        PATH_SUFFIXES bin/win64 NO_CACHE
-    )
-    if(NOT MEXCUDA_EXECUTABLE)
-        message(FATAL_ERROR "mexcuda not found. Set Matlab_ROOT_DIR or add MATLAB/bin/win64 to PATH.")
-    endif()
-    find_path(
-        Matlab_GPU_INCLUDE_DIR
-        NAMES gpu/mxGPUArray.h
-        HINTS
-            "${Matlab_ROOT_DIR}/extern/include"
-            "${Matlab_ROOT_DIR}/toolbox/parallel/gpu/extern/include"
-            "${Matlab_ROOT_DIR}/toolbox/distcomp/gpu/extern/include"
-    )
-    if(NOT Matlab_GPU_INCLUDE_DIR)
-        message(
-            FATAL_ERROR
-            "MATLAB GPU header mxGPUArray.h not found. \
-            Ensure Parallel Computing Toolbox is installed, or add its include path."
-        )
-    endif()
 
-    set(_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/matlab")
-    file(MAKE_DIRECTORY "${_OUT_DIR}")
-
-    # Build the MEX via mexcuda; pass the actual .lib for your NUFFT library
-    add_custom_command(
-        OUTPUT "${_OUT_DIR}/cufinufft.mexw64"
-        COMMAND
-            "${MEXCUDA_EXECUTABLE}" -v -output "${_OUT_DIR}/cufinufft"
-            "$<SHELL_PATH:${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu>" -I "$<SHELL_PATH:${PROJECT_SOURCE_DIR}/include>" -I
-            "$<SHELL_PATH:${Matlab_GPU_INCLUDE_DIR}>" "$<SHELL_PATH:$<TARGET_LINKER_FILE:cufinufft>>" -lcufft -lcudart
-        DEPENDS cufinufft "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu"
-        BYPRODUCTS "${_OUT_DIR}/cufinufft.mexw64"
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        COMMENT "Building cufinufft.mexw64 via mexcuda"
-        VERBATIM
-    )
-    add_custom_target(cufinufft_mex ALL DEPENDS "${_OUT_DIR}/cufinufft.mexw64")
-endif()
 # ------------------------------------------------------------
 # MATLAB assets (.m and .docsrc files)
 file(GLOB MATLAB_MFILES "${CMAKE_CURRENT_SOURCE_DIR}/*.m" "${CMAKE_CURRENT_SOURCE_DIR}/*.docsrc")
@@ -125,31 +95,29 @@ if(TARGET finufft_mex)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MATLAB_MFILES} $<TARGET_FILE_DIR:finufft_mex>
     )
 endif()
+
+# For cufinufft_mex (custom target), use the generated MEX_OUTPUT path
 if(TARGET cufinufft_mex)
+    get_target_property(CUFINUFFT_MEX_PATH cufinufft_mex MEX_OUTPUT)
+    get_filename_component(CUFINUFFT_MEX_DIR "${CUFINUFFT_MEX_PATH}" DIRECTORY)
     add_custom_command(
         TARGET cufinufft_mex
         POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MATLAB_MFILES} $<TARGET_FILE_DIR:cufinufft_mex>
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MATLAB_MFILES} "${CUFINUFFT_MEX_DIR}"
     )
 endif()
 
 # ------------------------------------------------------------
 # RPATH for installed artifacts
-# Option A (macOS): don't overwrite MATLAB's rpaths; let them propagate.
-foreach(tgt IN ITEMS finufft_mex cufinufft_mex)
+# Keep the behavior for finufft_mex; cufinufft_mex rpath is handled by make_mex_self_contained()
+foreach(tgt IN ITEMS finufft_mex)
     if(TARGET ${tgt})
         if(APPLE)
             set_target_properties(
                 ${tgt}
-                PROPERTIES
-                    BUILD_WITH_INSTALL_RPATH OFF
-                    INSTALL_RPATH
-                        "" # do not clobber MATLAB rpaths
-                    INSTALL_RPATH_USE_LINK_PATH
-                        TRUE # propagate link-line rpaths
+                PROPERTIES BUILD_WITH_INSTALL_RPATH OFF INSTALL_RPATH "" INSTALL_RPATH_USE_LINK_PATH TRUE
             )
         elseif(UNIX AND NOT APPLE)
-            # Side-by-side loading on Linux (your own shared libs next to the MEX)
             set_target_properties(${tgt} PROPERTIES INSTALL_RPATH "\$ORIGIN" INSTALL_RPATH_USE_LINK_PATH TRUE)
         endif()
     endif()
@@ -172,15 +140,19 @@ if(FINUFFT_MATLAB_INSTALL)
         install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/@gpuArray" DESTINATION matlab)
     endif()
 
-    # Install the MEX targets into matlab/
+    # Install the CPU MEX target as before
     if(TARGET finufft_mex)
         install(TARGETS finufft_mex RUNTIME DESTINATION matlab LIBRARY DESTINATION matlab ARCHIVE DESTINATION matlab)
     endif()
+
+    # Install the CUDA MEX built via matlab_add_mexcuda using the emitted file path
     if(TARGET cufinufft_mex)
-        install(TARGETS cufinufft_mex RUNTIME DESTINATION matlab LIBRARY DESTINATION matlab ARCHIVE DESTINATION matlab)
+        get_target_property(CUFINUFFT_MEX_PATH cufinufft_mex MEX_OUTPUT)
+        if(CUFINUFFT_MEX_PATH)
+            install(FILES "${CUFINUFFT_MEX_PATH}" DESTINATION matlab)
+        endif()
     endif()
 
-    # CPack: produce a clean archive with ONLY top-level "matlab/"
     set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
     if(WIN32)
         set(CPACK_GENERATOR "ZIP")
