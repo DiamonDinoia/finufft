@@ -13,15 +13,6 @@ set(FINUFFT_MEX_DEFS R2008OO)
 # ------------------------------------------------------------
 # --- CPU MEX (uses CMake's 'matlab_add_mex' → mex) ---
 if(FINUFFT_USE_CPU)
-    # Only require CMake's matlab_add_mex when building the CPU mex
-    if(NOT COMMAND matlab_add_mex)
-        message(
-            FATAL_ERROR
-            "FindMatlab found, but 'matlab_add_mex' is not available.\n"
-            "Use CMake >= 3.18 and a MATLAB version that supports the MEX integration."
-        )
-    endif()
-
     matlab_add_mex(
         NAME finufft_mex
         SRC "${CMAKE_CURRENT_SOURCE_DIR}/finufft.cpp"
@@ -36,8 +27,18 @@ if(FINUFFT_USE_CPU)
         target_link_options(finufft_mex PRIVATE -static-libstdc++ -static-libgcc)
     endif()
 
-    # RPATH fix for CPU mex (POST_BUILD on real target)
-    make_mex_self_contained(finufft_mex)
+    # RPATH via CMake (no patchelf)
+    if(APPLE)
+        set_target_properties(
+            finufft_mex
+            PROPERTIES BUILD_RPATH "@loader_path" INSTALL_RPATH "@loader_path" INSTALL_RPATH_USE_LINK_PATH TRUE
+        )
+    elseif(UNIX)
+        set_target_properties(
+            finufft_mex
+            PROPERTIES BUILD_RPATH "\$ORIGIN" INSTALL_RPATH "\$ORIGIN" INSTALL_RPATH_USE_LINK_PATH TRUE
+        )
+    endif()
 endif()
 
 # ------------------------------------------------------------
@@ -61,7 +62,6 @@ if(FINUFFT_USE_CUDA)
 
     # If you prefer, you can set your own list; module falls back to CMAKE_CUDA_ARCHITECTURES.
     # set(FINUFFT_CUDA_ARCHS "75;80;86" CACHE STRING "CUDA SM versions for cufinufft_mex")
-
     matlab_add_mexcuda(
         NAME cufinufft_mex
         SRC "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu"
@@ -74,15 +74,14 @@ if(FINUFFT_USE_CUDA)
         DEFINES ${FINUFFT_MEX_DEFS}
         LINK_TO cufinufft Matlab::mex Matlab::mx CUDA::cudart
         LINK_OPTIONS
+            # Static libstdc++/libgcc on Linux (keep yours)
             $<$<AND:$<BOOL:UNIX>,$<NOT:$<BOOL:APPLE>>>:-static-libstdc++>
             $<$<AND:$<BOOL:UNIX>,$<NOT:$<BOOL:APPLE>>>:-static-libgcc>
-        # Either of the following is fine:
+            # RPATH via linker (no patchelf)
+            $<$<AND:$<BOOL:UNIX>,$<NOT:$<BOOL:APPLE>>>:-Wl,-rpath,\$ORIGIN>
+            $<$<BOOL:APPLE>:-Wl,-rpath,@loader_path>
         CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES}
-        # or e.g.: GPU_ARCH 75 80 86
     )
-
-    # RPATH fix for CUDA mex (creates <name>__fixrpath target that depends on the mex)
-    make_mex_self_contained(cufinufft_mex)
 endif()
 
 # ------------------------------------------------------------
