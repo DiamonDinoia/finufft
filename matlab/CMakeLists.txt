@@ -13,19 +13,6 @@ endif()
 set(MEX_EXT "${Matlab_MEX_EXTENSION}")
 set(FINUFFT_MEX_DEFS R2008OO)
 
-# Make MEX self-contained where we can (static libstdc++ on Linux);
-# LINK_OPTIONS are forwarded by matlab_add_mexcuda
-function(make_mex_self_contained tgt)
-    if(UNIX AND NOT APPLE)
-        get_target_property(_type ${tgt} TYPE)
-        if(_type STREQUAL "INTERFACE_LIBRARY")
-            target_link_options(${tgt} INTERFACE -static-libstdc++ -static-libgcc)
-        else()
-            target_link_options(${tgt} PRIVATE -static-libstdc++ -static-libgcc)
-        endif()
-    endif()
-endfunction()
-
 # ------------------------------------------------------------
 # --- CPU MEX (uses CMake's 'matlab_add_mex' → mex) ---
 if(FINUFFT_USE_CPU)
@@ -38,7 +25,9 @@ if(FINUFFT_USE_CPU)
     )
     target_compile_definitions(finufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
     target_include_directories(finufft_mex PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
-    make_mex_self_contained(finufft_mex)
+    if(UNIX AND NOT APPLE)
+        target_link_options(finufft_mex PRIVATE -static-libstdc++ -static-libgcc)
+    endif()
 endif()
 
 # ------------------------------------------------------------
