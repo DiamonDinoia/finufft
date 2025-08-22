@@ -9,6 +9,10 @@ function(make_mex_self_contained tgt)
         # Avoid MATLAB's older libstdc++ at runtime on Linux (keep your existing policy)
         target_link_options(${tgt} PRIVATE -static-libstdc++ -static-libgcc)
     endif()
+    if(WIN32)
+        # Assist library resolution for MATLAB libs if needed
+        set_property(TARGET ${tgt} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
 endfunction()
 
 # ------------------------------------------------------------
