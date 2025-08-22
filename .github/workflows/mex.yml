@@ -58,37 +58,77 @@ jobs:
           release: R2024a
           products: Parallel_Computing_Toolbox
           cache: true
-      - name: Show mex/mexcuda flags (true dry-run + dump options)
+      - name: Show mex/mexcuda flags (pure print; no build artifacts)
         uses: matlab-actions/run-command@v2
         with:
           command: |
             addpath(genpath('matlab'));
 
-            % Locate MATLAB's CUDA options file for this arch
-            opts = fullfile(matlabroot, 'toolbox', 'parallel', 'gpu', 'extern', 'src', 'mex', computer('arch'), 'nvcc_g++.xml');
+            cuFile = 'matlab/cufinufft.cu';
+            arch   = computer('arch');
+            opts   = fullfile(matlabroot, 'toolbox', 'parallel', 'gpu', 'extern', 'src', 'mex', arch, ...
+                              ispc * "nvcc_msvcpp2022.xml" + ~ispc * "nvcc_g++.xml");
+            if ~exist(opts, 'file')
+              % Fallbacks on Windows in case msvcpp2022 variant isn’t present
+              if ispc
+                cands = { ...
+                  fullfile(matlabroot,'toolbox','parallel','gpu','extern','src','mex',arch,'nvcc_msvcpp.xml'), ...
+                  fullfile(matlabroot,'toolbox','parallel','gpu','extern','src','mex',arch,'nvcc_g++.xml')};
+                for k=1:numel(cands), if exist(cands{k},'file'), opts=cands{k}; break; end, end
+              end
+            end
+
             fprintf('--- Using options file: %s ---\n\n', opts);
 
-            % Print full compile/link commands WITHOUT compiling
-            % (mex honors -n here when called directly with the CUDA options)
-            fprintf('--- mex dry-run (verbose) for matlab/cufinufft.cu ---\n');
-            mex('-largeArrayDims', '-v', '-n', '-f', opts, 'matlab/cufinufft.cu');
+            % Ensure CUDA is visible on PATH (GitHub runners already set this, but be explicit)
+            p = getenv('PATH');
+            if isunix
+              setenv('PATH', sprintf('%s:%s/bin', p, '/usr/local/cuda-12.4'));
+            else
+              setenv('PATH', sprintf('%s;%s\\bin', p, 'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.4'));
+            end
 
-            % Show environment MATLAB will use (PATH, INCLUDE, etc.) as seen by mex
+            % 1) Print nvcc version (if available)
+            try
+              [st, outNV] = system('nvcc --version');
+              fprintf('--- nvcc --version (status %d) ---\n%s\n', st, outNV);
+            catch, end
+
+            % 2) Do a VERBOSE “dry-run” compile: we force nvcc’s own --dryrun so no .o files are created.
+            %    We expect the link to fail because objects don’t exist; we catch and ignore that error.
+            %    We capture the entire mex output (incl. CMDLINE blocks) and print it *even on failure*.
+            try
+              fprintf('--- mex verbose + nvcc --dryrun (expect link failure) ---\n');
+              out = evalc('mex(''-largeArrayDims'',''-v'',''-f'', opts, cuFile, ''NVCC_FLAGS=--dryrun'')');
+              disp(out);
+            catch ME
+              % Print whatever mex produced up to failure
+              if exist('out','var'), disp(out); end
+              fprintf('\n[Info] mex call failed as expected due to --dryrun (no objects). Details:\n%s\n', getReport(ME,'extended'));
+            end
+
+            % 3) Environment snapshot (helpful for reproducing)
             fprintf('\n--- Environment snapshot ---\n');
             fprintf('PATH=%s\n', getenv('PATH'));
-            fprintf('LD_LIBRARY_PATH=%s\n', getenv('LD_LIBRARY_PATH'));
+            if isunix, fprintf('LD_LIBRARY_PATH=%s\n', getenv('LD_LIBRARY_PATH')); end
             fprintf('LIBRARY_PATH=%s\n', getenv('LIBRARY_PATH'));
             fprintf('INCLUDE=%s\n', getenv('INCLUDE'));
 
-            % Dump the CUDA options XML so you can see all defaults/flags
+            % 4) Dump the options XML so defaults/flags are visible in logs
             fprintf('\n--- Contents of %s ---\n', opts);
             try
-              txt = fileread(opts);
-              disp(txt);
+              disp(fileread(opts));
             catch ME
-              fprintf('Could not read options file: %s\n', ME.message);
+              fprintf('Could not read options XML: %s\n', ME.message);
             end
-            mex('-setup','cuda');
+
+            % 5) Best-effort cleanup in case anything was produced
+            try
+              delete('cufinufft.*.mex*');  % if any mex slipped through (shouldn’t with --dryrun)
+            catch, end
+
+            fprintf('\n[Info] mex/mexcuda flags inspection finished (no build artifacts kept).\n');
+
       - name: Configure & Build
         shell: bash
         run: |
