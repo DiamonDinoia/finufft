@@ -70,7 +70,7 @@ if(FINUFFT_USE_CUDA)
         SRC "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu"
         OUTPUT_NAME "cufinufft"
         R2018a
-        LINK_TO cufinufft Matlab::mex Matlab::mx CUDA::cudart CUDA::cufft
+        LINK_TO cufinufft Matlab::mex Matlab::mx CUDA::cudart CUDA::cufft ${Matlab_GPUMEXBINDER_LIB}
     )
 
     target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
@@ -78,9 +78,6 @@ if(FINUFFT_USE_CUDA)
         cufinufft_mex
         PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include> $<BUILD_INTERFACE:${Matlab_GPU_INCLUDE_DIR}>
     )
-
-    # Link the GPU binder explicitly (full path from find_library)
-    target_link_libraries(cufinufft_mex PRIVATE "${Matlab_GPUMEXBINDER_LIB}")
 
     # Linux: export maps for mexFunction and version symbol (mirror mexcuda)
     if(UNIX AND NOT APPLE)
