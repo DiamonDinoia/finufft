@@ -58,25 +58,36 @@ jobs:
           release: R2024a
           products: Parallel_Computing_Toolbox
           cache: true
-      - name: Show mexcuda flags
+      - name: Show mex/mexcuda flags (true dry-run + dump options)
         uses: matlab-actions/run-command@v2
         with:
           command: |
             addpath(genpath('matlab'));
-            % Print what mexcuda would do for cufinufft.cu
-            fprintf('--- mexcuda dry-run (verbose) ---\n');
-            mexcuda('-v','-n','matlab/cufinufft.cu');
 
-            % Optional: keep intermediate response files for inspection
-            fprintf('\n--- mexcuda dry-run with -keep ---\n');
+            % Locate MATLAB's CUDA options file for this arch
+            opts = fullfile(matlabroot, 'toolbox', 'parallel', 'gpu', 'extern', 'src', 'mex', computer('arch'), 'nvcc_g++.xml');
+            fprintf('--- Using options file: %s ---\n\n', opts);
+
+            % Print full compile/link commands WITHOUT compiling
+            % (mex honors -n here when called directly with the CUDA options)
+            fprintf('--- mex dry-run (verbose) for matlab/cufinufft.cu ---\n');
+            mex('-largeArrayDims', '-v', '-n', '-f', opts, 'matlab/cufinufft.cu');
+
+            % Show environment MATLAB will use (PATH, INCLUDE, etc.) as seen by mex
+            fprintf('\n--- Environment snapshot ---\n');
+            fprintf('PATH=%s\n', getenv('PATH'));
+            fprintf('LD_LIBRARY_PATH=%s\n', getenv('LD_LIBRARY_PATH'));
+            fprintf('LIBRARY_PATH=%s\n', getenv('LIBRARY_PATH'));
+            fprintf('INCLUDE=%s\n', getenv('INCLUDE'));
+
+            % Dump the CUDA options XML so you can see all defaults/flags
+            fprintf('\n--- Contents of %s ---\n', opts);
             try
-                mexcuda('-v','-n','-keep','matlab/cufinufft.cu');
+              txt = fileread(opts);
+              disp(txt);
             catch ME
-                disp(getReport(ME));
+              fprintf('Could not read options file: %s\n', ME.message);
             end
-
-            % Show which CUDA setup is active
-            fprintf('\n--- mex setup for CUDA ---\n');
             mex('-setup','cuda');
       - name: Configure & Build
         shell: bash
