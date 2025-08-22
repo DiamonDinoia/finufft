@@ -62,15 +62,9 @@ function(_mexcuda_locate_exe OUT_VAR)
         message(FATAL_ERROR "[mexcuda] Matlab_ROOT_DIR is not set; cannot locate mexcuda.")
     endif()
 
-    # Search typical locations (<matlabroot>/bin and <matlabroot>/bin/<arch>)
-    file(
-        GLOB_RECURSE _CANDIDATES
-        LIST_DIRECTORIES FALSE
-        "${Matlab_ROOT_DIR}/bin/mexcuda*"
-        "${Matlab_ROOT_DIR}/bin/*/mexcuda*"
-    )
+    # Slow, exhaustive search from MATLAB root (as requested). This can take a bit on large installs.
+    file(GLOB_RECURSE _CANDIDATES LIST_DIRECTORIES FALSE FOLLOW_SYMLINKS "${Matlab_ROOT_DIR}/*")
 
-    # Filter to platform-appropriate executable names
     if(WIN32)
         list(FILTER _CANDIDATES INCLUDE REGEX ".*[/\\]mexcuda(\\.bat|\\.exe)$")
     else()
@@ -93,6 +87,7 @@ function(_mexcuda_locate_exe OUT_VAR)
         list(GET _CANDIDATES 0 _BEST)
     endif()
 
+    message(STATUS "[mexcuda] Using mexcuda executable: ${_BEST}")
     set(${OUT_VAR} "${_BEST}" PARENT_SCOPE)
 endfunction()
 
