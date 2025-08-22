@@ -58,7 +58,26 @@ jobs:
           release: R2024a
           products: Parallel_Computing_Toolbox
           cache: true
+      - name: Show mexcuda flags
+        uses: matlab-actions/run-command@v2
+        with:
+          command: |
+            addpath(genpath('matlab'));
+            % Print what mexcuda would do for cufinufft.cu
+            fprintf('--- mexcuda dry-run (verbose) ---\n');
+            mexcuda('-v','-n','matlab/cufinufft.cu');
 
+            % Optional: keep intermediate response files for inspection
+            fprintf('\n--- mexcuda dry-run with -keep ---\n');
+            try
+                mexcuda('-v','-n','-keep','matlab/cufinufft.cu');
+            catch ME
+                disp(getReport(ME));
+            end
+
+            % Show which CUDA setup is active
+            fprintf('\n--- mex setup for CUDA ---\n');
+            mex('-setup','cuda');
       - name: Configure & Build
         shell: bash
         run: |
