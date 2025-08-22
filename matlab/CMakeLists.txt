@@ -1,8 +1,6 @@
 # Ensure MATLAB is on PATH if provided by setup-matlab
 find_package(Matlab REQUIRED COMPONENTS MEX_COMPILER MX_LIBRARY)
 
-# MEX extension and common defines
-set(MEX_EXT "${Matlab_MEX_EXTENSION}")
 set(FINUFFT_MEX_DEFS R2008OO)
 
 # Make MEX self-contained where we can
@@ -31,9 +29,6 @@ endif()
 # ------------------------------------------------------------
 # --- CUDA MEX (uses 'mexcuda' via matlab_add_mex) ---
 if(FINUFFT_USE_CUDA)
-    # CUDA toolkit (cudart, cufft, etc.)
-    find_package(CUDAToolkit REQUIRED) # provides CUDA::cudart, CUDA::cufft, ...
-
     # GPU headers from Parallel Computing Toolbox (mxGPUArray.h)
     find_path(
         Matlab_GPU_INCLUDE_DIR

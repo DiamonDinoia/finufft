@@ -57,7 +57,15 @@ jobs:
           release: R2023a
           products: Parallel_Computing_Toolbox
           cache: false
-
+      - name: Detect mexext via MATLAB
+        uses: matlab-actions/run-command@v2
+        with:
+          command: |
+            me = mexext;                       % e.g., mexa64|mexw64|mexmaci64|mexmaca64
+            fprintf('Detected mexext: %s\n', me);
+            f = fopen(getenv('GITHUB_ENV'), 'a');
+            fprintf(f, 'MEXEXT=%s\n', me);
+            fclose(f);
       - name: Configure & Build
         shell: bash
         run: |
@@ -72,11 +80,28 @@ jobs:
             if command -v nvcc >/dev/null 2>&1; then nvcc --version || true; fi
           fi
 
+          # Map MEXEXT to arch dir for any path logic you might need
+          case "$MEXEXT" in
+          mexa64)    MATLAB_ARCH_DIR=glnxa64 ;;
+          mexw64)    MATLAB_ARCH_DIR=win64 ;;
+          mexmaci64) MATLAB_ARCH_DIR=maci64 ;;
+          mexmaca64) MATLAB_ARCH_DIR=maca64 ;;
+          *) echo "Unknown MEXEXT=$MEXEXT"; exit 1;;
+          esac
+          echo "MEXEXT=$MEXEXT, MATLAB_ARCH_DIR=$MATLAB_ARCH_DIR"
+
+          # On macOS, force Apple Silicon build so we don't accidentally target x86_64
+          EXTRA_MACOS_FLAGS=""
+          if [ "${RUNNER_OS}" = "macOS" ]; then
+          EXTRA_MACOS_FLAGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
+          fi
+
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DFINUFFT_USE_DUCC0=ON \
             -DFINUFFT_USE_OPENMP=ON \
             -DFINUFFT_MATLAB_INSTALL=ON \
+            -DMatlab_MEX_EXTENSION="${MEXEXT}" \
             ${CUDA_FLAG}
 
           cmake --build build --verbose --target finufft_mex --parallel
