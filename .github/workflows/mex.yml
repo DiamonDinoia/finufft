@@ -66,7 +66,7 @@ jobs:
 
           # Enable CUDA if not macOS
           CUDA_FLAG=""
-          if [ "${RUNNER_OS}" != "MacOS" ]; then
+          if [ "${RUNNER_OS}" != "macOS" ]; then
             CUDA_FLAG="-DFINUFFT_USE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=50;60;70;80;89"
             # Optional: show nvcc version for debugging
             if command -v nvcc >/dev/null 2>&1; then nvcc --version || true; fi
@@ -81,7 +81,7 @@ jobs:
 
           cmake --build build --verbose --target finufft_mex --parallel
 
-          if [ "${RUNNER_OS}" != "MacOS" ]; then
+          if [ "${RUNNER_OS}" != "macOS" ]; then
             cmake --build build --verbose --target cufinufft_mex --parallel
           fi
 

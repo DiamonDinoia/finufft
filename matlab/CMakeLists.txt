@@ -8,7 +8,7 @@ set(FINUFFT_MEX_DEFS R2008OO)
 # Make MEX self-contained where we can
 function(make_mex_self_contained tgt)
     if(UNIX AND NOT APPLE)
-        # Avoid MATLAB's older libstdc++ at runtime on Linux
+        # Avoid MATLAB's older libstdc++ at runtime on Linux (keep your existing policy)
         target_link_options(${tgt} PRIVATE -static-libstdc++ -static-libgcc)
     endif()
 endfunction()
@@ -31,6 +31,10 @@ endif()
 # ------------------------------------------------------------
 # --- CUDA MEX (uses 'mexcuda' via matlab_add_mex) ---
 if(FINUFFT_USE_CUDA)
+    # CUDA toolkit (cudart, cufft, etc.)
+    find_package(CUDAToolkit REQUIRED) # provides CUDA::cudart, CUDA::cufft, ...
+
+    # GPU headers from Parallel Computing Toolbox (mxGPUArray.h)
     find_path(
         Matlab_GPU_INCLUDE_DIR
         NAMES gpu/mxGPUArray.h
@@ -42,20 +46,66 @@ if(FINUFFT_USE_CUDA)
     if(NOT Matlab_GPU_INCLUDE_DIR)
         message(
             FATAL_ERROR
-            "MATLAB GPU header mxGPUArray.h not found. \
-            Ensure Parallel Computing Toolbox is installed, or add its include path."
+            "MATLAB GPU header mxGPUArray.h not found. "
+            "Ensure Parallel Computing Toolbox is installed, or add its include path."
         )
     endif()
+
+    # GPU MEX binder (provides mxInitGPU / mxGPU* symbols)
+    if(WIN32)
+        find_library(Matlab_GPUMEXBINDER_LIB NAMES gpumexbinder HINTS "${Matlab_ROOT_DIR}/extern/lib/win64/microsoft")
+    else() # Linux
+        find_library(
+            Matlab_GPUMEXBINDER_LIB
+            NAMES mwgpumexbinder
+            HINTS "${Matlab_ROOT_DIR}/bin/glnxa64" "${Matlab_ROOT_DIR}/extern/bin/glnxa64"
+        )
+    endif()
+    if(NOT Matlab_GPUMEXBINDER_LIB)
+        message(FATAL_ERROR "MATLAB GPU binder library not found (gpumexbinder/mwgpumexbinder).")
+    endif()
+
     matlab_add_mex(
         NAME cufinufft_mex
         SRC "${CMAKE_CURRENT_SOURCE_DIR}/cufinufft.cu"
         OUTPUT_NAME "cufinufft"
         R2018a
-        LINK_TO cufinufft Matlab::mex Matlab::mx CUDA::cudart
+        LINK_TO cufinufft Matlab::mex Matlab::mx CUDA::cudart CUDA::cufft
     )
+
     target_compile_definitions(cufinufft_mex PRIVATE ${FINUFFT_MEX_DEFS})
-    target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
-    target_include_directories(cufinufft_mex PRIVATE $<BUILD_INTERFACE:${Matlab_GPU_INCLUDE_DIR}>)
+    target_include_directories(
+        cufinufft_mex
+        PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include> $<BUILD_INTERFACE:${Matlab_GPU_INCLUDE_DIR}>
+    )
+
+    # Link the GPU binder explicitly (full path from find_library)
+    target_link_libraries(cufinufft_mex PRIVATE "${Matlab_GPUMEXBINDER_LIB}")
+
+    # Linux: export maps for mexFunction and version symbol (mirror mexcuda)
+    if(UNIX AND NOT APPLE)
+        set(MEX_FUNCTION_MAP "${Matlab_ROOT_DIR}/extern/lib/glnxa64/mexFunction.map")
+        set(MEX_EXPORTS_MAP "${Matlab_ROOT_DIR}/extern/lib/glnxa64/c_exportsmexfileversion.map")
+        if(EXISTS "${MEX_FUNCTION_MAP}")
+            target_link_options(cufinufft_mex PRIVATE "-Wl,--version-script,${MEX_FUNCTION_MAP}")
+        endif()
+        if(EXISTS "${MEX_EXPORTS_MAP}")
+            target_link_options(cufinufft_mex PRIVATE "-Wl,--version-script,${MEX_EXPORTS_MAP}")
+        endif()
+        # Ensure MATLAB shared libs can be found/linked at build and run time
+        target_link_directories(
+            cufinufft_mex
+            PRIVATE "${Matlab_ROOT_DIR}/bin/glnxa64" "${Matlab_ROOT_DIR}/extern/bin/glnxa64"
+        )
+    endif()
+
+    # Windows: export the standard MEX entry points (mexcuda also does this)
+    if(WIN32)
+        target_link_options(cufinufft_mex PRIVATE /EXPORT:mexFunction /EXPORT:mexfilerequiredapiversion)
+        # Assist library resolution for MATLAB libs if needed
+        target_link_directories(cufinufft_mex PRIVATE "${Matlab_ROOT_DIR}/extern/lib/win64/microsoft")
+    endif()
+
     make_mex_self_contained(cufinufft_mex)
 endif()
 
