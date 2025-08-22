@@ -58,7 +58,7 @@ jobs:
           release: R2024a
           products: Parallel_Computing_Toolbox
           cache: true
-      - name: Show mex/mexcuda flags (pure print; no build artifacts)
+      - name: Show mex/mexcuda flags (compile + verbose)
         uses: matlab-actions/run-command@v2
         with:
           command: |
@@ -68,7 +68,7 @@ jobs:
             arch   = computer('arch');
             optsDir = fullfile(matlabroot, 'toolbox', 'parallel', 'gpu', 'extern', 'src', 'mex', arch);
 
-            % Choose options XML (no string arithmetic!)
+            % Choose the options XML per platform
             if ispc
               candidates = { ...
                 'nvcc_msvcpp2022.xml', ...
@@ -78,7 +78,7 @@ jobs:
               };
             else
               candidates = {'nvcc_g++.xml'};
-            endf
+            end
 
             opts = '';
             for k = 1:numel(candidates)
@@ -93,7 +93,7 @@ jobs:
             fprintf('--- Options dir: %s ---\n', optsDir);
             fprintf('--- Options file chosen: %s ---\n\n', opts);
 
-            % Ensure CUDA on PATH (best-effort; runners usually set this)
+            % Ensure CUDA is on PATH (best-effort)
             try
               pth = getenv('PATH');
               if isunix
@@ -109,32 +109,14 @@ jobs:
             catch
             end
 
-            % nvcc version (if available)
+            % Show nvcc version if present
             try
               [st, outNV] = system('nvcc --version');
               fprintf('--- nvcc --version (status %d) ---\n%s\n', st, outNV);
             catch
             end
 
-            % VERBOSE print-only: pass nvcc --dryrun through NVCC_FLAGS
-            % We expect link to fail due to no objects; catch and continue.
-            try
-              fprintf('--- mex verbose + nvcc --dryrun (expect link failure) ---\n');
-              out = evalc('mex(''-largeArrayDims'',''-v'',''-f'', opts, cuFile)');
-              disp(out);
-            catch ME
-              if exist('out','var'), disp(out); end
-              fprintf('\n[Info] mex call failed as expected due to --dryrun. Details:\n%s\n', getReport(ME,'extended'));
-            end
-
-            % Environment snapshot
-            fprintf('\n--- Environment snapshot ---\n');
-            fprintf('PATH=%s\n', getenv('PATH'));
-            if isunix, fprintf('LD_LIBRARY_PATH=%s\n', getenv('LD_LIBRARY_PATH')); end
-            fprintf('LIBRARY_PATH=%s\n', getenv('LIBRARY_PATH'));
-            fprintf('INCLUDE=%s\n', getenv('INCLUDE'));
-
-            % Dump options XML (shows defaults and toolchain logic)
+            % Dump the options XML so defaults/flags are visible in logs
             if ~isempty(opts)
               fprintf('\n--- Contents of %s ---\n', opts);
               try
@@ -144,12 +126,27 @@ jobs:
               end
             end
 
-            % Cleanup just in case
-            try, delete('cufinufft.*.mex*'); catch, end
+            % Environment snapshot
+            fprintf('\n--- Environment snapshot ---\n');
+            fprintf('PATH=%s\n', getenv('PATH'));
+            if isunix, fprintf('LD_LIBRARY_PATH=%s\n', getenv('LD_LIBRARY_PATH')); end
+            fprintf('LIBRARY_PATH=%s\n', getenv('LIBRARY_PATH'));
+            fprintf('INCLUDE=%s\n', getenv('INCLUDE'));
 
-            fprintf('\n[Info] mex/mexcuda flags inspection finished (no build artifacts kept).\n');
+            % ===== Compile (verbose) =====
+            fprintf('\n--- mex compile (verbose) for %s ---\n', cuFile);
+            mex('-largeArrayDims', '-v', '-f', opts, cuFile);
 
+            % Show where the produced MEX landed
+            fprintf('\n--- which(''cufinufft'') ---\n');
+            w = which('cufinufft', '-all');
+            if isempty(w)
+              fprintf('cufinufft not found on MATLAB path.\n');
+            else
+              if iscell(w), disp(sprintf('%s\n', w{:})); else, disp(w); end
+            end
 
+            fprintf('\n[Info] mex/mexcuda flags + compile finished.\n');
       - name: Configure & Build
         shell: bash
         run: |
