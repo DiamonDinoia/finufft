@@ -1,22 +1,6 @@
 name: Build MATLAB MEX
 
-on:
-  # Weekly schedule (Sunday 00:00 UTC)
-  schedule:
-    - cron: "0 0 * * 0"
-
-  # On tag push
-  push:
-    tags:
-      - 'v*'
-  # Manual trigger (with an optional deploy toggle)
-  workflow_dispatch:
-    inputs:
-      deploy:
-        description: "Deploy after build?"
-        type: boolean
-        required: false
-        default: false
+on: [push, pull_request]
 jobs:
   mex:
     strategy:
@@ -95,10 +79,10 @@ jobs:
             -DFINUFFT_MATLAB_INSTALL=ON \
             ${CUDA_FLAG}
 
-          cmake --build build --target finufft_mex --parallel
+          cmake --build build --verbose --target finufft_mex --parallel
 
           if [ "${RUNNER_OS}" != "MacOS" ]; then
-            cmake --build build --target cufinufft_mex --parallel
+            cmake --build build --verbose --target cufinufft_mex --parallel
           fi
 
       - name: Run fullmathtest.m
