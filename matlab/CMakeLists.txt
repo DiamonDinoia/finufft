@@ -78,24 +78,6 @@ if(FINUFFT_USE_CUDA)
         cufinufft_mex
         PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include> $<BUILD_INTERFACE:${Matlab_GPU_INCLUDE_DIR}>
     )
-
-    # Linux: export maps for mexFunction and version symbol (mirror mexcuda)
-    if(UNIX AND NOT APPLE)
-        set(MEX_FUNCTION_MAP "${Matlab_ROOT_DIR}/extern/lib/glnxa64/mexFunction.map")
-        set(MEX_EXPORTS_MAP "${Matlab_ROOT_DIR}/extern/lib/glnxa64/c_exportsmexfileversion.map")
-        if(EXISTS "${MEX_FUNCTION_MAP}")
-            target_link_options(cufinufft_mex PRIVATE "-Wl,--version-script,${MEX_FUNCTION_MAP}")
-        endif()
-        if(EXISTS "${MEX_EXPORTS_MAP}")
-            target_link_options(cufinufft_mex PRIVATE "-Wl,--version-script,${MEX_EXPORTS_MAP}")
-        endif()
-        # Ensure MATLAB shared libs can be found/linked at build and run time
-        target_link_directories(
-            cufinufft_mex
-            PRIVATE "${Matlab_ROOT_DIR}/bin/glnxa64" "${Matlab_ROOT_DIR}/extern/bin/glnxa64"
-        )
-    endif()
-
     # Windows: export the standard MEX entry points (mexcuda also does this)
     if(WIN32)
         target_link_options(cufinufft_mex PRIVATE /EXPORT:mexFunction /EXPORT:mexfilerequiredapiversion)
