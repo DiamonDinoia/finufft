@@ -66,68 +66,89 @@ jobs:
 
             cuFile = 'matlab/cufinufft.cu';
             arch   = computer('arch');
-            opts   = fullfile(matlabroot, 'toolbox', 'parallel', 'gpu', 'extern', 'src', 'mex', arch, ...
-                              ispc * "nvcc_msvcpp2022.xml" + ~ispc * "nvcc_g++.xml");
-            if ~exist(opts, 'file')
-              % Fallbacks on Windows in case msvcpp2022 variant isn’t present
-              if ispc
-                cands = { ...
-                  fullfile(matlabroot,'toolbox','parallel','gpu','extern','src','mex',arch,'nvcc_msvcpp.xml'), ...
-                  fullfile(matlabroot,'toolbox','parallel','gpu','extern','src','mex',arch,'nvcc_g++.xml')};
-                for k=1:numel(cands), if exist(cands{k},'file'), opts=cands{k}; break; end, end
+            optsDir = fullfile(matlabroot, 'toolbox', 'parallel', 'gpu', 'extern', 'src', 'mex', arch);
+
+            % Choose options XML (no string arithmetic!)
+            if ispc
+              candidates = { ...
+                'nvcc_msvcpp2022.xml', ...
+                'nvcc_msvcpp.xml', ...
+                'nvcc_msvcpp2022+clang.xml', ...
+                'nvcc_g++.xml' ...
+              };
+            else
+              candidates = {'nvcc_g++.xml'};
+            end
+
+            opts = '';
+            for k = 1:numel(candidates)
+              p = fullfile(optsDir, candidates{k});
+              if exist(p, 'file')
+                opts = p;
+                break
               end
             end
 
-            fprintf('--- Using options file: %s ---\n\n', opts);
+            fprintf('--- MATLAB arch: %s ---\n', arch);
+            fprintf('--- Options dir: %s ---\n', optsDir);
+            fprintf('--- Options file chosen: %s ---\n\n', opts);
 
-            % Ensure CUDA is visible on PATH (GitHub runners already set this, but be explicit)
-            p = getenv('PATH');
-            if isunix
-              setenv('PATH', sprintf('%s:%s/bin', p, '/usr/local/cuda-12.4'));
-            else
-              setenv('PATH', sprintf('%s;%s\\bin', p, 'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.4'));
+            % Ensure CUDA on PATH (best-effort; runners usually set this)
+            try
+              pth = getenv('PATH');
+              if isunix
+                if ~contains(pth, '/usr/local/cuda-12.4/bin')
+                  setenv('PATH', [pth, ':/usr/local/cuda-12.4/bin']);
+                end
+              else
+                cudaBin = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin';
+                if ~contains(lower(pth), lower(cudaBin))
+                  setenv('PATH', [pth, ';', cudaBin]);
+                end
+              end
+            catch
             end
 
-            % 1) Print nvcc version (if available)
+            % nvcc version (if available)
             try
               [st, outNV] = system('nvcc --version');
               fprintf('--- nvcc --version (status %d) ---\n%s\n', st, outNV);
-            catch, end
+            catch
+            end
 
-            % 2) Do a VERBOSE “dry-run” compile: we force nvcc’s own --dryrun so no .o files are created.
-            %    We expect the link to fail because objects don’t exist; we catch and ignore that error.
-            %    We capture the entire mex output (incl. CMDLINE blocks) and print it *even on failure*.
+            % VERBOSE print-only: pass nvcc --dryrun through NVCC_FLAGS
+            % We expect link to fail due to no objects; catch and continue.
             try
               fprintf('--- mex verbose + nvcc --dryrun (expect link failure) ---\n');
               out = evalc('mex(''-largeArrayDims'',''-v'',''-f'', opts, cuFile, ''NVCC_FLAGS=--dryrun'')');
               disp(out);
             catch ME
-              % Print whatever mex produced up to failure
               if exist('out','var'), disp(out); end
-              fprintf('\n[Info] mex call failed as expected due to --dryrun (no objects). Details:\n%s\n', getReport(ME,'extended'));
+              fprintf('\n[Info] mex call failed as expected due to --dryrun. Details:\n%s\n', getReport(ME,'extended'));
             end
 
-            % 3) Environment snapshot (helpful for reproducing)
+            % Environment snapshot
             fprintf('\n--- Environment snapshot ---\n');
             fprintf('PATH=%s\n', getenv('PATH'));
             if isunix, fprintf('LD_LIBRARY_PATH=%s\n', getenv('LD_LIBRARY_PATH')); end
             fprintf('LIBRARY_PATH=%s\n', getenv('LIBRARY_PATH'));
             fprintf('INCLUDE=%s\n', getenv('INCLUDE'));
 
-            % 4) Dump the options XML so defaults/flags are visible in logs
-            fprintf('\n--- Contents of %s ---\n', opts);
-            try
-              disp(fileread(opts));
-            catch ME
-              fprintf('Could not read options XML: %s\n', ME.message);
+            % Dump options XML (shows defaults and toolchain logic)
+            if ~isempty(opts)
+              fprintf('\n--- Contents of %s ---\n', opts);
+              try
+                disp(fileread(opts));
+              catch ME
+                fprintf('Could not read options XML: %s\n', ME.message);
+              end
             end
 
-            % 5) Best-effort cleanup in case anything was produced
-            try
-              delete('cufinufft.*.mex*');  % if any mex slipped through (shouldn’t with --dryrun)
-            catch, end
+            % Cleanup just in case
+            try, delete('cufinufft.*.mex*'); catch, end
 
             fprintf('\n[Info] mex/mexcuda flags inspection finished (no build artifacts kept).\n');
+
 
       - name: Configure & Build
         shell: bash
