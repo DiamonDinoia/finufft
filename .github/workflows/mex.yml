@@ -80,9 +80,9 @@ jobs:
           # Ensure MATLAB is on PATH if provided by setup-matlab
           if [ -n "${MATLAB_ROOT:-}" ]; then export PATH="${MATLAB_ROOT}/bin:${PATH}"; fi
 
-          # Enable CUDA only on Linux
+          # Enable CUDA if not macOS
           CUDA_FLAG=""
-          if [ "${RUNNER_OS}" == "Linux" ]; then
+          if [ "${RUNNER_OS}" != "MacOS" ]; then
             CUDA_FLAG="-DFINUFFT_USE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=50;60;70;80;89"
             # Optional: show nvcc version for debugging
             if command -v nvcc >/dev/null 2>&1; then nvcc --version || true; fi
@@ -97,7 +97,7 @@ jobs:
 
           cmake --build build --target finufft_mex --parallel
 
-          if [ "${RUNNER_OS}" == "Linux" ]; then
+          if [ "${RUNNER_OS}" != "MacOS" ]; then
             cmake --build build --target cufinufft_mex --parallel
           fi
 
