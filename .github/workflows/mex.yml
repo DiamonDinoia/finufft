@@ -78,7 +78,7 @@ jobs:
               };
             else
               candidates = {'nvcc_g++.xml'};
-            end
+            endf
 
             opts = '';
             for k = 1:numel(candidates)
@@ -120,7 +120,7 @@ jobs:
             % We expect link to fail due to no objects; catch and continue.
             try
               fprintf('--- mex verbose + nvcc --dryrun (expect link failure) ---\n');
-              out = evalc('mex(''-largeArrayDims'',''-v'',''-f'', opts, cuFile, ''NVCC_FLAGS=--dryrun'')');
+              out = evalc('mex(''-largeArrayDims'',''-v'',''-f'', opts, cuFile)');
               disp(out);
             catch ME
               if exist('out','var'), disp(out); end
