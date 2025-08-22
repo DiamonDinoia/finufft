@@ -1,9 +1,9 @@
-# MexCUDA.cmake — CMake module to build CUDA MEX via MATLAB's `mexcuda`
+# MexCUDA.cmake — CMake module to build CUDA MEX via the `mexcuda` executable
 #
 # Design
 # - Creates a pair of custom targets:
 #     <name>           : a phony target you can depend on or invoke
-#     <name>__build    : actually builds the MEX by running `matlab -batch` with `mexcuda`
+#     <name>__build    : actually builds the MEX by running the `mexcuda` executable directly
 # - You pass includes/defines/link options/etc. as arguments to the function (no need to call
 #   target_* on <name>). This avoids INTERFACE/custom-target "non-compilable" issues.
 # - Still supports LINK_TO CMake targets or absolute library files (their linker files are expanded).
@@ -53,21 +53,50 @@ if(COMMAND matlab_add_mexcuda)
     return()
 endif()
 
-# MATLAB launcher for -batch
-find_package(Matlab REQUIRED COMPONENTS MAIN_PROGRAM)
+# MATLAB root is required to locate the mexcuda executable.
+find_package(Matlab REQUIRED) # (No need for MAIN_PROGRAM when invoking mexcuda directly)
 
-# Helper: get mex extension once at configure time.
-function(_mexcuda_get_mexext OUT_VAR)
-    execute_process(
-        COMMAND "${Matlab_MAIN_PROGRAM}" -batch "try, fprintf('%s', mexext); catch, exit(1); end"
-        OUTPUT_VARIABLE _MEX_EXT
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET
+# Helper: locate the mexcuda executable under Matlab_ROOT_DIR using GLOB_RECURSE
+function(_mexcuda_locate_exe OUT_VAR)
+    if(NOT Matlab_ROOT_DIR)
+        message(FATAL_ERROR "[mexcuda] Matlab_ROOT_DIR is not set; cannot locate mexcuda.")
+    endif()
+
+    # Search typical locations (<matlabroot>/bin and <matlabroot>/bin/<arch>)
+    file(
+        GLOB_RECURSE _CANDIDATES
+        LIST_DIRECTORIES FALSE
+        "${Matlab_ROOT_DIR}/bin/mexcuda*"
+        "${Matlab_ROOT_DIR}/bin/*/mexcuda*"
     )
-    set(${OUT_VAR} "${_MEX_EXT}" PARENT_SCOPE)
+
+    # Filter to platform-appropriate executable names
+    if(WIN32)
+        list(FILTER _CANDIDATES INCLUDE REGEX ".*[/\\]mexcuda(\\.bat|\\.exe)$")
+    else()
+        list(FILTER _CANDIDATES INCLUDE REGEX ".*[/\\]mexcuda$")
+    endif()
+
+    if(NOT _CANDIDATES)
+        message(FATAL_ERROR "[mexcuda] Could not find 'mexcuda' under Matlab_ROOT_DIR='${Matlab_ROOT_DIR}'.")
+    endif()
+
+    # Prefer an architecture subdir (e.g., glnxa64/win64/maci64) if present
+    set(_BEST "")
+    foreach(_c IN LISTS _CANDIDATES)
+        if(_c MATCHES "/bin/[^/\\]+/mexcuda(\\.bat|\\.exe)?$")
+            set(_BEST "${_c}")
+            break()
+        endif()
+    endforeach()
+    if(NOT _BEST)
+        list(GET _CANDIDATES 0 _BEST)
+    endif()
+
+    set(${OUT_VAR} "${_BEST}" PARENT_SCOPE)
 endfunction()
 
-# Add a CUDA MEX build driven by mexcuda
+# Add a CUDA MEX build driven by mexcuda (invoked directly)
 function(matlab_add_mexcuda)
     set(_opts R2018a)
     set(_one NAME OUTPUT_NAME)
@@ -111,10 +140,10 @@ function(matlab_add_mexcuda)
     set(_dep_targets)
     foreach(_lib IN LISTS MAM_LINK_TO)
         if(TARGET ${_lib})
-            list(APPEND _link_inputs "'$<SHELL_PATH:$<TARGET_LINKER_FILE:${_lib}>>'")
+            list(APPEND _link_inputs "$<SHELL_PATH:$<TARGET_LINKER_FILE:${_lib}>>")
             list(APPEND _dep_targets ${_lib})
         elseif(IS_ABSOLUTE "${_lib}")
-            list(APPEND _link_inputs "'$<SHELL_PATH:${_lib}>'")
+            list(APPEND _link_inputs "$<SHELL_PATH:${_lib}>")
         else()
             message(
                 WARNING
@@ -122,32 +151,29 @@ function(matlab_add_mexcuda)
             )
         endif()
     endforeach()
-    string(JOIN " " _link_inputs_str ${_link_inputs})
 
-    # Includes/defines/link options (allow generator expressions; quote paths)
+    # Includes/defines/link options (allow generator expressions)
     set(_inc_flags)
     foreach(_inc IN LISTS MAM_INCLUDES)
-        list(APPEND _inc_flags "-I'$<SHELL_PATH:${_inc}>'")
+        list(APPEND _inc_flags "-I$<SHELL_PATH:${_inc}>")
     endforeach()
-    string(JOIN " " _inc_flags_str ${_inc_flags})
 
     set(_def_flags)
     foreach(_d IN LISTS MAM_DEFINES)
         list(APPEND _def_flags "-D${_d}")
     endforeach()
-    string(JOIN " " _def_flags_str ${_def_flags})
 
-    string(JOIN " " _linkopt_flags_str ${MAM_LINK_OPTIONS})
-    string(JOIN " " _mexflags_str ${MAM_MEX_FLAGS})
+    set(_linkopt_flags ${MAM_LINK_OPTIONS})
+    set(_mexflags ${MAM_MEX_FLAGS})
 
     # GPU arch flags
-    set(_gpu_flags_str "")
+    set(_gpu_flags)
     if(MAM_GPU_ARCH)
         foreach(_g IN LISTS MAM_GPU_ARCH)
             if(_g MATCHES "^sm_[0-9]+")
-                string(APPEND _gpu_flags_str " -gpu=${_g}")
+                list(APPEND _gpu_flags "-gpu=${_g}")
             else()
-                string(APPEND _gpu_flags_str " -gpu=sm_${_g}")
+                list(APPEND _gpu_flags "-gpu=sm_${_g}")
             endif()
         endforeach()
     else()
@@ -157,67 +183,52 @@ function(matlab_add_mexcuda)
         endif()
         foreach(_g IN LISTS _archs)
             if(_g MATCHES "^([0-9]+)$")
-                string(APPEND _gpu_flags_str " -gpu=sm_${_g}")
+                list(APPEND _gpu_flags "-gpu=sm_${_g}")
             endif()
         endforeach()
     endif()
 
-    # MATLAB script generation
-    set(_script_dir "${CMAKE_CURRENT_BINARY_DIR}/${_target}.mexbuild")
-    file(MAKE_DIRECTORY "${_script_dir}")
-    set(_script "${_script_dir}/build_${_target}.m")
+    # Locate mexcuda executable
+    _mexcuda_locate_exe(_mexcuda_exe)
 
-    # Build source list (single-quoted absolute paths)
-    set(_src_quoted)
-    foreach(_s IN LISTS _abs_srcs)
-        string(REPLACE "'" "''" _s_q "${_s}")
-        list(APPEND _src_quoted "'${_s_q}'")
-    endforeach()
-    string(JOIN " " _srcs_str ${_src_quoted})
-
-    set(_api_flag "")
-    if(MAM_R2018a)
-        set(_api_flag " -R2018a")
-    endif()
-
-    file(
-        GENERATE OUTPUT
-        "${_script}"
-        CONTENT
-            "try
-  mexcmd = ['mexcuda -silent -outdir ''${_outdir}'' -output ''${_output_name}''${_api_flag} ${_gpu_flags_str} ${_def_flags_str} ${_inc_flags_str} ${_linkopt_flags_str} ${_mexflags_str} ${_link_inputs_str} ${_srcs_str}'];
-  % disp(mexcmd);
-  eval(mexcmd);
-catch e
-  disp(getReport(e));
-  exit(1);
-end
-"
-    )
-
-    _mexcuda_get_mexext(_mexext)
-    # Fallback to FindMatlab's extension if mexext couldn't be queried at configure time
-    if(NOT _mexext AND DEFINED Matlab_MEX_EXTENSION)
-        set(_mexext "${Matlab_MEX_EXTENSION}")
-    endif()
-    if(_mexext)
-        set(_mex_output "${_outdir}/${_output_name}.${_mexext}")
+    # Determine expected output (if FindMatlab provided the extension)
+    set(_mex_output "")
+    if(DEFINED Matlab_MEX_EXTENSION)
+        set(_mex_output "${_outdir}/${_output_name}.${Matlab_MEX_EXTENSION}")
     else()
-        set(_mex_output "")
-        message(
-            STATUS
-            "[mexcuda] Could not determine mex extension at configure time; continuing with stamp-only dependencies."
-        )
+        message(STATUS "[mexcuda] Matlab_MEX_EXTENSION not provided; continuing with stamp-only dependencies.")
     endif()
 
     # Use a stamp file as the declared OUTPUT to avoid duplicate-output issues in Ninja
     set(_mex_stamp "${_outdir}/${_output_name}.mexbuilt")
 
-    # Build rule: run MATLAB to build the MEX, then touch the stamp
+    # Build command: invoke mexcuda directly
+    set(_cmd_args
+        -silent
+        -outdir
+        "$<SHELL_PATH:${_outdir}>"
+        -output
+        "${_output_name}"
+    )
+    if(MAM_R2018a)
+        list(APPEND _cmd_args -R2018a)
+    endif()
+    list(
+        APPEND
+        _cmd_args
+        ${_gpu_flags}
+        ${_def_flags}
+        ${_inc_flags}
+        ${_linkopt_flags}
+        ${_mexflags}
+        ${_link_inputs}
+        ${_abs_srcs}
+    )
+
     if(_mex_output)
         add_custom_command(
             OUTPUT "${_mex_stamp}"
-            COMMAND "${Matlab_MAIN_PROGRAM}" -batch "run('${_script}')"
+            COMMAND "${_mexcuda_exe}" ${_cmd_args}
             COMMAND ${CMAKE_COMMAND} -E touch "${_mex_stamp}"
             BYPRODUCTS "${_mex_output}"
             DEPENDS ${_abs_srcs} ${_dep_targets}
@@ -228,7 +239,7 @@ end
     else()
         add_custom_command(
             OUTPUT "${_mex_stamp}"
-            COMMAND "${Matlab_MAIN_PROGRAM}" -batch "run('${_script}')"
+            COMMAND "${_mexcuda_exe}" ${_cmd_args}
             COMMAND ${CMAKE_COMMAND} -E touch "${_mex_stamp}"
             DEPENDS ${_abs_srcs} ${_dep_targets}
             WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
