@@ -9,7 +9,7 @@ jobs:
         include:
           - os: ubuntu-22.04
           - os: windows-2022
-#         - os: macos-13 this requires matlab openmp to work.
+          - os: macos-13
           - os: macos-14
           - os: macos-15
     name: ${{ matrix.os }}
