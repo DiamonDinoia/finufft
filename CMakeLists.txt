@@ -56,9 +56,8 @@ endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-include(utils)
-include(toolchain)
-include(setupOpenMP)
+include(utils) # finds cmake/utils.cmake
+include(toolchain) # finds cmake/toolchain.cmake
 
 # Versions for dependencies
 set(CPM_DOWNLOAD_VERSION "0.42.0" CACHE STRING "Version of CPM.cmake to use")
