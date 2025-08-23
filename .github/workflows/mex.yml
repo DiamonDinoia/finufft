@@ -100,7 +100,7 @@ jobs:
             -DFINUFFT_USE_OPENMP=ON \
             -DFINUFFT_MATLAB_INSTALL=ON \
             -DMatlab_MEX_EXTENSION="${MEXEXT}" \
-            -DCMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" \
+            -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" \
             ${CUDA_FLAG}
 
           cmake --build build --verbose --target finufft_mex --parallel
