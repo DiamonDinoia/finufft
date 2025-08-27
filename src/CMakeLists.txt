@@ -7,6 +7,8 @@ endif()
 
 set(FINUFFT_FFTW_LIBRARIES)
 include(setupXSIMD)
+include(setupMDSpan)
+include(setupPolyfit)
 if(FINUFFT_USE_DUCC0)
     include(setupDUCC)
 else()
@@ -52,7 +54,7 @@ endif()
 
 target_link_libraries(finufft PUBLIC $<BUILD_INTERFACE:${FINUFFT_FFTLIBS}>)
 
-target_link_libraries(finufft PRIVATE $<BUILD_INTERFACE:xsimd>)
+target_link_libraries(finufft PRIVATE $<BUILD_INTERFACE:xsimd std::mdspan polyfit>)
 if(FINUFFT_USE_OPENMP)
     target_link_libraries(finufft PRIVATE OpenMP::OpenMP_CXX)
     if(NOT FINUFFT_STATIC_LINKING)

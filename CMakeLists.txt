@@ -66,6 +66,8 @@ set(XSIMD_VERSION "13.2.0" CACHE STRING "Version of xsimd to use")
 set(DUCC0_VERSION "ducc0_0_38_0" CACHE STRING "Version of ducc0 to use")
 set(CUDA11_CCCL_VERSION "2.8.5" CACHE STRING "Version of FINUFFT-cccl for cuda 11 to use")
 set(CUDA12_CCCL_VERSION "3.0.2" CACHE STRING "Version of FINUFFT-cccl for cuda 12 to use")
+set(POLYFIT_VERSION "main" CACHE STRING "Version of Polyfit to use")
+set(MDSPAN_VERSION "mdspan-0.6.0" CACHE STRING "Version of mdspan to use")
 
 mark_as_advanced(
     CPM_DOWNLOAD_VERSION
@@ -75,6 +77,8 @@ mark_as_advanced(
     DUCC0_VERSION
     CUDA11_CCCL_VERSION
     CUDA12_CCCL_VERSION
+    POLYFIT_VERSION
+    MDSPAN_VERSION
 )
 
 include(setupCPM)
