@@ -93,7 +93,7 @@ def deconv_log_boost_batch(
     Here Φ(ω) is the Fourier transform of the ES kernel. This estimates the
     deconvolution amplification factor at the grid edge ω=π/σ.
     """
-    xi_edge = 1.0 / max(sigma, 1e-12)
+    xi_edge = 1.0 / sigma
     omega = omega_scale * xi_edge
     x, w = leggauss_cached(nquad)
     s = np.sqrt(np.clip(1.0 - x * x, 0.0, None))
@@ -127,7 +127,7 @@ def kappa_cap_for_dtype(dtype: str) -> float:
     """
     u = unit_roundoff(dtype)
     m = 5e-2 if ("32" in dtype.lower() or "single" in dtype.lower() or dtype.lower() == "f4") else 1e-4
-    return m / max(u, 1e-300)
+    return m / u
 
 
 # --------------------------------------------------------------------------------------
@@ -213,7 +213,9 @@ def find_min_degree(
         fail = fitd
         if fitd >= max_degree:
             return None
-        fitd = min(max_degree, max(fitd + 1, 2 * fitd))
+        fitd = max(fitd + 1, 2 * fitd)
+        if fitd > max_degree:
+            fitd = max_degree
 
     # Tight binary search between (fail, succ)
     lo = fail if fail is not None else 2
@@ -238,14 +240,14 @@ def find_min_degree(
 
 def phi_sigma(sigma: float) -> float:
     """Helper: φ(σ) = sqrt(1 - 1/max(σ,1)), used in w prediction."""
-    return math.sqrt(max(1.0 - 1.0 / max(sigma, 1.0 + 1e-12), 1e-12))
+    return math.sqrt(max(1.0 - 1.0 / sigma, 0.0))
 
 
 def predict_w(eps: float, sigma: float, *, C: float = 4.0, b: float = 0.5) -> int:
     """Analytic rule of thumb for kernel width: w ≈ log(C/eps) / (π φ(σ)) + bias b.
     Rounded up to an integer before SIMD alignment.
     """
-    return int(math.ceil(math.log(max(C / eps, 1.0)) / (math.pi * phi_sigma(sigma)) + b))
+    return int(math.ceil(math.log(C / eps) / (math.pi * phi_sigma(sigma)) + b))
 
 
 def beta_from_ws(w: int, sigma: float, *, gamma: float = 0.97) -> float:
@@ -344,9 +346,9 @@ def fit_es_kernel_for_tol(
       5) Score each candidate using rank_cost + fft_cost and keep winners.
     """
     # Sampling density for LS and for the uniform error check; increased for tight tolerances
-    t = -math.log10(max(tol, 1e-300))
+    t = -math.log10(tol)
     os_ls = 2 + (1 if t > 10 else 0) + (1 if t > 13 else 0) + (1 if t > 14 else 0)
-    ns_err = int(min(800, 24 + 10 * t))
+    ns_err = int(24 + 10 * t)
     if ns_err % 2 == 1:
         ns_err += 1
 
@@ -458,7 +460,7 @@ def fit_es_kernel_for_tol(
                     num_floor=float(num_floor),
                     total_err=float(err + num_floor),
                     log_cond=float(lb),
-                    cond=float(min(math.exp(min(lb, 700.0)), 1e308)),
+                    cond=float(math.exp(lb) if lb < 700.0 else 1e308),
                 )
 
                 # Track best per-σ
@@ -495,7 +497,7 @@ def fit_es_kernel_for_tol(
             continue
         w_drop = (last.w - res.w) >= notable_dw
         d_drop = (last.d - res.d) >= notable_dd
-        obj_improve = res.obj_cost <= last.obj_cost * (1.0 - max(min(notable_impr, 0.95), 0.0))
+        obj_improve = res.obj_cost <= last.obj_cost * (1.0 - notable_impr)
         if w_drop or d_drop or obj_improve:
             notable.append(res)
             last = res
