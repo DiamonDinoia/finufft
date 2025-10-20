@@ -1,0 +1,124 @@
+name: Auto-Update CHANGELOG
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Locate last CHANGELOG commit
+        id: last
+        shell: bash
+        run: |
+          last="$(git log --pretty=format:%H -- CHANGELOG | head -n1 || true)"
+          echo "sha=$last" >> "$GITHUB_OUTPUT"
+
+      - name: Collect SHAs since last CHANGELOG change
+        id: collect
+        if: ${{ steps.last.outputs.sha != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          since="${{ steps.last.outputs.sha }}"
+          git log "${since}..HEAD" --pretty=format:%H > shas.txt
+          if [ ! -s shas.txt ]; then
+            echo "sha_csv=" >> "$GITHUB_OUTPUT"
+          else
+            paste -sd, shas.txt | tee sha.csv
+            echo "sha_csv=$(cat sha.csv)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run SecondBrain on those SHAs
+        id: secondbrain
+        if: ${{ steps.collect.outputs.sha_csv != '' }}
+        uses: mcasperson/SecondBrain@main
+        with:
+          prompt: |
+            You are a changelog formatter. From the git diffs for the provided SHAs, output ONLY valid JSON:
+            {"entries":[{"type":"Added|Changed|Fixed|Removed","description":"...", "author":"Name","pr":123,"date":"YYYY-MM-DD"}]}
+            - Derive PR numbers from commit subjects like "(#123)" or merge commits.
+            - Use the PR title as description when available; otherwise use commit subject trimmed.
+            - Use commit author name; if a merge commit has a PR author, prefer that.
+            - Use the commit author date (YYYY-MM-DD).
+            - No prose, no markdown, JSON only.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          owner: ${{ github.repository_owner }}
+          repo: ${{ github.event.repository.name }}
+          sha: ${{ steps.collect.outputs.sha_csv }}
+
+      - name: Build markdown bullets
+        id: mkbullets
+        if: ${{ steps.collect.outputs.sha_csv != '' }}
+        shell: bash
+        run: |
+          printf '%s\n' '${{ steps.secondbrain.outputs.response }}' > structured.json
+          jq -r '
+            .entries
+            | sort_by(.date)
+            | .[]
+            | "* \(.type) \(.description) (\(.author) #\(.pr))"
+          ' structured.json > new_entries.md || :
+          if [ ! -s new_entries.md ]; then
+            echo "has_entries=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_entries=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Append under Master after last bullet
+        if: ${{ steps.mkbullets.outputs.has_entries == 'true' }}
+        shell: bash
+        run: |
+          if ! awk '/^Master \(/{found=1} END{exit !found}' CHANGELOG; then
+            printf 'Master (working towards v2.5.0), %s\n\n' "$(date +%-m/%-d/%y)" | cat - CHANGELOG > CHANGELOG.new
+            mv CHANGELOG.new CHANGELOG
+          fi
+          awk '
+            BEGIN{inm=0; lastb=0}
+            /^Master \(/ {inm=1; print; next}
+            inm && /^\* / {lastb=NR; print; next}
+            inm && !/^\* / && lastb && /^V[[:space:]]/ {
+              while((getline l < "new_entries.md")>0) print l; close("new_entries.md");
+              inm=0; lastb=0; print; next
+            }
+            { print }
+            END{
+              if(inm){
+                while((getline l < "new_entries.md")>0) print l; close("new_entries.md");
+              }
+            }
+          ' CHANGELOG > CHANGELOG.tmp
+          mv CHANGELOG.tmp CHANGELOG
+
+      - name: Preview new entries and diff
+        if: ${{ steps.mkbullets.outputs.has_entries == 'true' }}
+        shell: bash
+        run: |
+          echo "::group::New CHANGELOG entries"
+          cat new_entries.md
+          echo "::endgroup::"
+          echo "::group::Diff of CHANGELOG"
+          git --no-pager diff --unified=0 -- CHANGELOG || true
+          echo "::endgroup::"
+
+      - name: Create PR
+        if: ${{ steps.mkbullets.outputs.has_entries == 'true' }}
+        uses: peter-evans/create-pull-request@v7
+        with:
+          add-paths: CHANGELOG
+          branch: create-changelog-update
+          branch-suffix: short-commit-hash
+          commit-message: "chore: update CHANGELOG"
+          title: "Update CHANGELOG"
+          body: "Append latest entries under Master."
+          delete-branch: true
