@@ -101,6 +101,8 @@ jobs:
           - { os: macos-15, toolchain: llvm }
           - { os: macos-15, toolchain: gcc-15 }
 
+          - { os: macos-15-intel, toolchain: llvm }
+          - { os: macos-15-intel, toolchain: gcc-15 }
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
