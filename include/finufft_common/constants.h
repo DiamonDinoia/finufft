@@ -15,5 +15,9 @@ inline constexpr double ARRAYWIDCEN_GROWFRAC = 0.1;
 inline constexpr double PI                   = 3.141592653589793238462643383279502884;
 // 1 / (2 * PI)
 inline constexpr double INV_2PI = 0.159154943091895335768883763372514362;
+
+// Horner polynomial degree bounds for ES kernel approximation
+inline constexpr int MIN_NC = 4;
+inline constexpr int MAX_NC = 19;
 } // namespace common
 } // namespace finufft

@@ -10,18 +10,16 @@
 #include <finufft/finufft_core.h>
 #include <finufft_spread_opts.h>
 
-/* Note: the legacy TF_OMIT_* timing flags were removed.  Timing helpers
-   previously controlled by these flags have been purged from the codebase.
+/* Note: the legacy TF_OMIT_* timing flags were removed. Timing helpers
+    previously controlled by these flags have been purged from the codebase.
+    The kerevalmeth/kerpad knobs remain in the public API structs solely for
+    ABI compatibility and are ignored by the implementation (Horner is always
+    used).
 */
 
 namespace finufft {
 namespace spreadinterp {
 
-// things external (spreadinterp) interface needs...
-template<typename T>
-FINUFFT_EXPORT_TEST int spreadinterp(UBIGINT N1, UBIGINT N2, UBIGINT N3, T *data_uniform,
-                                     UBIGINT M, const T *kx, const T *ky, const T *kz,
-                                     T *data_nonuniform, const finufft_spread_opts &opts);
 template<typename T>
 FINUFFT_EXPORT_TEST int setup_spreader(finufft_spread_opts &opts, T eps, double upsampfac,
                                        int kerevalmeth, int debug, int showwarn, int dim,
@@ -38,9 +36,11 @@ int spreadinterpSorted(
     const UBIGINT N3, T *data_uniform, const UBIGINT M, const T *FINUFFT_RESTRICT kx,
     const T *FINUFFT_RESTRICT ky, const T *FINUFFT_RESTRICT kz,
     T *FINUFFT_RESTRICT data_nonuniform, const finufft_spread_opts &opts, int did_sort,
-    bool adjoint, const T *horner_coeffs);
-template<typename T> T evaluate_kernel(T x, const finufft_spread_opts &opts);
-template<typename T> T evaluate_kernel_horner(T x, const finufft_spread_opts &opts);
+    bool adjoint, const T *horner_coeffs, int nc);
+
+template<typename T>
+T evaluate_kernel_runtime(T x, int ns, int nc, const T *horner_coeffs,
+                          const finufft_spread_opts &opts);
 
 } // namespace spreadinterp
 } // namespace finufft

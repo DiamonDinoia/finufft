@@ -46,6 +46,11 @@ Master (working towards v2.5.0), 11/25/25
   spread/interp implementation; Horner scalar/piecewise evaluation is used
   exclusively. Updated documentation, examples, and Fortran/C headers to reflect these
   changes.
+* Clarified Horner-only behavior across the API surface: `setup_spreader`
+  ignores user-provided `kerevalmeth`/`kerpad`, emits explicit warnings, and
+  the spreader CLI now reports that timing flags and kerpad toggles are
+  deprecated no-ops. Added inline changelog breadcrumbs for the touched
+  routines to guide future maintainers. (Barbone)
 
 V 2.4.1 7/8/25
 

@@ -10,15 +10,11 @@
 typedef struct finufft_spread_opts {
   // See spreadinterp:setup_spreader for default values of the following fields.
   // This is the main documentation for these options...
-  int nspread;          // w, the kernel width in grid pts
-  int spread_direction; // 1 means spread NU->U, 2 means interpolate U->NU
-  int sort;             // 0: don't sort NU pts, 1: do, 2: heuristic choice
-  int kerevalmeth;      // 0: direct exp(sqrt()), or 1: Horner ppval, fastest
-  // DEPRECATED: `kerevalmeth` is deprecated and ignored; Horner evaluation
-  // (method 1) is enforced internally. The field is kept for API/ABI
-  // compatibility only.
-  int kerpad;              // 0: no pad w to mult of 4, 1: do pad
-                           // (this helped SIMD for the removed direct method).
+  int nspread;             // w, the kernel width in grid pts
+  int spread_direction;    // 1 means spread NU->U, 2 means interpolate U->NU
+  int sort;                // 0: don't sort NU pts, 1: do, 2: heuristic choice
+  int kerevalmeth;         // kept for ABI compatibility, ignored (Horner is always used)
+  int kerpad;              // kept for ABI compatibility, ignored (direct eval removed)
   int nthreads;            // # threads for spreadinterp (0: use max avail)
   int sort_threads;        // # threads for sort (0: auto-choice up to nthreads)
   int max_subproblem_size; // # pts per t1 subprob; sets extra RAM per thread
