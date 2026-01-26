@@ -569,6 +569,11 @@ template<typename TF> int FINUFFT_PLAN_T<TF>::setup_spreadinterp() {
   }
   spopts.nspread = ns;
   set_kernel_shape_given_ns(spopts, opts.debug); // selects kernel params in spopts
+  if (opts.spread_beta > 0.0) {
+    spopts.beta = opts.spread_beta;
+    if (opts.debug || spopts.debug)
+      printf("\t\t\tspread_beta override: beta=%.3g\n", spopts.beta);
+  }
   if (opts.debug || spopts.debug)
     printf("\t\t\ttol=%.3g sigma=%.3g: chose ns=%d beta=%.3g (ier=%d)\n", tol,
            spopts.upsampfac, ns, spopts.beta, ier);
@@ -813,6 +818,7 @@ void finufft_default_opts_t(finufft_opts *o)
   o->spread_nthr_atomic = -1;
   o->spread_max_sp_size = 0;
   o->spread_kerformula  = 0;
+  o->spread_beta        = 0.0;
   o->fftw_lock_fun      = nullptr;
   o->fftw_unlock_fun    = nullptr;
   o->fftw_lock_data     = nullptr;

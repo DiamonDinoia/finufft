@@ -13,22 +13,23 @@ prec = 'double';  % working precision
 myrand = @rand;   % select CPU
 
 M = 1e3;             % # NU pts (several secs for >=1e4)
-dim = 1; Ntot = 300; % which dimensionality to test, tot #modes (not too small)
+dim = 1; Ntot = 400; % which dimensionality to test, tot #modes (not too small)
 % (weird thing is N small, eg 32, makes KB look better)
 %dim = 2; Ntot = 400;  % or try other dims...
 %dim = 3; Ntot = 1e3;
-ntr = 20;           % #transforms to average error over at each tol (was 10)
+ntr = 10;           % #transforms to average error over at each tol (was 10)
 isign = +1;
-sigma = 2.0; %1.25;
+sigma = 2.00; %1.25;
 tolsperdecade = 10;
 tolstep = 10 ^ (-1 / tolsperdecade); % multiplicative step in tol, < 1
 % following names must match kernel.hpp:
-kfnam = {"ES legacy", "ES Beatty", "KB Beatty", "cont-KB Beatty"};
-kfs = [1 3]; %1:4;        % kernel formulae to test
+kfnam = {"ES (legacy beta)", "ES (Beatty beta)", "KB (Beatty beta)", "cont-KB (Beatty beta)", "cosh (Beatty beta)", "cont-cosh (Beatty beta)", "PSWF (Beatty beta)", "PSWF (tuned beta)"};
+kfs = [1 3 8]; %1:4;        % kernel formulae to test
 
 o.upsampfac = sigma;
-%o.debug = 0;
-o.showwarn = 0; warning('off','FINUFFT:epsTooSmall');
+o.debug = 0;            % enable C++ debug prints to show chosen kernel & beta
+o.showwarn = 0;         % allow warnings to be printed
+warning('off','FINUFFT:epsTooSmall');
 dims = false(1, 3); dims(dim) = true;  % only test this dim
 nkf = numel(kfs);
 mintol = 10 * eps(prec);        % stop above eps_mach
@@ -87,10 +88,10 @@ figure('name','mean rel err vs tol, comparing kernels, for 3 NUFFT types',...
 for y=1:3  % types
   subplot(1,3,y);
   legs = {};
-  symb = '+.';
+  symb = {'+','o','x','s'};    % plotting symbols, will cycle if fewer than kernels
   tt = tols(toloks);            % plot only the non-warning tol domain
   for i=1:nkf     % kernels
-    loglog(tt, squeeze(errs(i,y,toloks)), symb(i)); % 'markersize',10);
+    loglog(tt, squeeze(errs(i,y,toloks)), symb{mod(i-1,numel(symb))+1}); % 'markersize',10);
     hold on; xlabel('\epsilon (user tol)'); ylabel('mean rel l2 err');
     legs{i} = sprintf('kf=%d: %s',kfs(i),kfnam{kfs(i)});
   end
@@ -100,4 +101,3 @@ for y=1:3  % types
   title(sprintf('%dD type %d %s, N_{tot}=%d, \\sigma=%g',dim,y,prec,Ntot,sigma))
 end
 print('-dpng',sprintf('results/tolsweepkerrcomp_%dD_%s_sig%g.png',dim,prec,sigma))
-

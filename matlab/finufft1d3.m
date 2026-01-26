@@ -27,6 +27,7 @@
 %     opts.maxbatchsize:  for ntrans>1 only. max blocking size, or 0 for auto.
 %     opts.nthreads:   number of threads, or 0: use all available (default)
 %     opts.spread_kerformula: 0 (default), >0 (nonstandard funcs) [experts only]
+%     opts.spread_beta: 0 (default), >0 overrides kernel beta (experts only)
 %   Outputs:
 %     f     length-nk complex vector of values at targets, or, if ntrans>1,
 %           a matrix of size (nk,ntrans)

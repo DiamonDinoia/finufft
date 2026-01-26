@@ -203,6 +203,7 @@ Here ``0`` makes an automatic choice. If you are unhappy with this, then for sma
 **spread_max_sp_size**: if positive, overrides the maximum subproblem (chunking) size for multithreaded spreading (type 1 transforms). Otherwise the default in the spreader is used, set in ``src/spreadinterp.cpp:setup_spreader()``, which we believe is a decent heuristic for Intel i7 and xeon machines.
 
 **spread_kerformula**: ``0`` uses default spreading (gridding) kernel with default shape choice, whereas positive integers select among various kernels and shape parameter choices. In particular ``1`` returns to the "legacy ES" choices used from the first 2017 code to v2.4.1 (2025). Only developers should mess with this parameter; users will want to leave it at default.
+**spread_beta**: if > 0, overrides the kernel shape parameter beta. Intended for kernel tuning experiments only; most users should leave it at the default (0).
 
 **spread_kerevalmeth**: [DEPRECATED] Kernel evaluation method in spreader/interpolator; retained only for API compatibility and documentation. The library now always uses the Horner piecewise-polynomial evaluation internally (the historical ``=1`` choice). Setting this field has no effect.
 

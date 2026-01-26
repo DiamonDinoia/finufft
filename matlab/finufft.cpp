@@ -1156,12 +1156,15 @@ typedef std::complex<float> fcomplex;
      else if (strcmp(fname[ifield],"spread_max_sp_size") == 0) {
        oc->spread_max_sp_size = (int)round(*mxGetPr(mxGetFieldByNumber(om,idx,ifield)));
      }
-     else if (strcmp(fname[ifield],"spread_kerformula") == 0) {
-       oc->spread_kerformula = (int)round(*mxGetPr(mxGetFieldByNumber(om,idx,ifield)));
-     }
-     else if (strcmp(fname[ifield],"spreadinterponly") == 0) {
-       oc->spreadinterponly = (int)round(*mxGetPr(mxGetFieldByNumber(om,idx,ifield)));
-     }
+    else if (strcmp(fname[ifield],"spread_kerformula") == 0) {
+      oc->spread_kerformula = (int)round(*mxGetPr(mxGetFieldByNumber(om,idx,ifield)));
+    }
+    else if (strcmp(fname[ifield],"spread_beta") == 0) {
+      oc->spread_beta = (double)*mxGetPr(mxGetFieldByNumber(om,idx,ifield));
+    }
+    else if (strcmp(fname[ifield],"spreadinterponly") == 0) {
+      oc->spreadinterponly = (int)round(*mxGetPr(mxGetFieldByNumber(om,idx,ifield)));
+    }
      else if (strcmp(fname[ifield],"showwarn") == 0) {
        oc->showwarn = (int)round(*mxGetPr(mxGetFieldByNumber(om,idx,ifield)));
      }
