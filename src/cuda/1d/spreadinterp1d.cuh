@@ -359,12 +359,13 @@ __global__ void interp_1d_output_driven(
       reinterpret_cast<cuda_complex<T> *>(shift.data() + shift.size()), padded_size_x);
 
   for (int i = threadIdx.x; i < local_subgrid.size(); i += blockDim.x) {
+    local_subgrid[i] = {0, 0};
+  }
+  for (int i = threadIdx.x; i < local_subgrid.size(); i += blockDim.x) {
     auto ix = xoffset - ns_2 + i;
     if (ix < (nf1 + ns_2)) {
-      ix                = ix < 0 ? ix + nf1 : (ix > nf1 - 1 ? ix - nf1 : ix);
+      ix               = ix < 0 ? ix + nf1 : (ix > nf1 - 1 ? ix - nf1 : ix);
       local_subgrid[i] = fw[ix];
-    } else {
-      local_subgrid[i] = {0, 0};
     }
   }
   __syncthreads();
@@ -374,9 +375,8 @@ __global__ void interp_1d_output_driven(
     for (int i = threadIdx.x; i < batch_size; i += blockDim.x) {
       const int nuptsidx    = idxnupts[ptstart + i + batch_begin];
       const auto x_rescaled = fold_rescale(x[nuptsidx], nf1);
-      const auto [xstart, xend] = interval(ns, x_rescaled);
-      (void)xend;
-      const T x1 = T(xstart) - x_rescaled;
+      const auto xstart         = interval(ns, x_rescaled).first;
+      const T x1                = T(xstart) - x_rescaled;
       shift[i]                  = xstart - xoffset;
 
       if constexpr (KEREVALMETH == 1) {
