@@ -177,16 +177,26 @@ int cuspread3d_output_driven(int nf1, int nf2, int nf3, int M,
 template<typename T, int ns>
 int cuinterp1d_nuptsdriven(int nf1, int M, cufinufft_plan_t<T> *d_plan, int blksize);
 template<typename T, int ns>
+int cuinterp1d_subprob(int nf1, int M, cufinufft_plan_t<T> *d_plan, int blksize);
+template<typename T, int ns>
+int cuinterp1d_output_driven(int nf1, int M, cufinufft_plan_t<T> *d_plan, int blksize);
+template<typename T, int ns>
 int cuinterp2d_nuptsdriven(int nf1, int nf2, int M, cufinufft_plan_t<T> *d_plan,
                            int blksize);
 template<typename T, int ns>
 int cuinterp2d_subprob(int nf1, int nf2, int M, cufinufft_plan_t<T> *d_plan, int blksize);
+template<typename T, int ns>
+int cuinterp2d_output_driven(int nf1, int nf2, int M, cufinufft_plan_t<T> *d_plan,
+                             int blksize);
 template<typename T, int ns>
 int cuinterp3d_nuptsdriven(int nf1, int nf2, int nf3, int M, cufinufft_plan_t<T> *d_plan,
                            int blksize);
 template<typename T, int ns>
 int cuinterp3d_subprob(int nf1, int nf2, int nf3, int M, cufinufft_plan_t<T> *d_plan,
                        int blksize);
+template<typename T, int ns>
+int cuinterp3d_output_driven(int nf1, int nf2, int nf3, int M, cufinufft_plan_t<T> *d_plan,
+                             int blksize);
 
 } // namespace spreadinterp
 } // namespace cufinufft

@@ -36,7 +36,7 @@ if reset_log_level:
     log_level = logging.root.level
 
 lib = None
-# Try to load the library as installed in the Python package
+# Try to load the library as installed in the Python package or nearby build outputs.
 path = pathlib.Path(__file__).parent.resolve()
 library_names = ["libcufinufft", "cufinufft"]
 
@@ -50,6 +50,35 @@ for lib_name in library_names:
         break
     except (OSError, AttributeError):
         pass
+
+# Optional override: allow user to point to a specific library
+if lib is None:
+    override = os.environ.get("CUFINUFFT_LIBRARY") or os.environ.get("CUFINUFFT_LIB")
+    if override:
+        try:
+            lib = ctypes.cdll.LoadLibrary(override)
+        except (OSError, AttributeError) as e:
+            raise ImportError(
+                f"Found cufinufft library at {override}, but failed to load it: {e}"
+            )
+
+# Developer convenience: look for editable-build artifacts near the repo
+if lib is None:
+    repo_root = path.parent.parent.parent
+    candidates = [
+        repo_root / "python" / "cufinufft" / "build",
+    ]
+    for base in candidates:
+        if not base.exists():
+            continue
+        for libpath in base.rglob("libcufinufft.so"):
+            try:
+                lib = ctypes.cdll.LoadLibrary(str(libpath))
+                break
+            except (OSError, AttributeError):
+                continue
+        if lib is not None:
+            break
 
 # Second attempt: try from system path
 if lib is None:

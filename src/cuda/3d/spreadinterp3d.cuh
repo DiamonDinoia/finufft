@@ -711,5 +711,129 @@ __global__ void interp_3d_subprob(
   }
 }
 
+/* Kernels for Output Driven Method */
+template<typename T, int KEREVALMETH, int ns>
+__global__ void interp_3d_output_driven(
+    const T *x, const T *y, const T *z, cuda_complex<T> *c, const cuda_complex<T> *fw,
+    int M, int nf1, int nf2, int nf3, T es_c, T es_beta, T sigma, int *binstartpts,
+    const int *bin_size, int bin_size_x, int bin_size_y, int bin_size_z,
+    int *subprob_to_bin, const int *subprobstartpts, const int *numsubprob,
+    int maxsubprobsize, int nbinx, int nbiny, int nbinz, const int *idxnupts,
+    const int np) {
+  extern __shared__ char sharedbuf[];
+
+  static constexpr auto ns_2       = (ns + 1) / 2;
+  static constexpr auto rounded_ns = ns_2 * 2;
+
+  const auto padded_size_x = bin_size_x + rounded_ns;
+  const auto padded_size_y = bin_size_y + rounded_ns;
+  const auto padded_size_z = bin_size_z + rounded_ns;
+
+  const int bidx        = subprob_to_bin[blockIdx.x];
+  const int binsubp_idx = blockIdx.x - subprobstartpts[bidx];
+  const int ptstart     = binstartpts[bidx] + binsubp_idx * maxsubprobsize;
+  const int nupts = min(maxsubprobsize, bin_size[bidx] - binsubp_idx * maxsubprobsize);
+
+  const int xoffset = (bidx % nbinx) * bin_size_x;
+  const int yoffset = ((bidx / nbinx) % nbiny) * bin_size_y;
+  const int zoffset = ((bidx / (nbinx * nbiny)) % nbinz) * bin_size_z;
+
+  using mdspan_t = mdspan<T, extents<int, dynamic_extent, 3, ns>>;
+  auto kerevals = mdspan_t(reinterpret_cast<T *>(sharedbuf), np);
+
+  auto nupts_sm = span(
+      reinterpret_cast<cuda_complex<T> *>(kerevals.data_handle() + kerevals.size()),
+      np);
+
+  auto shift = span(reinterpret_cast<int3 *>(nupts_sm.data() + nupts_sm.size()), np);
+
+  auto local_subgrid = mdspan<cuda_complex<T>, dextents<int, 3>>(
+      reinterpret_cast<cuda_complex<T> *>(shift.data() + shift.size()), padded_size_z,
+      padded_size_y, padded_size_x);
+
+  for (int n = threadIdx.x; n < local_subgrid.size(); n += blockDim.x) {
+    const int i = n % padded_size_x;
+    const int j = (n / padded_size_x) % padded_size_y;
+    const int k = n / (padded_size_x * padded_size_y);
+
+    int ix = xoffset - ns_2 + i;
+    int iy = yoffset - ns_2 + j;
+    int iz = zoffset - ns_2 + k;
+
+    if (ix < (nf1 + ns_2) && iy < (nf2 + ns_2) && iz < (nf3 + ns_2)) {
+      ix = ix < 0 ? ix + nf1 : (ix > nf1 - 1 ? ix - nf1 : ix);
+      iy = iy < 0 ? iy + nf2 : (iy > nf2 - 1 ? iy - nf2 : iy);
+      iz = iz < 0 ? iz + nf3 : (iz > nf3 - 1 ? iz - nf3 : iz);
+      const int outidx = ix + iy * nf1 + iz * nf1 * nf2;
+      local_subgrid(k, j, i) = fw[outidx];
+    } else {
+      local_subgrid(k, j, i) = {0, 0};
+    }
+  }
+  __syncthreads();
+
+  for (int batch_begin = 0; batch_begin < nupts; batch_begin += np) {
+    const auto batch_size = min(np, nupts - batch_begin);
+    for (int i = threadIdx.x; i < batch_size; i += blockDim.x) {
+      const int nuptsidx = idxnupts[ptstart + i + batch_begin];
+      const auto x_rescaled = fold_rescale(x[nuptsidx], nf1);
+      const auto y_rescaled = fold_rescale(y[nuptsidx], nf2);
+      const auto z_rescaled = fold_rescale(z[nuptsidx], nf3);
+      auto [xstart, xend]   = interval(ns, x_rescaled);
+      auto [ystart, yend]   = interval(ns, y_rescaled);
+      auto [zstart, zend]   = interval(ns, z_rescaled);
+      (void)xend;
+      (void)yend;
+      (void)zend;
+      const T x1 = T(xstart) - x_rescaled;
+      const T y1 = T(ystart) - y_rescaled;
+      const T z1 = T(zstart) - z_rescaled;
+
+      shift[i] = {xstart - xoffset, ystart - yoffset, zstart - zoffset};
+
+      if constexpr (KEREVALMETH == 1) {
+        eval_kernel_vec_horner<T, ns>(&kerevals(i, 0, 0), x1, sigma);
+        eval_kernel_vec_horner<T, ns>(&kerevals(i, 1, 0), y1, sigma);
+        eval_kernel_vec_horner<T, ns>(&kerevals(i, 2, 0), z1, sigma);
+      } else {
+        eval_kernel_vec<T, ns>(&kerevals(i, 0, 0), x1, es_c, es_beta);
+        eval_kernel_vec<T, ns>(&kerevals(i, 1, 0), y1, es_c, es_beta);
+        eval_kernel_vec<T, ns>(&kerevals(i, 2, 0), z1, es_c, es_beta);
+      }
+    }
+    __syncthreads();
+
+    for (int i = threadIdx.x; i < batch_size; i += blockDim.x) {
+      const int nuptsidx = idxnupts[ptstart + i + batch_begin];
+      const int xstart   = shift[i].x;
+      const int ystart   = shift[i].y;
+      const int zstart   = shift[i].z;
+
+      cuda_complex<T> cnow{0, 0};
+      for (int zz = 0; zz < ns; zz++) {
+        const int iz = zstart + zz + ns_2;
+        if (iz < 0 || iz >= padded_size_z) continue;
+        const auto kervalue3 = kerevals(i, 2, zz);
+        for (int yy = 0; yy < ns; yy++) {
+          const int iy = ystart + yy + ns_2;
+          if (iy < 0 || iy >= padded_size_y) continue;
+          const auto kervalue2 = kerevals(i, 1, yy);
+          for (int xx = 0; xx < ns; xx++) {
+            const int ix = xstart + xx + ns_2;
+            if (ix < 0 || ix >= padded_size_x) continue;
+            const auto kervalue1 = kerevals(i, 0, xx);
+            const auto val       = local_subgrid(iz, iy, ix);
+            const auto weight    = kervalue1 * kervalue2 * kervalue3;
+            cnow.x += val.x * weight;
+            cnow.y += val.y * weight;
+          }
+        }
+      }
+      c[nuptsidx] = cnow;
+    }
+    __syncthreads();
+  }
+}
+
 } // namespace spreadinterp
 } // namespace cufinufft

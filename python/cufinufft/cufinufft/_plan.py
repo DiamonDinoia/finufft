@@ -62,7 +62,8 @@ class Plan:
                         specified as keyword arguments. These include
                         upsampling ratio ``upsampfac`` (default ``2.0``),
                         ``gpu_method`` (1: nonuniform points-driven, 2: shared
-                        memory), ``gpu_sort`` (for ``gpu_method == 1``, 0: no
+                        memory, 3: output driven), ``gpu_sort`` (for
+                        ``gpu_method == 1``, 0: no
                         sort, 1: sort), ``gpu_kerevalmeth`` (0: direct
                         exp(sqrt), Horner evaluation), ``gpu_device_id`` (GPU
                         ID), ``gpu_stream`` (CUDA stream pointer) and
