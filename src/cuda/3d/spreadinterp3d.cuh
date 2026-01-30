@@ -751,10 +751,6 @@ __global__ void interp_3d_output_driven(
       reinterpret_cast<cuda_complex<T> *>(shift.data() + shift.size()), padded_size_z,
       padded_size_y, padded_size_x);
 
-  auto *local_subgrid_data = local_subgrid.data_handle();
-  for (int n = threadIdx.x; n < local_subgrid.size(); n += blockDim.x) {
-    local_subgrid_data[n] = {0, 0};
-  }
   for (int n = threadIdx.x; n < local_subgrid.size(); n += blockDim.x) {
     const int i = n % padded_size_x;
     const int j = (n / padded_size_x) % padded_size_y;
@@ -770,6 +766,8 @@ __global__ void interp_3d_output_driven(
       iz = iz < 0 ? iz + nf3 : (iz > nf3 - 1 ? iz - nf3 : iz);
       const int outidx = ix + iy * nf1 + iz * nf1 * nf2;
       local_subgrid(k, j, i) = fw[outidx];
+    } else {
+      local_subgrid(k, j, i) = {0, 0};
     }
   }
   __syncthreads();
@@ -781,12 +779,15 @@ __global__ void interp_3d_output_driven(
       const auto x_rescaled = fold_rescale(x[nuptsidx], nf1);
       const auto y_rescaled = fold_rescale(y[nuptsidx], nf2);
       const auto z_rescaled = fold_rescale(z[nuptsidx], nf3);
-      const auto xstart     = interval(ns, x_rescaled).first;
-      const auto ystart     = interval(ns, y_rescaled).first;
-      const auto zstart     = interval(ns, z_rescaled).first;
-      const T x1            = T(xstart) - x_rescaled;
-      const T y1            = T(ystart) - y_rescaled;
-      const T z1            = T(zstart) - z_rescaled;
+      auto [xstart, xend]   = interval(ns, x_rescaled);
+      auto [ystart, yend]   = interval(ns, y_rescaled);
+      auto [zstart, zend]   = interval(ns, z_rescaled);
+      (void)xend;
+      (void)yend;
+      (void)zend;
+      const T x1 = T(xstart) - x_rescaled;
+      const T y1 = T(ystart) - y_rescaled;
+      const T z1 = T(zstart) - z_rescaled;
 
       shift[i] = {xstart - xoffset, ystart - yoffset, zstart - zoffset};
 
