@@ -135,8 +135,8 @@ int run_test(int method, int type, int N1, int M, T tol, T checktol, int iflag,
   printf("[time  ] cufinufft setNUpts:\t\t %.3g s\n", milliseconds / 1000);
 
   cudaEventRecord(start);
-  cufinufft_execute_impl<T>((cuda_complex<T> *)d_c.data().get(),
-                            (cuda_complex<T> *)d_fk.data().get(), *dplan);
+  dplan->exec((cuda_complex<T> *)d_c.data().get(),
+                            (cuda_complex<T> *)d_fk.data().get());
 
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);

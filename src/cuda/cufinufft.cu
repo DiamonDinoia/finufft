@@ -90,14 +90,14 @@ int cufinufft_setpts(cufinufft_plan d_plan, const int64_t M, const double *d_x,
 int cufinufftf_execute(cufinufftf_plan d_plan, cuFloatComplex *d_c,
                        cuFloatComplex *d_fk) {
   return safe_finufft_call([&]() {
-    cufinufft_execute_impl<float>(d_c, d_fk, *((cufinufft_plan_t<float> *)d_plan));
+    ((cufinufft_plan_t<float> *)d_plan)->exec(d_c, d_fk);
   });
 }
 
 int cufinufft_execute(cufinufft_plan d_plan, cuDoubleComplex *d_c,
                       cuda_complex<double> *d_fk) {
   return safe_finufft_call([&]() {
-    cufinufft_execute_impl<double>(d_c, d_fk, *((cufinufft_plan_t<double> *)d_plan));
+    ((cufinufft_plan_t<double> *)d_plan)->exec(d_c, d_fk);
   });
 }
 
