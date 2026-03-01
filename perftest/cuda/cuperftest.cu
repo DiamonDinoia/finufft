@@ -165,13 +165,15 @@ struct CudaTimer {
   std::vector<cudaEvent_t> stop_;
 };
 
-template<class F, class... Args> inline void timeit(F f, CudaTimer &timer, Args &&... args) {
+template<class F, class... Args>
+inline void timeit(F f, CudaTimer &timer, Args &&...args) {
   timer.start();
   f(std::forward<Args>(args)...);
   timer.stop();
 }
-template<typename T> void makeplan(int type, int dim, const int32_t *nmodes, int iflag, int ntransf,
-                       double tol, const cufinufft_opts &opts, cufinufft_plan_t<T> **res) {
+template<typename T>
+void makeplan(int type, int dim, const int32_t *nmodes, int iflag, int ntransf,
+              double tol, const cufinufft_opts &opts, cufinufft_plan_t<T> **res) {
   *res = new cufinufft_plan_t<T>(type, dim, nmodes, iflag, ntransf, tol, opts);
 }
 void gpu_warmup() {
@@ -261,11 +263,12 @@ template<typename T> void run_test(test_options_t &test_opts) {
     cuda_complex<T> *d_c_p  = (cuda_complex<T> *)d_c.data().get();
     cuda_complex<T> *d_fk_p = (cuda_complex<T> *)d_fk.data().get();
 
-    timeit(makeplan<T>, makeplan_timer, test_opts.type, dim, test_opts.N,
-           iflag, ntransf, test_opts.tol, opts, &dplan);
+    timeit(makeplan<T>, makeplan_timer, test_opts.type, dim, test_opts.N, iflag, ntransf,
+           test_opts.tol, opts, &dplan);
     for (int i = 0; i < test_opts.n_runs; ++i) {
-      timeit(std::bind(&cufinufft_plan_t<T>::setpts, dplan, M, d_x_p, d_y_p, d_z_p, 0, nullptr,
-             nullptr, nullptr), setpts_timer);
+      timeit(std::bind(&cufinufft_plan_t<T>::setpts, dplan, M, d_x_p, d_y_p, d_z_p, 0,
+                       nullptr, nullptr, nullptr),
+             setpts_timer);
       timeit(std::bind(&cufinufft_plan_t<T>::exec, dplan, d_c_p, d_fk_p), execute_timer);
     }
 

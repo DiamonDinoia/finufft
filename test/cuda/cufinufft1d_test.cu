@@ -8,8 +8,8 @@
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 
-#include <finufft_common/common.h>
 #include <cufinufft.h>
+#include <finufft_common/common.h>
 
 #include "../utils/dirft1d.hpp"
 #include "../utils/norms.hpp"
@@ -125,8 +125,7 @@ int run_test(int method, int type, int N1, int M, T tol, T checktol, int iflag,
   printf("[time  ] cufinufft plan:\t\t %.3g s\n", milliseconds / 1000);
 
   cudaEventRecord(start);
-  dplan->setpts(M, d_x.data().get(), NULL, NULL, N1, d_s.data().get(),
-                           NULL, NULL);
+  dplan->setpts(M, d_x.data().get(), NULL, NULL, N1, d_s.data().get(), NULL, NULL);
 
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
@@ -135,8 +134,7 @@ int run_test(int method, int type, int N1, int M, T tol, T checktol, int iflag,
   printf("[time  ] cufinufft setNUpts:\t\t %.3g s\n", milliseconds / 1000);
 
   cudaEventRecord(start);
-  dplan->exec((cuda_complex<T> *)d_c.data().get(),
-                            (cuda_complex<T> *)d_fk.data().get());
+  dplan->exec((cuda_complex<T> *)d_c.data().get(), (cuda_complex<T> *)d_fk.data().get());
 
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);

@@ -49,8 +49,9 @@ int cufinufftf_makeplan(int type, int dim, const int64_t *nmodes, int iflag, int
     else
       cufinufft_default_opts(&planopts);
 
-    auto res = new cufinufft_plan_t<float>(type, dim, nmodes32, iflag, ntransf, tol, planopts);
-    *d_plan_ptr = (cufinufftf_plan) res;
+    auto res =
+        new cufinufft_plan_t<float>(type, dim, nmodes32, iflag, ntransf, tol, planopts);
+    *d_plan_ptr = (cufinufftf_plan)res;
     return res->eps_too_small;
   });
 }
@@ -75,8 +76,9 @@ int cufinufft_makeplan(int type, int dim, const int64_t *nmodes, int iflag, int 
     else
       cufinufft_default_opts(&planopts);
 
-    auto res = new cufinufft_plan_t<double>(type, dim, nmodes32, iflag, ntransf, tol, planopts);
-    *d_plan_ptr = (cufinufft_plan) res;
+    auto res =
+        new cufinufft_plan_t<double>(type, dim, nmodes32, iflag, ntransf, tol, planopts);
+    *d_plan_ptr = (cufinufft_plan)res;
     return res->eps_too_small;
   });
 }
@@ -103,29 +105,25 @@ int cufinufft_setpts(cufinufft_plan d_plan, const int64_t M, const double *d_x,
 
 int cufinufftf_execute(cufinufftf_plan d_plan, cuFloatComplex *d_c,
                        cuFloatComplex *d_fk) {
-  return safe_finufft_call([&]() {
-    ((cufinufft_plan_t<float> *)d_plan)->exec(d_c, d_fk);
-  });
+  return safe_finufft_call(
+      [&]() { ((cufinufft_plan_t<float> *)d_plan)->exec(d_c, d_fk); });
 }
 
 int cufinufft_execute(cufinufft_plan d_plan, cuDoubleComplex *d_c,
                       cuda_complex<double> *d_fk) {
-  return safe_finufft_call([&]() {
-    ((cufinufft_plan_t<double> *)d_plan)->exec(d_c, d_fk);
-  });
+  return safe_finufft_call(
+      [&]() { ((cufinufft_plan_t<double> *)d_plan)->exec(d_c, d_fk); });
 }
 
 int cufinufftf_destroy(cufinufftf_plan d_plan) {
-  return safe_finufft_call(
-      [&]() {
+  return safe_finufft_call([&]() {
     if (!d_plan) throw int(FINUFFT_ERR_PLAN_NOTVALID);
     delete ((cufinufft_plan_t<float> *)d_plan);
   });
 }
 
 int cufinufft_destroy(cufinufft_plan d_plan) {
-  return safe_finufft_call(
-      [&]() {
+  return safe_finufft_call([&]() {
     if (!d_plan) throw int(FINUFFT_ERR_PLAN_NOTVALID);
     delete ((cufinufft_plan_t<double> *)d_plan);
   });

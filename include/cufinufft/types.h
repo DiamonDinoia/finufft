@@ -194,9 +194,7 @@ template<typename T> struct cufinufft_plan_t {
 
   cufinufft_plan_t() = delete;
   cufinufft_plan_t(int type_, int dim_, const int *nmodes, int iflag_, int ntransf_,
-                            T tol_, const cufinufft_opts &opts_);
-//  cufinufft_plan_t(const cufinufft_opts &opts_, bool supports_pools_)
-//      : opts(opts_), supports_pools(supports_pools_) {}
+                   T tol_, const cufinufft_opts &opts_);
   cufinufft_plan_t &operator=(cufinufft_plan_t &) = delete;
 
   ~cufinufft_plan_t() {
@@ -221,9 +219,9 @@ private:
   template<int modeord, int ndim> void deconvolve_nd(int blksize) const;
 
 public:
-  void setpts_12 (int M_, const T *d_kx, const T *d_ky, const T *d_kz);
-  void setpts(int M_, const T *d_kx, const T *d_ky, const T *d_kz, int N_,
-                           const T *d_s, const T *d_t, const T *d_u);
+  void setpts_12(int M_, const T *d_kx, const T *d_ky, const T *d_kz);
+  void setpts(int M_, const T *d_kx, const T *d_ky, const T *d_kz, int N_, const T *d_s,
+              const T *d_t, const T *d_u);
   void allocate();
   void allocate_nupts();
   void deconvolve(int blksize) const;

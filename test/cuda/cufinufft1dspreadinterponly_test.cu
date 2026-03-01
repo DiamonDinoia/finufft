@@ -4,8 +4,8 @@
 #include <iostream>
 #include <random>
 
-#include <finufft_common/common.h>
 #include <cufinufft.h>
+#include <finufft_common/common.h>
 
 #include <cufinufft/contrib/helper_cuda.h>
 #include <cufinufft/impl.h>
@@ -61,10 +61,8 @@ int run_test(int N1, int M, T tol, T checktol, int iflag, double upsampfac) {
   cudaEventCreate(&stop);
 
   dplan = new cufinufft_plan_t<T>(1, dim, nmodes, iflag, ntransf, tol, opts);
-  dplan->setpts(M, d_x.data().get(), nullptr, nullptr, 0, nullptr,
-                           nullptr, nullptr);
-  dplan->exec((cuda_complex<T> *)d_c.data().get(),
-                            (cuda_complex<T> *)d_fk.data().get());
+  dplan->setpts(M, d_x.data().get(), nullptr, nullptr, 0, nullptr, nullptr, nullptr);
+  dplan->exec((cuda_complex<T> *)d_c.data().get(), (cuda_complex<T> *)d_fk.data().get());
   delete dplan;
 
   fk = d_fk;
@@ -97,10 +95,8 @@ int run_test(int N1, int M, T tol, T checktol, int iflag, double upsampfac) {
   cudaEventRecord(start);
 
   dplan = new cufinufft_plan_t<T>(1, dim, nmodes, iflag, ntransf, tol, opts);
-  dplan->setpts(M, d_x.data().get(), nullptr, nullptr, 0, nullptr,
-                           nullptr, nullptr);
-  dplan->exec((cuda_complex<T> *)d_c.data().get(),
-                            (cuda_complex<T> *)d_fk.data().get());
+  dplan->setpts(M, d_x.data().get(), nullptr, nullptr, 0, nullptr, nullptr, nullptr);
+  dplan->exec((cuda_complex<T> *)d_c.data().get(), (cuda_complex<T> *)d_fk.data().get());
   delete dplan;
 
   cudaEventRecord(stop);
@@ -127,11 +123,9 @@ int run_test(int N1, int M, T tol, T checktol, int iflag, double upsampfac) {
   cudaEventRecord(start);
 
   dplan = new cufinufft_plan_t<T>(2, dim, nmodes, iflag, ntransf, tol, opts);
-  dplan->setpts(M, d_x.data().get(), nullptr, nullptr, 0, nullptr,
-                           nullptr, nullptr);
+  dplan->setpts(M, d_x.data().get(), nullptr, nullptr, 0, nullptr, nullptr, nullptr);
 
-  dplan->exec((cuda_complex<T> *)d_c.data().get(),
-                            (cuda_complex<T> *)d_fk.data().get());
+  dplan->exec((cuda_complex<T> *)d_c.data().get(), (cuda_complex<T> *)d_fk.data().get());
 
   delete dplan;
 

@@ -7,7 +7,8 @@
 
 #include <cufinufft/contrib/helper_cuda.h>
 
-template<typename T> void cufinufft_plan_t<T>::alloc1d()
+template<typename T>
+void cufinufft_plan_t<T>::alloc1d()
 /*
     wrapper for gpu memory allocation in "plan" stage.
 
@@ -45,7 +46,8 @@ template<typename T> void cufinufft_plan_t<T>::alloc1d()
   }
 }
 
-template<typename T> void cufinufft_plan_t<T>::alloc2d()
+template<typename T>
+void cufinufft_plan_t<T>::alloc2d()
 /*
     wrapper for gpu memory allocation in "plan" stage.
 
@@ -89,7 +91,8 @@ template<typename T> void cufinufft_plan_t<T>::alloc2d()
   }
 }
 
-template<typename T> void cufinufft_plan_t<T>::alloc3d()
+template<typename T>
+void cufinufft_plan_t<T>::alloc3d()
 /*
     wrapper for gpu memory allocation in "plan" stage.
 
@@ -165,7 +168,8 @@ template<typename T> void cufinufft_plan_t<T>::allocate() {
 template void cufinufft_plan_t<float>::allocate();
 template void cufinufft_plan_t<double>::allocate();
 
-template<typename T> void cufinufft_plan_t<T>::alloc1d_nupts()
+template<typename T>
+void cufinufft_plan_t<T>::alloc1d_nupts()
 /*
     wrapper for gpu memory allocation in "setNUpts" stage.
 
@@ -188,7 +192,8 @@ template<typename T> void cufinufft_plan_t<T>::alloc1d_nupts()
   }
 }
 
-template<typename T> void cufinufft_plan_t<T>::alloc2d_nupts()
+template<typename T>
+void cufinufft_plan_t<T>::alloc2d_nupts()
 /*
     wrapper for gpu memory allocation in "setNUpts" stage.
 
@@ -214,7 +219,8 @@ template<typename T> void cufinufft_plan_t<T>::alloc2d_nupts()
   }
 }
 
-template<typename T> void cufinufft_plan_t<T>::alloc3d_nupts()
+template<typename T>
+void cufinufft_plan_t<T>::alloc3d_nupts()
 /*
     wrapper for gpu memory allocation in "setNUpts" stage.
 

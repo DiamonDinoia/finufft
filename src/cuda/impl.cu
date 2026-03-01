@@ -17,7 +17,8 @@
 static bool have_pool_support(const cufinufft_opts &opts) {
   DeviceSwitcher switcher(opts.gpu_device_id);
   int supports_pools = 0;
-  cudaDeviceGetAttribute(&supports_pools, cudaDevAttrMemoryPoolsSupported, opts.gpu_device_id);
+  cudaDeviceGetAttribute(&supports_pools, cudaDevAttrMemoryPoolsSupported,
+                         opts.gpu_device_id);
   static bool warned = false;
   if (!warned && !supports_pools && opts.gpu_stream != nullptr) {
     fprintf(stderr,
@@ -28,16 +29,11 @@ static bool have_pool_support(const cufinufft_opts &opts) {
   return supports_pools;
 }
 
-template<typename T> cufinufft_plan_t<T>::cufinufft_plan_t
-  (int type_, int dim_, const int *nmodes, int iflag_, int ntransf_, T tol_,
-                            const cufinufft_opts &opts_)
-  : opts(opts_),
-    supports_pools(have_pool_support(opts_)),
-    tol(tol_),
-    type(type_),
-    dim(dim_),
-    ntransf(ntransf_),
-    iflag(iflag_>=0 ? 1:-1) {
+template<typename T>
+cufinufft_plan_t<T>::cufinufft_plan_t(int type_, int dim_, const int *nmodes, int iflag_,
+                                      int ntransf_, T tol_, const cufinufft_opts &opts_)
+    : opts(opts_), supports_pools(have_pool_support(opts_)), tol(tol_), type(type_),
+      dim(dim_), ntransf(ntransf_), iflag(iflag_ >= 0 ? 1 : -1) {
   /*
       "plan" stage (in single or double precision).
           See ../docs/cppdoc.md for main user-facing documentation.
@@ -74,13 +70,12 @@ template<typename T> cufinufft_plan_t<T>::cufinufft_plan_t
   // set nf1, nf2, nf3 to 1 for type 3, type 1, type 2 will overwrite this
   nf123                 = {1, 1, 1};
   opts.gpu_maxbatchsize = std::max(opts.gpu_maxbatchsize, 1);
-  opts.gpu_np = opts.gpu_method == 3 ? opts.gpu_np : 0;
+  opts.gpu_np           = opts.gpu_method == 3 ? opts.gpu_np : 0;
 
   if (type != 3) {
     mstu = {nmodes[0], nmodes[1], nmodes[2]};
     if (opts.debug) {
-      printf("[cufinufft] (ms,mt,mu): %d %d %d\n", mstu[0], mstu[1],
-             mstu[2]);
+      printf("[cufinufft] (ms,mt,mu): %d %d %d\n", mstu[0], mstu[1], mstu[2]);
     }
   } else { // type 3 turns its outer type 1 into spreading-only
     opts.gpu_spreadinterponly = 1;
@@ -95,19 +90,19 @@ template<typename T> cufinufft_plan_t<T>::cufinufft_plan_t
 
   // simple check to use upsampfac=1.25 if tol is big
   // FIXME: since cufft is really fast we should use 1.25 only if we run out of vram
-  if (opts.upsampfac == 0.0) { // indicates auto-choose
-    opts.upsampfac = 2.0;      // default, and need for tol small
+  if (opts.upsampfac == 0.0) {         // indicates auto-choose
+    opts.upsampfac = 2.0;              // default, and need for tol small
     if (tol >= (T)1E-9 && type == 3) { // the tol sigma=5/4 can reach
       opts.upsampfac = 1.25;
     }
     if (opts.debug) {
-      printf("[cufinufft] upsampfac automatically set to %.3g\n",
-             opts.upsampfac);
+      printf("[cufinufft] upsampfac automatically set to %.3g\n", opts.upsampfac);
     }
   }
   /* Setup Spreader */
-  eps_too_small = cufinufft::spreadinterp::setup_spreader(spopts, tol, T(opts.upsampfac), opts.gpu_kerevalmeth,
-                 opts.debug, opts.gpu_spreadinterponly)!=0;
+  eps_too_small = cufinufft::spreadinterp::setup_spreader(
+                      spopts, tol, T(opts.upsampfac), opts.gpu_kerevalmeth, opts.debug,
+                      opts.gpu_spreadinterponly) != 0;
 
   spopts.spread_direction = type;
 
@@ -141,8 +136,8 @@ template<typename T> cufinufft_plan_t<T>::cufinufft_plan_t
   // Bin size and memory info now printed in cufinufft_setup_binsize() (common.cu)
   // Additional runtime info at debug level 2
   if (opts.debug >= 2) {
-    printf("[cufinufft] Runtime: grid=(%ld,%ld,%ld), M=%ld\n", nf123[0],
-           nf123[1], nf123[2], M);
+    printf("[cufinufft] Runtime: grid=(%ld,%ld,%ld), M=%ld\n", nf123[0], nf123[1],
+           nf123[2], M);
   }
 
   // dynamically request the maximum amount of shared memory available
@@ -159,15 +154,13 @@ template<typename T> cufinufft_plan_t<T>::cufinufft_plan_t
                nf123[0], nf123[1], nf123[2]);
       }
     } else { // usual NUFFT with fine grid using upsampling
-      std::array<int, 3> obinsize{opts.gpu_obinsizex,
-                                  opts.gpu_obinsizey,
+      std::array<int, 3> obinsize{opts.gpu_obinsizex, opts.gpu_obinsizey,
                                   opts.gpu_obinsizez};
       for (int idim = 0; idim < dim; ++idim)
-        set_nf_type12(mstu[idim], opts, spopts,
-                      &nf123[idim], obinsize[idim]);
+        set_nf_type12(mstu[idim], opts, spopts, &nf123[idim], obinsize[idim]);
       if (opts.debug)
-        printf("[cufinufft] (nf1,nf2,nf3) = (%d, %d, %d)\n", nf123[0],
-               nf123[1], nf123[2]);
+        printf("[cufinufft] (nf1,nf2,nf3) = (%d, %d, %d)\n", nf123[0], nf123[1],
+               nf123[2]);
     }
     nf = nf123[0] * nf123[1] * nf123[2];
 
@@ -182,8 +175,8 @@ template<typename T> cufinufft_plan_t<T>::cufinufft_plan_t
         n[idim] = int(nf123[dim - idim - 1]);
         ntot *= n[idim];
       }
-      cufftResult_t cufft_status = cufftPlanMany(
-          &fftplan, dim, n, n, 1, ntot, n, 1, ntot, cufft_type<T>(), batchsize);
+      cufftResult_t cufft_status = cufftPlanMany(&fftplan, dim, n, n, 1, ntot, n, 1, ntot,
+                                                 cufft_type<T>(), batchsize);
 
       if (cufft_status != CUFFT_SUCCESS) {
         fprintf(stderr, "[%s] cufft makeplan error: %s", __func__,
@@ -207,22 +200,22 @@ template<typename T> cufinufft_plan_t<T>::cufinufft_plan_t
       thrust::copy(fseries_precomp_f, fseries_precomp_f + 3 * MAX_NQUAD,
                    d_fseries_precomp_f.begin());
       // the full fseries is done on the GPU here
-      fseries_kernel_compute(dim, nf123,
-                             d_fseries_precomp_f.data().get(),
+      fseries_kernel_compute(dim, nf123, d_fseries_precomp_f.data().get(),
                              d_fseries_precomp_phase.data().get(), fwkerhalf,
                              spopts.nspread, stream);
     }
   }
 }
 
-template cufinufft_plan_t<float>::cufinufft_plan_t
-  (int type_, int dim_, const int *nmodes, int iflag_, int ntransf_, float tol_,
-                            const cufinufft_opts &opts_);
-template cufinufft_plan_t<double>::cufinufft_plan_t
-  (int type_, int dim_, const int *nmodes, int iflag_, int ntransf_, double tol_,
-                            const cufinufft_opts &opts_);
+template cufinufft_plan_t<float>::cufinufft_plan_t(int type_, int dim_, const int *nmodes,
+                                                   int iflag_, int ntransf_, float tol_,
+                                                   const cufinufft_opts &opts_);
+template cufinufft_plan_t<double>::cufinufft_plan_t(
+    int type_, int dim_, const int *nmodes, int iflag_, int ntransf_, double tol_,
+    const cufinufft_opts &opts_);
 
-template<typename T> void cufinufft_plan_t<T>::setpts_12 (int M_, const T *d_kx, const T *d_ky, const T *d_kz)
+template<typename T>
+void cufinufft_plan_t<T>::setpts_12(int M_, const T *d_kx, const T *d_ky, const T *d_kz)
 /*
     "setNUpts" stage (in single or double precision).
 
@@ -286,9 +279,9 @@ Notes: the type T means either single or double, matching the
   }
 }
 
-template<typename T> void cufinufft_plan_t<T>::setpts
-                          (int M_, const T *d_kx, const T *d_ky, const T *d_kz, int N_,
-                           const T *d_s, const T *d_t, const T *d_u) {
+template<typename T>
+void cufinufft_plan_t<T>::setpts(int M_, const T *d_kx, const T *d_ky, const T *d_kz,
+                                 int N_, const T *d_s, const T *d_t, const T *d_u) {
   DeviceSwitcher switcher(opts.gpu_device_id);
   // type 1 and type 2 setpts
   if (type == 1 || type == 2) {
@@ -307,8 +300,7 @@ template<typename T> void cufinufft_plan_t<T>::setpts
   M = M_;
   N = N_;
   if (type != 3) {
-    fprintf(stderr, "[%s] Invalid type (%d): should be 1, 2, or 3.\n", __func__,
-            type);
+    fprintf(stderr, "[%s] Invalid type (%d): should be 1, 2, or 3.\n", __func__, type);
     throw int(FINUFFT_ERR_TYPE_NOTVALID);
   }
   if (N < 0) {
@@ -338,34 +330,31 @@ template<typename T> void cufinufft_plan_t<T>::setpts
   using namespace cufinufft::utils;
   for (int idim = 0; idim < dim; ++idim) {
     const auto [xx, cc]           = arraywidcen<T>(M, d_kxyz[idim], stream);
-    type3_params.X[idim]   = xx;
-    type3_params.C[idim]   = cc;
+    type3_params.X[idim]          = xx;
+    type3_params.C[idim]          = cc;
     const auto [SS, DD]           = arraywidcen<T>(N, d_stu[idim], stream);
     const auto [nfnf, hh, gamgam] = set_nhg_type3<T>(SS, xx, opts, spopts);
-    nf123[idim]            = nfnf;
-    type3_params.S[idim]   = SS;
-    type3_params.D[idim]   = DD;
-    type3_params.h[idim]   = hh;
-    type3_params.gam[idim] = gamgam;
+    nf123[idim]                   = nfnf;
+    type3_params.S[idim]          = SS;
+    type3_params.D[idim]          = DD;
+    type3_params.h[idim]          = hh;
+    type3_params.gam[idim]        = gamgam;
   }
   if (opts.debug) {
     printf("[%s]", __func__);
     printf("\tM=%d N=%d\n", M, N);
     printf("\tX1=%.3g C1=%.3g S1=%.3g D1=%.3g gam1=%g nf1=%d h1=%.3g\t\n",
-           type3_params.X[0], type3_params.C[0], type3_params.S[0],
-           type3_params.D[0], type3_params.gam[0], nf123[0],
-           type3_params.h[0]);
+           type3_params.X[0], type3_params.C[0], type3_params.S[0], type3_params.D[0],
+           type3_params.gam[0], nf123[0], type3_params.h[0]);
     if (dim > 1) {
       printf("\tX2=%.3g C2=%.3g S2=%.3g D2=%.3g gam2=%g nf2=%d h2=%.3g\n",
-             type3_params.X[1], type3_params.C[1], type3_params.S[1],
-             type3_params.D[1], type3_params.gam[1], nf123[1],
-             type3_params.h[1]);
+             type3_params.X[1], type3_params.C[1], type3_params.S[1], type3_params.D[1],
+             type3_params.gam[1], nf123[1], type3_params.h[1]);
     }
     if (dim > 2) {
       printf("\tX3=%.3g C3=%.3g S3=%.3g D3=%.3g gam3=%g nf3=%d h3=%.3g\n",
-             type3_params.X[2], type3_params.C[2], type3_params.S[2],
-             type3_params.D[2], type3_params.gam[2], nf123[2],
-             type3_params.h[2]);
+             type3_params.X[2], type3_params.C[2], type3_params.S[2], type3_params.D[2],
+             type3_params.gam[2], nf123[2], type3_params.h[2]);
     }
   }
   nf = nf123[0] * nf123[1] * nf123[2];
@@ -397,12 +386,11 @@ template<typename T> void cufinufft_plan_t<T>::setpts
     const auto ig = T(1) / type3_params.gam[idim];
     const auto C  = -type3_params.C[idim];
     thrust::transform(thrust::cuda::par.on(stream), d_kxyz[idim], d_kxyz[idim] + M,
-                      dethrust(kxyzp[idim]),
-                      [ig, C] __host__
-                      __device__(const T x) -> T { return (x + C) * ig; });
+                      dethrust(kxyzp[idim]), [ig, C] __host__ __device__(const T x) -> T {
+                        return (x + C) * ig;
+                      });
   }
-  if (type3_params.D[0] != 0 || type3_params.D[1] != 0 ||
-      type3_params.D[2] != 0) {
+  if (type3_params.D[0] != 0 || type3_params.D[1] != 0 || type3_params.D[2] != 0) {
     // if ky is null, use kx for ky and kz
     // this is not the most efficient implementation, but it is the most compact
     const auto iterator =
@@ -430,17 +418,16 @@ template<typename T> void cufinufft_plan_t<T>::setpts
           return cuda_complex<T>{std::cos(phase), std::sin(phase) * realsign};
         });
   } else {
-    thrust::fill(thrust::cuda::par.on(stream), dethrust(prephase),
-                 dethrust(prephase) + M, cuda_complex<T>{1, 0});
+    thrust::fill(thrust::cuda::par.on(stream), dethrust(prephase), dethrust(prephase) + M,
+                 cuda_complex<T>{1, 0});
   }
 
   for (int idim = 0; idim < dim; ++idim) {
     const auto scale = type3_params.h[idim] * type3_params.gam[idim];
     const auto D     = -type3_params.D[idim];
-    thrust::transform(thrust::cuda::par.on(stream), d_stu[idim], d_stu[idim] + N,
-                      dethrust(STUp[idim]),
-                      [scale, D] __host__
-                      __device__(const T s) -> T { return scale * (s + D); });
+    thrust::transform(
+        thrust::cuda::par.on(stream), d_stu[idim], d_stu[idim] + N, dethrust(STUp[idim]),
+        [scale, D] __host__ __device__(const T s) -> T { return scale * (s + D); });
   }
   { // here we declare phi_hat1, phi_hat2, and phi_hat3
     // and the precomputed data for the fseries kernel
@@ -451,27 +438,24 @@ template<typename T> void cufinufft_plan_t<T>::setpts
     thrust::device_vector<T> d_nuft_precomp_z(3 * MAX_NQUAD);
     thrust::device_vector<T> d_nuft_precomp_f(3 * MAX_NQUAD);
     cuda::std::array<gpuArray<T>, 3> phi_hat123(
-        {gpuArray<T>{0, alloc}, gpuArray<T>{0, alloc},
-         gpuArray<T>{0, alloc}});
+        {gpuArray<T>{0, alloc}, gpuArray<T>{0, alloc}, gpuArray<T>{0, alloc}});
     for (int idim = 0; idim < dim; ++idim) phi_hat123[idim].resize(N);
     for (int idim = 0; idim < dim; ++idim)
       onedim_nuft_kernel_precomp<T>(nuft_precomp_f.data() + idim * MAX_NQUAD,
-                                    nuft_precomp_z.data() + idim * MAX_NQUAD,
-                                    spopts);
+                                    nuft_precomp_z.data() + idim * MAX_NQUAD, spopts);
     // copy the precomputed data to the device using thrust
     thrust::copy(nuft_precomp_z.begin(), nuft_precomp_z.end(), d_nuft_precomp_z.begin());
     thrust::copy(nuft_precomp_f.begin(), nuft_precomp_f.end(), d_nuft_precomp_f.begin());
     // sync the stream before calling the kernel might be needed
     nuft_kernel_compute(dim, {N, N, N}, d_nuft_precomp_f.data().get(),
-                        d_nuft_precomp_z.data().get(), STU, phi_hat123,
-                        spopts.nspread, stream);
+                        d_nuft_precomp_z.data().get(), STU, phi_hat123, spopts.nspread,
+                        stream);
 
     const auto is_c_finite = std::isfinite(type3_params.C[0]) &&
                              std::isfinite(type3_params.C[1]) &&
                              std::isfinite(type3_params.C[2]);
-    const auto is_c_nonzero = type3_params.C[0] != 0 ||
-                              type3_params.C[1] != 0 ||
-                              type3_params.C[2] != 0;
+    const auto is_c_nonzero =
+        type3_params.C[0] != 0 || type3_params.C[1] != 0 || type3_params.C[2] != 0;
 
     const auto phi_hat_iterator = thrust::make_zip_iterator(
         thrust::make_tuple(phi_hat123[0].data(),
@@ -479,7 +463,7 @@ template<typename T> void cufinufft_plan_t<T>::setpts
                            dim > 1 ? phi_hat123[1].data() : phi_hat123[0].data(),
                            // to avoid out of bounds access, use phi_hat1 if dim < 3
                            dim > 2 ? phi_hat123[2].data() : phi_hat123[0].data()));
-    auto xdim=dim;
+    auto xdim = dim;
     thrust::transform(thrust::cuda::par.on(stream), phi_hat_iterator,
                       phi_hat_iterator + N, dethrust(deconv),
                       [xdim] __host__
@@ -531,8 +515,7 @@ template<typename T> void cufinufft_plan_t<T>::setpts
     t2opts.gpu_method           = 0;
     // Safe to ignore the return value here?
     delete t2_plan;
-    t2_plan = new cufinufft_plan_t<T>(2, dim, t2modes, iflag, batchsize,
-                               tol, t2opts);
+    t2_plan = new cufinufft_plan_t<T>(2, dim, t2modes, iflag, batchsize, tol, t2opts);
     t2_plan->setpts_12(N, STU[0], STU[1], STU[2]);
     if (t2_plan->spopts.spread_direction != 2) {
       fprintf(stderr, "[%s] inner t2 plan cufinufft_setpts_12 wrong direction\n",
@@ -540,12 +523,12 @@ template<typename T> void cufinufft_plan_t<T>::setpts
     }
   }
 }
-template void cufinufft_plan_t<float>::setpts
-                          (int M_, const float *d_kx, const float *d_ky, const float *d_kz, int N_,
-                           const float *d_s, const float *d_t, const float *d_u);
-template void cufinufft_plan_t<double>::setpts
-                          (int M_, const double *d_kx, const double *d_ky, const double *d_kz, int N_,
-                           const double *d_s, const double *d_t, const double *d_u);
+template void cufinufft_plan_t<float>::setpts(
+    int M_, const float *d_kx, const float *d_ky, const float *d_kz, int N_,
+    const float *d_s, const float *d_t, const float *d_u);
+template void cufinufft_plan_t<double>::setpts(
+    int M_, const double *d_kx, const double *d_ky, const double *d_kz, int N_,
+    const double *d_s, const double *d_t, const double *d_u);
 
 template<typename T>
 static void cuspreadnd(const cufinufft_plan_t<T> &d_plan, int blksize) {
@@ -572,7 +555,8 @@ static void cuinterpnd(const cufinufft_plan_t<T> &d_plan, int blksize) {
   }
 }
 
-template<typename T> void cufinufft_plan_t<T>::exec1(cuda_complex<T> *d_c, cuda_complex<T> *d_fk)
+template<typename T>
+void cufinufft_plan_t<T>::exec1(cuda_complex<T> *d_c, cuda_complex<T> *d_fk)
 /*
     1D/2D/3D Type-1 NUFFT
 
@@ -588,18 +572,17 @@ template<typename T> void cufinufft_plan_t<T>::exec1(cuda_complex<T> *d_c, cuda_
 {
   assert(spopts.spread_direction == 1);
 
-  int nmodes   = 1;
+  int nmodes = 1;
   for (int idim = 0; idim < dim; ++idim) nmodes *= mstu[idim];
   for (int i = 0; i * batchsize < ntransf; i++) {
     int blksize = std::min(ntransf - i * batchsize, batchsize);
-    c    = d_c + i * batchsize * M;
-    fk   = d_fk + i * batchsize * nmodes; // so deconvolve will write into
-                                                        // user output f
-    if (opts.gpu_spreadinterponly)
-      fw = fk; // spread directly into user output f
+    c           = d_c + i * batchsize * M;
+    fk          = d_fk + i * batchsize * nmodes; // so deconvolve will write into
+                                                 // user output f
+    if (opts.gpu_spreadinterponly) fw = fk;      // spread directly into user output f
 
-    checkCudaErrors(cudaMemsetAsync(
-        fw, 0, batchsize * nf * sizeof(cuda_complex<T>), stream));
+    checkCudaErrors(
+        cudaMemsetAsync(fw, 0, batchsize * nf * sizeof(cuda_complex<T>), stream));
 
     // Step 1: Spread
     cuspreadnd<T>(*this, blksize);
@@ -607,8 +590,7 @@ template<typename T> void cufinufft_plan_t<T>::exec1(cuda_complex<T> *d_c, cuda_
     if (opts.gpu_spreadinterponly) continue; // skip steps 2 and 3
 
     // Step 2: FFT
-    cufftResult cufft_status =
-        cufft_ex(fftplan, fw, fw, iflag);
+    cufftResult cufft_status = cufft_ex(fftplan, fw, fw, iflag);
     if (cufft_status != CUFFT_SUCCESS) throw int(FINUFFT_ERR_CUDA_FAILURE);
 
     // Step 3: deconvolve and shuffle
@@ -616,7 +598,8 @@ template<typename T> void cufinufft_plan_t<T>::exec1(cuda_complex<T> *d_c, cuda_
   }
 }
 
-template<typename T> void cufinufft_plan_t<T>::exec2(cuda_complex<T> *d_c, cuda_complex<T> *d_fk)
+template<typename T>
+void cufinufft_plan_t<T>::exec2(cuda_complex<T> *d_c, cuda_complex<T> *d_fk)
 /*
     1D/2D/3D Type-2 NUFFT
 
@@ -636,8 +619,8 @@ template<typename T> void cufinufft_plan_t<T>::exec2(cuda_complex<T> *d_c, cuda_
   for (int idim = 0; idim < dim; ++idim) nmodes *= mstu[idim];
   for (int i = 0; i * batchsize < ntransf; i++) {
     int blksize = std::min(ntransf - i * batchsize, batchsize);
-    c    = d_c + i * batchsize * M;
-    fk   = d_fk + i * batchsize * nmodes;
+    c           = d_c + i * batchsize * M;
+    fk          = d_fk + i * batchsize * nmodes;
 
     // Skip steps 1 and 2 if interponly
     if (!opts.gpu_spreadinterponly) {
@@ -646,8 +629,7 @@ template<typename T> void cufinufft_plan_t<T>::exec2(cuda_complex<T> *d_c, cuda_
 
       // Step 2: FFT
       THROW_IF_CUDA_ERROR
-      cufftResult cufft_status =
-          cufft_ex(fftplan, fw, fw, iflag);
+      cufftResult cufft_status = cufft_ex(fftplan, fw, fw, iflag);
       if (cufft_status != CUFFT_SUCCESS) throw int(FINUFFT_ERR_CUDA_FAILURE);
     } else
       fw = fk; // interpolate directly from user input f
@@ -658,7 +640,8 @@ template<typename T> void cufinufft_plan_t<T>::exec2(cuda_complex<T> *d_c, cuda_
 }
 
 // TODO: in case data is centered, we could save GPU memory
-template<typename T> void cufinufft_plan_t<T>::exec3(cuda_complex<T> *d_c, cuda_complex<T> *d_fk) {
+template<typename T>
+void cufinufft_plan_t<T>::exec3(cuda_complex<T> *d_c, cuda_complex<T> *d_fk) {
   /*
     1D/2D/3D Type-3 NUFFT
 
@@ -672,7 +655,7 @@ template<typename T> void cufinufft_plan_t<T>::exec3(cuda_complex<T> *d_c, cuda_
   Marco Barbone 08/14/2024
   */
   for (int i = 0; i * batchsize < ntransf; i++) {
-    int blksize = std::min(ntransf - i * batchsize, batchsize);
+    int blksize                = std::min(ntransf - i * batchsize, batchsize);
     cuda_complex<T> *d_cstart  = d_c + i * batchsize * M;
     cuda_complex<T> *d_fkstart = d_fk + i * batchsize * N;
     // setting input for spreader
@@ -680,13 +663,12 @@ template<typename T> void cufinufft_plan_t<T>::exec3(cuda_complex<T> *d_c, cuda_
     // setting output for spreader
     fk = fw;
     // NOTE: fw might need to be set to 0
-    checkCudaErrors(cudaMemsetAsync(
-        fw, 0, batchsize * nf * sizeof(cuda_complex<T>), stream));
+    checkCudaErrors(
+        cudaMemsetAsync(fw, 0, batchsize * nf * sizeof(cuda_complex<T>), stream));
     // Step 0: pre-phase the input strengths
     for (int block = 0; block < blksize; block++) {
       thrust::transform(thrust::cuda::par.on(stream), dethrust(prephase),
-                        dethrust(prephase) + M, d_cstart + block * M,
-                        c + block * M,
+                        dethrust(prephase) + M, d_cstart + block * M, c + block * M,
                         thrust::multiplies<cuda_complex<T>>());
     }
     // Step 1: Spread
@@ -702,13 +684,14 @@ template<typename T> void cufinufft_plan_t<T>::exec3(cuda_complex<T> *d_c, cuda_
     // now we need to d_fk = d_fk*deconv
     for (int i = 0; i < blksize; i++) {
       thrust::transform(thrust::cuda::par.on(stream), dethrust(deconv),
-                        dethrust(deconv) + N, d_fkstart + i * N,
-                        d_fkstart + i * N, thrust::multiplies<cuda_complex<T>>());
+                        dethrust(deconv) + N, d_fkstart + i * N, d_fkstart + i * N,
+                        thrust::multiplies<cuda_complex<T>>());
     }
   }
 }
 
-template<typename T> void cufinufft_plan_t<T>::exec(cuda_complex<T> *d_c, cuda_complex<T> *d_fk) {
+template<typename T>
+void cufinufft_plan_t<T>::exec(cuda_complex<T> *d_c, cuda_complex<T> *d_fk) {
   DeviceSwitcher switcher(opts.gpu_device_id);
   switch (type) {
   case 1:
@@ -719,5 +702,7 @@ template<typename T> void cufinufft_plan_t<T>::exec(cuda_complex<T> *d_c, cuda_c
     return exec3(d_c, d_fk);
   }
 }
-template void cufinufft_plan_t<float>::exec(cuda_complex<float> *d_c, cuda_complex<float> *d_fk);
-template void cufinufft_plan_t<double>::exec(cuda_complex<double> *d_c, cuda_complex<double> *d_fk);
+template void cufinufft_plan_t<float>::exec(cuda_complex<float> *d_c,
+                                            cuda_complex<float> *d_fk);
+template void cufinufft_plan_t<double>::exec(cuda_complex<double> *d_c,
+                                             cuda_complex<double> *d_fk);

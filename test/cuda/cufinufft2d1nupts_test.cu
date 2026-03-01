@@ -7,8 +7,8 @@
 #include <iostream>
 #include <random>
 
-#include <finufft_common/common.h>
 #include <cufinufft.h>
+#include <finufft_common/common.h>
 
 #include <cufinufft/impl.h>
 #include <cufinufft/utils.h>
@@ -116,8 +116,7 @@ template<typename T> int run_test(int method) {
   printf("[time  ] cufinufft plan:\t\t %.3g s\n", milliseconds / 1000);
 
   cudaEventRecord(start);
-  dplan->setpts(M1, d_x1.data().get(), d_y1.data().get(), NULL, 0, NULL,
-                           NULL, NULL);
+  dplan->setpts(M1, d_x1.data().get(), d_y1.data().get(), NULL, 0, NULL, NULL, NULL);
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
   cudaEventElapsedTime(&milliseconds, start, stop);
@@ -126,7 +125,7 @@ template<typename T> int run_test(int method) {
 
   cudaEventRecord(start);
   dplan->exec((cuda_complex<T> *)d_c1.data().get(),
-                            (cuda_complex<T> *)d_fk1.data().get());
+              (cuda_complex<T> *)d_fk1.data().get());
 
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
@@ -136,8 +135,7 @@ template<typename T> int run_test(int method) {
   printf("[time  ] cufinufft exec (set 1):\t %.3g s\n", milliseconds / 1000);
 
   cudaEventRecord(start);
-  dplan->setpts(M2, d_x2.data().get(), d_y2.data().get(), NULL, 0, NULL,
-                           NULL, NULL);
+  dplan->setpts(M2, d_x2.data().get(), d_y2.data().get(), NULL, 0, NULL, NULL, NULL);
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
   cudaEventElapsedTime(&milliseconds, start, stop);
@@ -146,7 +144,7 @@ template<typename T> int run_test(int method) {
 
   cudaEventRecord(start);
   dplan->exec((cuda_complex<T> *)d_c2.data().get(),
-                            (cuda_complex<T> *)d_fk2.data().get());
+              (cuda_complex<T> *)d_fk2.data().get());
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
   cudaEventElapsedTime(&milliseconds, start, stop);

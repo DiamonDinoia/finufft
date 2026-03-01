@@ -3,8 +3,8 @@
 
 #include <cuComplex.h>
 #include <cuda.h>
-#include <cufinufft/types.h>
 #include <cufinufft/contrib/helper_cuda.h>
+#include <cufinufft/types.h>
 
 /* Kernel for copying fw to fk with amplication by prefac/ker */
 // Note: assume modeord=0: CMCL-compatible mode ordering in fk (from -N/2 up
@@ -54,7 +54,8 @@ static __global__ void deconv_nd(
   }
 }
 
-template<typename T> template<int modeord, int ndim>
+template<typename T>
+template<int modeord, int ndim>
 void cufinufft_plan_t<T>::deconvolve_nd<modeord, ndim>(int blksize) const
 /*
     wrapper for deconvolution & amplification in 1/2/3D.
@@ -70,25 +71,21 @@ void cufinufft_plan_t<T>::deconvolve_nd<modeord, ndim>(int blksize) const
 
   bool fw2fk = spopts.spread_direction == 1;
   if (!fw2fk)
-    checkCudaErrors(cudaMemsetAsync(
-        fw, 0, batchsize * nftot * sizeof(cuda_complex<T>), stream));
+    checkCudaErrors(
+        cudaMemsetAsync(fw, 0, batchsize * nftot * sizeof(cuda_complex<T>), stream));
 
   for (int t = 0; t < blksize; t++)
     deconv_nd<T, modeord, ndim><<<(nmodes + 256 - 1) / 256, 256, 0, stream>>>(
-        mstu, nf123, fw + t * nftot, fk + t * nmodes,
-        dethrust(fwkerhalf), fw2fk);
+        mstu, nf123, fw + t * nftot, fk + t * nmodes, dethrust(fwkerhalf), fw2fk);
 }
 
 template<typename T> void cufinufft_plan_t<T>::deconvolve(int blksize) const {
   if (dim == 1)
-    (opts.modeord == 0) ? deconvolve_nd<0, 1>(blksize)
-                        : deconvolve_nd<1, 1>(blksize);
+    (opts.modeord == 0) ? deconvolve_nd<0, 1>(blksize) : deconvolve_nd<1, 1>(blksize);
   if (dim == 2)
-    (opts.modeord == 0) ? deconvolve_nd<0, 2>(blksize)
-                        : deconvolve_nd<1, 2>(blksize);
+    (opts.modeord == 0) ? deconvolve_nd<0, 2>(blksize) : deconvolve_nd<1, 2>(blksize);
   if (dim == 3)
-    (opts.modeord == 0) ? deconvolve_nd<0, 3>(blksize)
-                        : deconvolve_nd<1, 3>(blksize);
+    (opts.modeord == 0) ? deconvolve_nd<0, 3>(blksize) : deconvolve_nd<1, 3>(blksize);
 }
 
 template void cufinufft_plan_t<float>::deconvolve(int blksize) const;

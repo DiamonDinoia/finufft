@@ -6,8 +6,8 @@
 #include <limits>
 #include <random>
 
-#include <finufft_common/common.h>
 #include <cufinufft.h>
+#include <finufft_common/common.h>
 
 #include <cufinufft/impl.h>
 #include <cufinufft/utils.h>
@@ -125,8 +125,8 @@ int run_test(int method, int type, int N1, int N2, int M, T tol, T checktol, int
   printf("[time  ] cufinufft plan:\t\t %.3g s\n", milliseconds / 1000);
 
   cudaEventRecord(start);
-  dplan->setpts(M, d_x.data().get(), d_y.data().get(), nullptr, N1 * N2,
-                           d_s.data().get(), d_t.data().get(), nullptr);
+  dplan->setpts(M, d_x.data().get(), d_y.data().get(), nullptr, N1 * N2, d_s.data().get(),
+                d_t.data().get(), nullptr);
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
   cudaEventElapsedTime(&milliseconds, start, stop);
@@ -134,8 +134,7 @@ int run_test(int method, int type, int N1, int N2, int M, T tol, T checktol, int
   printf("[time  ] cufinufft setNUpts:\t\t %.3g s\n", milliseconds / 1000);
 
   cudaEventRecord(start);
-  dplan->exec((cuda_complex<T> *)d_c.data().get(),
-                            (cuda_complex<T> *)d_fk.data().get());
+  dplan->exec((cuda_complex<T> *)d_c.data().get(), (cuda_complex<T> *)d_fk.data().get());
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
   cudaEventElapsedTime(&milliseconds, start, stop);
