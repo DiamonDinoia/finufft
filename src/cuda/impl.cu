@@ -14,10 +14,30 @@
 #include <finufft_errors.h>
 #include <thrust/device_vector.h>
 
-template<typename T>
-int cufinufft_makeplan_impl(int type, int dim, const int *nmodes, int iflag, int ntransf,
-                            T tol, cufinufft_plan_t<T> **d_plan_ptr,
-                            const cufinufft_opts *opts) {
+static bool have_pool_support(const cufinufft_opts &opts) {
+  DeviceSwitcher switcher(opts.gpu_device_id);
+  int supports_pools = 0;
+  cudaDeviceGetAttribute(&supports_pools, cudaDevAttrMemoryPoolsSupported, opts.gpu_device_id);
+  static bool warned = false;
+  if (!warned && !supports_pools && opts.gpu_stream != nullptr) {
+    fprintf(stderr,
+            "[cufinufft] Warning: cudaMallocAsync not supported on this device. Use of "
+            "CUDA streams may not perform optimally.\n");
+    warned = true;
+  }
+  return supports_pools;
+}
+
+template<typename T> cufinufft_plan_t<T>::cufinufft_plan_t
+  (int type_, int dim_, const int *nmodes, int iflag_, int ntransf_, T tol_,
+                            const cufinufft_opts &opts_)
+  : opts(opts_),
+    supports_pools(have_pool_support(opts_)),
+    tol(tol_),
+    type(type_),
+    dim(dim_),
+    ntransf(ntransf_),
+    iflag(iflag_>=0 ? 1:-1) {
   /*
       "plan" stage (in single or double precision).
           See ../docs/cppdoc.md for main user-facing documentation.
@@ -41,8 +61,6 @@ int cufinufft_makeplan_impl(int type, int dim, const int *nmodes, int iflag, int
   using namespace cufinufft::common;
   using namespace finufft::common;
 
-  *d_plan_ptr = nullptr;
-
   if (type < 1 || type > 3) {
     fprintf(stderr, "[%s] Invalid type (%d): should be 1, 2, or 3.\n", __func__, type);
     throw int(FINUFFT_ERR_TYPE_NOTVALID);
@@ -53,202 +71,156 @@ int cufinufft_makeplan_impl(int type, int dim, const int *nmodes, int iflag, int
     throw int(FINUFFT_ERR_NTRANS_NOTVALID);
   }
 
-  /* If a user has not supplied their own options, assign defaults for them. */
-  cufinufft_opts planopts;
-  if (opts == nullptr) { // use default opts
-    cufinufft_default_opts(&planopts);
-  } else {               // or read from what's passed in
-    planopts = *opts;    // keep a deep copy; changing *opts now has no effect
+  // set nf1, nf2, nf3 to 1 for type 3, type 1, type 2 will overwrite this
+  nf123                 = {1, 1, 1};
+  opts.gpu_maxbatchsize = std::max(opts.gpu_maxbatchsize, 1);
+  opts.gpu_np = opts.gpu_method == 3 ? opts.gpu_np : 0;
+
+  if (type != 3) {
+    mstu = {nmodes[0], nmodes[1], nmodes[2]};
+    if (opts.debug) {
+      printf("[cufinufft] (ms,mt,mu): %d %d %d\n", mstu[0], mstu[1],
+             mstu[2]);
+    }
+  } else { // type 3 turns its outer type 1 into spreading-only
+    opts.gpu_spreadinterponly = 1;
   }
 
-  // Multi-GPU support: set the CUDA Device ID:
-  const int device_id = planopts.gpu_device_id;
-  DeviceSwitcher switcher(device_id);
+  batchsize = opts.gpu_maxbatchsize;
+  // TODO: check if this is the right heuristic
+  if (batchsize == 0)                 // implies: use a heuristic.
+    batchsize = std::min(ntransf, 8); // heuristic from test codes
 
-  // cudaMallocAsync isn't supported for all devices, regardless of cuda version. Check
-  // for support
-  int supports_pools = 0;
+  stream = (cudaStream_t)opts.gpu_stream;
+
+  // simple check to use upsampfac=1.25 if tol is big
+  // FIXME: since cufft is really fast we should use 1.25 only if we run out of vram
+  if (opts.upsampfac == 0.0) { // indicates auto-choose
+    opts.upsampfac = 2.0;      // default, and need for tol small
+    if (tol >= (T)1E-9 && type == 3) { // the tol sigma=5/4 can reach
+      opts.upsampfac = 1.25;
+    }
+    if (opts.debug) {
+      printf("[cufinufft] upsampfac automatically set to %.3g\n",
+             opts.upsampfac);
+    }
+  }
+  /* Setup Spreader */
+  eps_too_small = cufinufft::spreadinterp::setup_spreader(spopts, tol, T(opts.upsampfac), opts.gpu_kerevalmeth,
+                 opts.debug, opts.gpu_spreadinterponly)!=0;
+
+  spopts.spread_direction = type;
+
+  if (opts.debug) {
+    // print the spreader options
+    printf("[cufinufft] spreader options:\n");
+    printf("[cufinufft] nspread: %d\n", spopts.nspread);
+  }
   {
-    cudaDeviceGetAttribute(&supports_pools, cudaDevAttrMemoryPoolsSupported, device_id);
-    static bool warned = false;
-    if (!warned && !supports_pools && planopts.gpu_stream != nullptr) {
-      fprintf(stderr,
-              "[cufinufft] Warning: cudaMallocAsync not supported on this device. Use of "
-              "CUDA streams may not perform optimally.\n");
-      warned = true;
+    /* Automatically set GPU method. */
+    const bool auto_method = opts.gpu_method == 0;
+    if (auto_method) {
+      // Default to method 2 (SM) for type 1/3, otherwise method 1 (GM).
+      opts.gpu_method = (type == 1 || type == 3) ? 2 : 1;
     }
+    try {
+      cufinufft_setup_binsize<T>(type, spopts.nspread, dim, &opts);
+    } catch (const std::runtime_error &e) {
+      if (auto_method) {
+        // Auto-selection of SM failed, fall back to GM and try again.
+        opts.gpu_method = 1;
+        cufinufft_setup_binsize<T>(type, spopts.nspread, dim, &opts);
+      } else {
+        // User-specified method failed, or the fallback GM method failed.
+        fprintf(stderr, "%s, method %d\n", e.what(), opts.gpu_method);
+        throw int(FINUFFT_ERR_INSUFFICIENT_SHMEM);
+      }
+    }
+    THROW_IF_CUDA_ERROR
+  }
+  // Bin size and memory info now printed in cufinufft_setup_binsize() (common.cu)
+  // Additional runtime info at debug level 2
+  if (opts.debug >= 2) {
+    printf("[cufinufft] Runtime: grid=(%ld,%ld,%ld), M=%ld\n", nf123[0],
+           nf123[1], nf123[2], M);
   }
 
-  /* allocate the plan structure, assign address to user pointer. */
-  auto *d_plan = new cufinufft_plan_t<T>(planopts, bool(supports_pools));
-  *d_plan_ptr  = d_plan;
-  try {
-    // Zero out your struct, (sets all pointers to NULL)
-    // set nf1, nf2, nf3 to 1 for type 3, type 1, type 2 will overwrite this
-    d_plan->nf123                 = {1, 1, 1};
-    d_plan->tol                   = tol;
-    d_plan->opts                  = planopts;
-    d_plan->dim                   = dim;
-    d_plan->opts.gpu_maxbatchsize = std::max(d_plan->opts.gpu_maxbatchsize, 1);
-    d_plan->opts.gpu_np = d_plan->opts.gpu_method == 3 ? d_plan->opts.gpu_np : 0;
+  // dynamically request the maximum amount of shared memory available
+  // for the spreader
 
-    if (type != 3) {
-      d_plan->mstu = {nmodes[0], nmodes[1], nmodes[2]};
-      if (d_plan->opts.debug) {
-        printf("[cufinufft] (ms,mt,mu): %d %d %d\n", d_plan->mstu[0], d_plan->mstu[1],
-               d_plan->mstu[2]);
+  THROW_IF_CUDA_ERROR
+
+  if (type == 1 || type == 2) {
+    if (opts.gpu_spreadinterponly) {
+      // spread/interp grid is precisely the user "mode" sizes, no upsampling
+      for (int idim = 0; idim < dim; ++idim) nf123[idim] = mstu[idim];
+      if (opts.debug) {
+        printf("[cufinufft] spreadinterponly mode: (nf1,nf2,nf3) = (%d, %d, %d)\n",
+               nf123[0], nf123[1], nf123[2]);
       }
-    } else { // type 3 turns its outer type 1 into spreading-only
-      d_plan->opts.gpu_spreadinterponly = 1;
+    } else { // usual NUFFT with fine grid using upsampling
+      std::array<int, 3> obinsize{opts.gpu_obinsizex,
+                                  opts.gpu_obinsizey,
+                                  opts.gpu_obinsizez};
+      for (int idim = 0; idim < dim; ++idim)
+        set_nf_type12(mstu[idim], opts, spopts,
+                      &nf123[idim], obinsize[idim]);
+      if (opts.debug)
+        printf("[cufinufft] (nf1,nf2,nf3) = (%d, %d, %d)\n", nf123[0],
+               nf123[1], nf123[2]);
     }
+    nf = nf123[0] * nf123[1] * nf123[2];
 
-    d_plan->iflag   = (iflag >= 0) ? 1 : -1;
-    d_plan->ntransf = ntransf;
+    allocate();
 
-    int batchsize = (opts != nullptr) ? opts->gpu_maxbatchsize : 0;
-    // TODO: check if this is the right heuristic
-    if (batchsize == 0)                 // implies: use a heuristic.
-      batchsize = std::min(ntransf, 8); // heuristic from test codes
-    d_plan->batchsize = batchsize;
-
-    const auto stream = d_plan->stream = (cudaStream_t)d_plan->opts.gpu_stream;
-
-    // simple check to use upsampfac=1.25 if tol is big
-    // FIXME: since cufft is really fast we should use 1.25 only if we run out of vram
-    if (d_plan->opts.upsampfac == 0.0) { // indicates auto-choose
-      d_plan->opts.upsampfac = 2.0;      // default, and need for tol small
-      if (tol >= (T)1E-9 && type == 3) { // the tol sigma=5/4 can reach
-        d_plan->opts.upsampfac = 1.25;
+    // We don't need any cuFFT plans or kernel values if we are only spreading /
+    // interpolating
+    if (!opts.gpu_spreadinterponly) {
+      int n[3];
+      int ntot = 1;
+      for (int idim = 0; idim < dim; ++idim) {
+        n[idim] = int(nf123[dim - idim - 1]);
+        ntot *= n[idim];
       }
-      if (d_plan->opts.debug) {
-        printf("[cufinufft] upsampfac automatically set to %.3g\n",
-               d_plan->opts.upsampfac);
+      cufftResult_t cufft_status = cufftPlanMany(
+          &fftplan, dim, n, n, 1, ntot, n, 1, ntot, cufft_type<T>(), batchsize);
+
+      if (cufft_status != CUFFT_SUCCESS) {
+        fprintf(stderr, "[%s] cufft makeplan error: %s", __func__,
+                cufftGetErrorString(cufft_status));
+        throw int(FINUFFT_ERR_CUDA_FAILURE);
       }
+      cufftSetStream(fftplan, stream);
+
+      // compute up to 3 * NQUAD precomputed values on CPU
+      T fseries_precomp_phase[3 * MAX_NQUAD];
+      T fseries_precomp_f[3 * MAX_NQUAD];
+      thrust::device_vector<T> d_fseries_precomp_phase(3 * MAX_NQUAD);
+      thrust::device_vector<T> d_fseries_precomp_f(3 * MAX_NQUAD);
+      for (int idim = 0; idim < dim; ++idim)
+        onedim_fseries_kernel_precomp<T>(
+            nf123[idim], fseries_precomp_f + idim * MAX_NQUAD,
+            fseries_precomp_phase + idim * MAX_NQUAD, spopts);
+      // copy the precomputed data to the device using thrust
+      thrust::copy(fseries_precomp_phase, fseries_precomp_phase + 3 * MAX_NQUAD,
+                   d_fseries_precomp_phase.begin());
+      thrust::copy(fseries_precomp_f, fseries_precomp_f + 3 * MAX_NQUAD,
+                   d_fseries_precomp_f.begin());
+      // the full fseries is done on the GPU here
+      fseries_kernel_compute(dim, nf123,
+                             d_fseries_precomp_f.data().get(),
+                             d_fseries_precomp_phase.data().get(), fwkerhalf,
+                             spopts.nspread, stream);
     }
-    /* Setup Spreader */
-    int ier = setup_spreader_for_nufft(d_plan->spopts, tol, d_plan->opts);
-
-    d_plan->type                    = type;
-    d_plan->spopts.spread_direction = d_plan->type;
-
-    if (d_plan->opts.debug) {
-      // print the spreader options
-      printf("[cufinufft] spreader options:\n");
-      printf("[cufinufft] nspread: %d\n", d_plan->spopts.nspread);
-    }
-    {
-      /* Automatically set GPU method. */
-      const bool auto_method = d_plan->opts.gpu_method == 0;
-      if (auto_method) {
-        // Default to method 2 (SM) for type 1/3, otherwise method 1 (GM).
-        d_plan->opts.gpu_method = (type == 1 || type == 3) ? 2 : 1;
-      }
-      try {
-        cufinufft_setup_binsize<T>(type, d_plan->spopts.nspread, dim, &d_plan->opts);
-      } catch (const std::runtime_error &e) {
-        if (auto_method) {
-          // Auto-selection of SM failed, fall back to GM and try again.
-          d_plan->opts.gpu_method = 1;
-          cufinufft_setup_binsize<T>(type, d_plan->spopts.nspread, dim, &d_plan->opts);
-        } else {
-          // User-specified method failed, or the fallback GM method failed.
-          fprintf(stderr, "%s, method %d\n", e.what(), d_plan->opts.gpu_method);
-          throw int(FINUFFT_ERR_INSUFFICIENT_SHMEM);
-        }
-      }
-      THROW_IF_CUDA_ERROR
-    }
-    // Bin size and memory info now printed in cufinufft_setup_binsize() (common.cu)
-    // Additional runtime info at debug level 2
-    if (d_plan->opts.debug >= 2) {
-      printf("[cufinufft] Runtime: grid=(%ld,%ld,%ld), M=%ld\n", d_plan->nf123[0],
-             d_plan->nf123[1], d_plan->nf123[2], d_plan->M);
-    }
-
-    // dynamically request the maximum amount of shared memory available
-    // for the spreader
-
-    THROW_IF_CUDA_ERROR
-
-    if (type == 1 || type == 2) {
-      if (d_plan->opts.gpu_spreadinterponly) {
-        // spread/interp grid is precisely the user "mode" sizes, no upsampling
-        for (int idim = 0; idim < dim; ++idim) d_plan->nf123[idim] = d_plan->mstu[idim];
-        if (d_plan->opts.debug) {
-          printf("[cufinufft] spreadinterponly mode: (nf1,nf2,nf3) = (%d, %d, %d)\n",
-                 d_plan->nf123[0], d_plan->nf123[1], d_plan->nf123[2]);
-        }
-      } else { // usual NUFFT with fine grid using upsampling
-        std::array<int, 3> obinsize{d_plan->opts.gpu_obinsizex,
-                                    d_plan->opts.gpu_obinsizey,
-                                    d_plan->opts.gpu_obinsizez};
-        for (int idim = 0; idim < dim; ++idim)
-          set_nf_type12(d_plan->mstu[idim], d_plan->opts, d_plan->spopts,
-                        &d_plan->nf123[idim], obinsize[idim]);
-        if (d_plan->opts.debug)
-          printf("[cufinufft] (nf1,nf2,nf3) = (%d, %d, %d)\n", d_plan->nf123[0],
-                 d_plan->nf123[1], d_plan->nf123[2]);
-      }
-      d_plan->nf = d_plan->nf123[0] * d_plan->nf123[1] * d_plan->nf123[2];
-
-      d_plan->allocate();
-
-      // We don't need any cuFFT plans or kernel values if we are only spreading /
-      // interpolating
-      if (!d_plan->opts.gpu_spreadinterponly) {
-        cufftHandle fftplan;
-        int n[3];
-        int ntot = 1;
-        for (int idim = 0; idim < d_plan->dim; ++idim) {
-          n[idim] = int(d_plan->nf123[d_plan->dim - idim - 1]);
-          ntot *= n[idim];
-        }
-        cufftResult_t cufft_status = cufftPlanMany(
-            &fftplan, d_plan->dim, n, n, 1, ntot, n, 1, ntot, cufft_type<T>(), batchsize);
-
-        if (cufft_status != CUFFT_SUCCESS) {
-          fprintf(stderr, "[%s] cufft makeplan error: %s", __func__,
-                  cufftGetErrorString(cufft_status));
-          throw int(FINUFFT_ERR_CUDA_FAILURE);
-        }
-        cufftSetStream(fftplan, stream);
-
-        d_plan->fftplan = fftplan;
-
-        // compute up to 3 * NQUAD precomputed values on CPU
-        T fseries_precomp_phase[3 * MAX_NQUAD];
-        T fseries_precomp_f[3 * MAX_NQUAD];
-        thrust::device_vector<T> d_fseries_precomp_phase(3 * MAX_NQUAD);
-        thrust::device_vector<T> d_fseries_precomp_f(3 * MAX_NQUAD);
-        for (int idim = 0; idim < d_plan->dim; ++idim)
-          onedim_fseries_kernel_precomp<T>(
-              d_plan->nf123[idim], fseries_precomp_f + idim * MAX_NQUAD,
-              fseries_precomp_phase + idim * MAX_NQUAD, d_plan->spopts);
-        // copy the precomputed data to the device using thrust
-        thrust::copy(fseries_precomp_phase, fseries_precomp_phase + 3 * MAX_NQUAD,
-                     d_fseries_precomp_phase.begin());
-        thrust::copy(fseries_precomp_f, fseries_precomp_f + 3 * MAX_NQUAD,
-                     d_fseries_precomp_f.begin());
-        // the full fseries is done on the GPU here
-        fseries_kernel_compute(d_plan->dim, d_plan->nf123,
-                               d_fseries_precomp_f.data().get(),
-                               d_fseries_precomp_phase.data().get(), d_plan->fwkerhalf,
-                               d_plan->spopts.nspread, stream);
-      }
-    }
-    return ier;
-  } catch (...) {
-    delete d_plan;
-    *d_plan_ptr = nullptr;
-    throw;
   }
 }
-template int cufinufft_makeplan_impl(
-    int type, int dim, const int *nmodes, int iflag, int ntransf, float tol,
-    cufinufft_plan_t<float> **d_plan_ptr, const cufinufft_opts *opts);
-template int cufinufft_makeplan_impl(
-    int type, int dim, const int *nmodes, int iflag, int ntransf, double tol,
-    cufinufft_plan_t<double> **d_plan_ptr, const cufinufft_opts *opts);
+
+template cufinufft_plan_t<float>::cufinufft_plan_t
+  (int type_, int dim_, const int *nmodes, int iflag_, int ntransf_, float tol_,
+                            const cufinufft_opts &opts_);
+template cufinufft_plan_t<double>::cufinufft_plan_t
+  (int type_, int dim_, const int *nmodes, int iflag_, int ntransf_, double tol_,
+                            const cufinufft_opts &opts_);
 
 template<typename T> void cufinufft_plan_t<T>::setpts_12 (int M_, const T *d_kx, const T *d_ky, const T *d_kz)
 /*
@@ -559,10 +531,8 @@ template<typename T> void cufinufft_plan_t<T>::setpts
     t2opts.gpu_method           = 0;
     // Safe to ignore the return value here?
     delete t2_plan;
-    t2_plan = nullptr;
-    // check that maxbatchsize is correct
-    cufinufft_makeplan_impl<T>(2, dim, t2modes, iflag, batchsize,
-                               tol, &t2_plan, &t2opts);
+    t2_plan = new cufinufft_plan_t<T>(2, dim, t2modes, iflag, batchsize,
+                               tol, t2opts);
     t2_plan->setpts_12(N, STU[0], STU[1], STU[2]);
     if (t2_plan->spopts.spread_direction != 2) {
       fprintf(stderr, "[%s] inner t2 plan cufinufft_setpts_12 wrong direction\n",

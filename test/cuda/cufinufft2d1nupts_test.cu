@@ -108,7 +108,7 @@ template<typename T> int run_test(int method) {
   nmodes[1] = N2;
   nmodes[2] = 1;
   cudaEventRecord(start);
-  cufinufft_makeplan_impl<T>(type, dim, nmodes, iflag, ntransf, tol, &dplan, &opts);
+  dplan = new cufinufft_plan_t<T>(type, dim, nmodes, iflag, ntransf, tol, opts);
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
   cudaEventElapsedTime(&milliseconds, start, stop);

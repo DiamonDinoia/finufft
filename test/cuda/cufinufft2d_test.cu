@@ -117,7 +117,7 @@ int run_test(int method, int type, int N1, int N2, int M, T tol, T checktol, int
   int nmodes[3]         = {N1, N2, 1};
   int ntransf           = 1;
   cudaEventRecord(start);
-  cufinufft_makeplan_impl(type, dim, nmodes, iflag, ntransf, tol, &dplan, &opts);
+  dplan = new cufinufft_plan_t<T>(type, dim, nmodes, iflag, ntransf, tol, opts);
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
   cudaEventElapsedTime(&milliseconds, start, stop);

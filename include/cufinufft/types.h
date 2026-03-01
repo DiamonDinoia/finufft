@@ -190,9 +190,13 @@ template<typename T> struct cufinufft_plan_t {
   cufftHandle fftplan = 0;
   cudaStream_t stream = 0;
 
+  bool eps_too_small = false;
+
   cufinufft_plan_t() = delete;
-  cufinufft_plan_t(const cufinufft_opts &opts_, bool supports_pools_)
-      : opts(opts_), supports_pools(supports_pools_) {}
+  cufinufft_plan_t(int type_, int dim_, const int *nmodes, int iflag_, int ntransf_,
+                            T tol_, const cufinufft_opts &opts_);
+//  cufinufft_plan_t(const cufinufft_opts &opts_, bool supports_pools_)
+//      : opts(opts_), supports_pools(supports_pools_) {}
   cufinufft_plan_t &operator=(cufinufft_plan_t &) = delete;
 
   ~cufinufft_plan_t() {

@@ -43,8 +43,15 @@ int cufinufftf_makeplan(int type, int dim, const int64_t *nmodes, int iflag, int
       return FINUFFT_ERR_NDATA_NOTVALID;
     }
 
-    return cufinufft_makeplan_impl(type, dim, nmodes32, iflag, ntransf, tol,
-                                   (cufinufft_plan_t<float> **)d_plan_ptr, opts);
+    cufinufft_opts planopts;
+    if (opts)
+      planopts = *opts;
+    else
+      cufinufft_default_opts(&planopts);
+
+    auto res = new cufinufft_plan_t<float>(type, dim, nmodes32, iflag, ntransf, tol, planopts);
+    *d_plan_ptr = (cufinufftf_plan) res;
+    return res->eps_too_small;
   });
 }
 
@@ -62,8 +69,15 @@ int cufinufft_makeplan(int type, int dim, const int64_t *nmodes, int iflag, int 
       return FINUFFT_ERR_NDATA_NOTVALID;
     }
 
-    return cufinufft_makeplan_impl(type, dim, nmodes32, iflag, ntransf, tol,
-                                   (cufinufft_plan_t<double> **)d_plan_ptr, opts);
+    cufinufft_opts planopts;
+    if (opts)
+      planopts = *opts;
+    else
+      cufinufft_default_opts(&planopts);
+
+    auto res = new cufinufft_plan_t<double>(type, dim, nmodes32, iflag, ntransf, tol, planopts);
+    *d_plan_ptr = (cufinufft_plan) res;
+    return res->eps_too_small;
   });
 }
 

@@ -60,7 +60,7 @@ int run_test(int N1, int M, T tol, T checktol, int iflag, double upsampfac) {
   cudaEventCreate(&start);
   cudaEventCreate(&stop);
 
-  cufinufft_makeplan_impl<T>(1, dim, nmodes, iflag, ntransf, tol, &dplan, &opts);
+  dplan = new cufinufft_plan_t<T>(1, dim, nmodes, iflag, ntransf, tol, opts);
   dplan->setpts(M, d_x.data().get(), nullptr, nullptr, 0, nullptr,
                            nullptr, nullptr);
   dplan->exec((cuda_complex<T> *)d_c.data().get(),
@@ -96,7 +96,7 @@ int run_test(int N1, int M, T tol, T checktol, int iflag, double upsampfac) {
   cudaDeviceSynchronize();
   cudaEventRecord(start);
 
-  cufinufft_makeplan_impl<T>(1, dim, nmodes, iflag, ntransf, tol, &dplan, &opts);
+  dplan = new cufinufft_plan_t<T>(1, dim, nmodes, iflag, ntransf, tol, opts);
   dplan->setpts(M, d_x.data().get(), nullptr, nullptr, 0, nullptr,
                            nullptr, nullptr);
   dplan->exec((cuda_complex<T> *)d_c.data().get(),
@@ -126,7 +126,7 @@ int run_test(int N1, int M, T tol, T checktol, int iflag, double upsampfac) {
   cudaDeviceSynchronize();
   cudaEventRecord(start);
 
-  cufinufft_makeplan_impl<T>(2, dim, nmodes, iflag, ntransf, tol, &dplan, &opts);
+  dplan = new cufinufft_plan_t<T>(2, dim, nmodes, iflag, ntransf, tol, opts);
   dplan->setpts(M, d_x.data().get(), nullptr, nullptr, 0, nullptr,
                            nullptr, nullptr);
 

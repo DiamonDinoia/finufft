@@ -139,16 +139,6 @@ template void nuft_kernel_compute(
     const double *d_z, cuda::std::array<const double *, 3> d_kxyz,
     cuda::std::array<gpuArray<double>, 3> &d_fwkerhalf, int ns, cudaStream_t stream);
 
-template<typename T>
-int setup_spreader_for_nufft(finufft_spread_opts &spopts, T eps, cufinufft_opts opts)
-// Set up the spreader parameters given eps, and pass across various nufft
-// options. Report status of setup_spreader. Just a wrapper following the CPU code.
-{
-  int ier = setup_spreader(spopts, eps, (T)opts.upsampfac, opts.gpu_kerevalmeth,
-                           opts.debug, opts.gpu_spreadinterponly);
-  return ier;
-}
-
 void set_nf_type12(CUFINUFFT_BIGINT ms, cufinufft_opts opts, finufft_spread_opts spopts,
                    CUFINUFFT_BIGINT *nf, CUFINUFFT_BIGINT bs)
 // type 1 & 2 recipe for how to set 1d size of upsampled array, nf, given opts
@@ -161,10 +151,6 @@ void set_nf_type12(CUFINUFFT_BIGINT ms, cufinufft_opts opts, finufft_spread_opts
     *nf = utils::next235beven(*nf, opts.gpu_method == 4 ? bs : 1); // expensive at huge nf
   }
 }
-template int setup_spreader_for_nufft(finufft_spread_opts &spopts, float eps,
-                                      cufinufft_opts opts);
-template int setup_spreader_for_nufft(finufft_spread_opts &spopts, double eps,
-                                      cufinufft_opts opts);
 
 /*
   Precomputation of approximations of exact Fourier series coeffs of cnufftspread's
