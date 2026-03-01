@@ -5,7 +5,6 @@
 
 #include <cufinufft.h>
 #include <cufinufft/common.h>
-#include <cufinufft/cudeconvolve.h>
 #include <cufinufft/defs.h>
 #include <cufinufft/impl.h>
 #include <cufinufft/spreadinterp.h>
@@ -626,7 +625,6 @@ static void cufinufft1_exec(cuda_complex<T> *d_c, cuda_complex<T> *d_fk,
     Melody Shih 07/25/19
 */
 {
-  using namespace cufinufft::deconvolve;
   assert(d_plan.spopts.spread_direction == 1);
 
   auto &stream = d_plan.stream;
@@ -654,7 +652,7 @@ static void cufinufft1_exec(cuda_complex<T> *d_c, cuda_complex<T> *d_fk,
     if (cufft_status != CUFFT_SUCCESS) throw int(FINUFFT_ERR_CUDA_FAILURE);
 
     // Step 3: deconvolve and shuffle
-    cudeconvolve(d_plan, blksize);
+    d_plan.deconvolve(blksize);
   }
 }
 
@@ -674,7 +672,6 @@ static void cufinufft2_exec(cuda_complex<T> *d_c, cuda_complex<T> *d_fk,
     Melody Shih 07/25/19
 */
 {
-  using namespace cufinufft::deconvolve;
   assert(d_plan.spopts.spread_direction == 2);
 
   int nmodes = 1;
@@ -687,7 +684,7 @@ static void cufinufft2_exec(cuda_complex<T> *d_c, cuda_complex<T> *d_fk,
     // Skip steps 1 and 2 if interponly
     if (!d_plan.opts.gpu_spreadinterponly) {
       // Step 1: amplify Fourier coeffs fk and copy into upsampled array fw
-      cudeconvolve(d_plan, blksize);
+      d_plan.deconvolve(blksize);
 
       // Step 2: FFT
       THROW_IF_CUDA_ERROR
@@ -718,7 +715,6 @@ static void cufinufft3_exec(cuda_complex<T> *d_c, cuda_complex<T> *d_fk,
 
   Marco Barbone 08/14/2024
   */
-  using namespace cufinufft::deconvolve;
   const auto &stream = d_plan.stream;
   for (int i = 0; i * d_plan.batchsize < d_plan.ntransf; i++) {
     int blksize = std::min(d_plan.ntransf - i * d_plan.batchsize, d_plan.batchsize);

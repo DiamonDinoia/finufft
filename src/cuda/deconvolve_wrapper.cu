@@ -3,12 +3,9 @@
 
 #include <cuComplex.h>
 #include <cuda.h>
+#include <cufinufft/types.h>
 #include <cufinufft/contrib/helper_cuda.h>
 
-#include <cufinufft/cudeconvolve.h>
-
-namespace cufinufft {
-namespace deconvolve {
 /* Kernel for copying fw to fk with amplication by prefac/ker */
 // Note: assume modeord=0: CMCL-compatible mode ordering in fk (from -N/2 up
 // to N/2-1), modeord=1: FFT-compatible mode ordering in fk (from 0 to N/2-1, then -N/2 up
@@ -82,20 +79,17 @@ static void cudeconvolve_nd(const cufinufft_plan_t<T> &d_plan, int blksize)
         dethrust(d_plan.fwkerhalf), fw2fk);
 }
 
-template<typename T> void cudeconvolve(const cufinufft_plan_t<T> &d_plan, int blksize) {
-  if (d_plan.dim == 1)
-    (d_plan.opts.modeord == 0) ? cudeconvolve_nd<T, 0, 1>(d_plan, blksize)
-                               : cudeconvolve_nd<T, 1, 1>(d_plan, blksize);
-  if (d_plan.dim == 2)
-    (d_plan.opts.modeord == 0) ? cudeconvolve_nd<T, 0, 2>(d_plan, blksize)
-                               : cudeconvolve_nd<T, 1, 2>(d_plan, blksize);
-  if (d_plan.dim == 3)
-    (d_plan.opts.modeord == 0) ? cudeconvolve_nd<T, 0, 3>(d_plan, blksize)
-                               : cudeconvolve_nd<T, 1, 3>(d_plan, blksize);
+template<typename T> void cufinufft_plan_t<T>::deconvolve(int blksize) {
+  if (dim == 1)
+    (opts.modeord == 0) ? cudeconvolve_nd<T, 0, 1>(*this, blksize)
+                        : cudeconvolve_nd<T, 1, 1>(*this, blksize);
+  if (dim == 2)
+    (opts.modeord == 0) ? cudeconvolve_nd<T, 0, 2>(*this, blksize)
+                        : cudeconvolve_nd<T, 1, 2>(*this, blksize);
+  if (dim == 3)
+    (opts.modeord == 0) ? cudeconvolve_nd<T, 0, 3>(*this, blksize)
+                        : cudeconvolve_nd<T, 1, 3>(*this, blksize);
 }
 
-template void cudeconvolve<float>(const cufinufft_plan_t<float> &d_plan, int blksize);
-template void cudeconvolve<double>(const cufinufft_plan_t<double> &d_plan, int blksize);
-
-} // namespace deconvolve
-} // namespace cufinufft
+template void cufinufft_plan_t<float>::deconvolve(int blksize);
+template void cufinufft_plan_t<double>::deconvolve(int blksize);
