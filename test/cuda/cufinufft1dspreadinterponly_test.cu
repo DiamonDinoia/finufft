@@ -65,7 +65,7 @@ int run_test(int N1, int M, T tol, T checktol, int iflag, double upsampfac) {
                            nullptr, nullptr);
   dplan->exec((cuda_complex<T> *)d_c.data().get(),
                             (cuda_complex<T> *)d_fk.data().get());
-  cufinufft_destroy_impl(dplan);
+  delete dplan;
 
   fk = d_fk;
   const auto kersum =
@@ -101,7 +101,7 @@ int run_test(int N1, int M, T tol, T checktol, int iflag, double upsampfac) {
                            nullptr, nullptr);
   dplan->exec((cuda_complex<T> *)d_c.data().get(),
                             (cuda_complex<T> *)d_fk.data().get());
-  cufinufft_destroy_impl(dplan);
+  delete dplan;
 
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
@@ -133,7 +133,7 @@ int run_test(int N1, int M, T tol, T checktol, int iflag, double upsampfac) {
   dplan->exec((cuda_complex<T> *)d_c.data().get(),
                             (cuda_complex<T> *)d_fk.data().get());
 
-  cufinufft_destroy_impl(dplan);
+  delete dplan;
 
   cudaEventSynchronize(stop);
   cudaEventRecord(stop);

@@ -558,7 +558,8 @@ template<typename T> void cufinufft_plan_t<T>::setpts
     t2opts.gpu_spreadinterponly = 0;
     t2opts.gpu_method           = 0;
     // Safe to ignore the return value here?
-    if (t2_plan) cufinufft_destroy_impl(t2_plan);
+    delete t2_plan;
+    t2_plan = nullptr;
     // check that maxbatchsize is correct
     cufinufft_makeplan_impl<T>(2, dim, t2modes, iflag, batchsize,
                                tol, &t2_plan, &t2opts);
@@ -750,21 +751,3 @@ template<typename T> void cufinufft_plan_t<T>::exec(cuda_complex<T> *d_c, cuda_c
 }
 template void cufinufft_plan_t<float>::exec(cuda_complex<float> *d_c, cuda_complex<float> *d_fk);
 template void cufinufft_plan_t<double>::exec(cuda_complex<double> *d_c, cuda_complex<double> *d_fk);
-
-template<typename T>
-void cufinufft_destroy_impl(cufinufft_plan_t<T> *d_plan)
-/*
-    "destroy" stage (single and double precision versions).
-
-    In this stage, we
-        (1) free all the memories that have been allocated on gpu
-        (2) delete the cuFFT plan
-*/
-{
-  if (!d_plan) throw int(FINUFFT_ERR_PLAN_NOTVALID);
-  DeviceSwitcher switcher(d_plan->opts.gpu_device_id);
-
-  delete d_plan;
-} // namespace cufinufft
-template void cufinufft_destroy_impl(cufinufft_plan_t<float> *d_plan);
-template void cufinufft_destroy_impl(cufinufft_plan_t<double> *d_plan);

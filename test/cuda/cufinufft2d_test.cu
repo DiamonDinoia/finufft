@@ -144,7 +144,7 @@ int run_test(int method, int type, int N1, int N2, int M, T tol, T checktol, int
   printf("[time  ] cufinufft exec:\t\t %.3g s\n", milliseconds / 1000);
 
   cudaEventRecord(start);
-  cufinufft_destroy_impl<T>(dplan);
+  delete dplan;
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
   cudaEventElapsedTime(&milliseconds, start, stop);

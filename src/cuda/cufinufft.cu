@@ -103,12 +103,18 @@ int cufinufft_execute(cufinufft_plan d_plan, cuDoubleComplex *d_c,
 
 int cufinufftf_destroy(cufinufftf_plan d_plan) {
   return safe_finufft_call(
-      [&]() { cufinufft_destroy_impl<float>((cufinufft_plan_t<float> *)d_plan); });
+      [&]() {
+    if (!d_plan) throw int(FINUFFT_ERR_PLAN_NOTVALID);
+    delete ((cufinufft_plan_t<float> *)d_plan);
+  });
 }
 
 int cufinufft_destroy(cufinufft_plan d_plan) {
   return safe_finufft_call(
-      [&]() { cufinufft_destroy_impl<double>((cufinufft_plan_t<double> *)d_plan); });
+      [&]() {
+    if (!d_plan) throw int(FINUFFT_ERR_PLAN_NOTVALID);
+    delete ((cufinufft_plan_t<double> *)d_plan);
+  });
 }
 
 void cufinufft_default_opts(cufinufft_opts *opts)
