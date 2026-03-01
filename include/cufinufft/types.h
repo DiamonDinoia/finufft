@@ -201,17 +201,24 @@ template<typename T> struct cufinufft_plan_t {
     delete t2_plan;
   }
 
+private:
   void alloc1d();
   void alloc2d();
   void alloc3d();
-  void allocate();
 
   void alloc1d_nupts();
   void alloc2d_nupts();
   void alloc3d_nupts();
-  void allocate_nupts();
 
-  void deconvolve(int blksize);
+  template<int modeord, int ndim> void deconvolve_nd(int blksize) const;
+
+public:
+  void setpts_12 (int M_, const T *d_kx, const T *d_ky, const T *d_kz);
+  void setpts(int M_, const T *d_kx, const T *d_ky, const T *d_kz, int N_,
+                           const T *d_s, const T *d_t, const T *d_u);
+  void allocate();
+  void allocate_nupts();
+  void deconvolve(int blksize) const;
 };
 
 template<typename T> static inline constexpr cufftType_t cufft_type();

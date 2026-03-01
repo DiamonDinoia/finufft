@@ -61,8 +61,8 @@ int run_test(int N1, int M, T tol, T checktol, int iflag, double upsampfac) {
   cudaEventCreate(&stop);
 
   cufinufft_makeplan_impl<T>(1, dim, nmodes, iflag, ntransf, tol, &dplan, &opts);
-  cufinufft_setpts_impl<T>(M, d_x.data().get(), nullptr, nullptr, 0, nullptr,
-                           nullptr, nullptr, *dplan);
+  dplan->setpts(M, d_x.data().get(), nullptr, nullptr, 0, nullptr,
+                           nullptr, nullptr);
   cufinufft_execute_impl<T>((cuda_complex<T> *)d_c.data().get(),
                             (cuda_complex<T> *)d_fk.data().get(), *dplan);
   cufinufft_destroy_impl(dplan);
@@ -97,8 +97,8 @@ int run_test(int N1, int M, T tol, T checktol, int iflag, double upsampfac) {
   cudaEventRecord(start);
 
   cufinufft_makeplan_impl<T>(1, dim, nmodes, iflag, ntransf, tol, &dplan, &opts);
-  cufinufft_setpts_impl<T>(M, d_x.data().get(), nullptr, nullptr, 0, nullptr,
-                           nullptr, nullptr, *dplan);
+  dplan->setpts(M, d_x.data().get(), nullptr, nullptr, 0, nullptr,
+                           nullptr, nullptr);
   cufinufft_execute_impl<T>((cuda_complex<T> *)d_c.data().get(),
                             (cuda_complex<T> *)d_fk.data().get(), *dplan);
   cufinufft_destroy_impl(dplan);
@@ -127,8 +127,8 @@ int run_test(int N1, int M, T tol, T checktol, int iflag, double upsampfac) {
   cudaEventRecord(start);
 
   cufinufft_makeplan_impl<T>(2, dim, nmodes, iflag, ntransf, tol, &dplan, &opts);
-  cufinufft_setpts_impl<T>(M, d_x.data().get(), nullptr, nullptr, 0, nullptr,
-                           nullptr, nullptr, *dplan);
+  dplan->setpts(M, d_x.data().get(), nullptr, nullptr, 0, nullptr,
+                           nullptr, nullptr);
 
   cufinufft_execute_impl<T>((cuda_complex<T> *)d_c.data().get(),
                             (cuda_complex<T> *)d_fk.data().get(), *dplan);

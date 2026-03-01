@@ -116,8 +116,8 @@ template<typename T> int run_test(int method) {
   printf("[time  ] cufinufft plan:\t\t %.3g s\n", milliseconds / 1000);
 
   cudaEventRecord(start);
-  cufinufft_setpts_impl<T>(M1, d_x1.data().get(), d_y1.data().get(), NULL, 0, NULL,
-                           NULL, NULL, *dplan);
+  dplan->setpts(M1, d_x1.data().get(), d_y1.data().get(), NULL, 0, NULL,
+                           NULL, NULL);
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
   cudaEventElapsedTime(&milliseconds, start, stop);
@@ -136,8 +136,8 @@ template<typename T> int run_test(int method) {
   printf("[time  ] cufinufft exec (set 1):\t %.3g s\n", milliseconds / 1000);
 
   cudaEventRecord(start);
-  cufinufft_setpts_impl<T>(M2, d_x2.data().get(), d_y2.data().get(), NULL, 0, NULL,
-                           NULL, NULL, *dplan);
+  dplan->setpts(M2, d_x2.data().get(), d_y2.data().get(), NULL, 0, NULL,
+                           NULL, NULL);
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
   cudaEventElapsedTime(&milliseconds, start, stop);

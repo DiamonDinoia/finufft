@@ -261,8 +261,8 @@ template<typename T> void run_test(test_options_t &test_opts) {
     timeit(cufinufft_makeplan_impl<T>, makeplan_timer, test_opts.type, dim, test_opts.N,
            iflag, ntransf, test_opts.tol, &dplan, &opts);
     for (int i = 0; i < test_opts.n_runs; ++i) {
-      timeit(cufinufft_setpts_impl<T>, setpts_timer, M, d_x_p, d_y_p, d_z_p, 0, nullptr,
-             nullptr, nullptr, *dplan);
+      timeit(std::bind(&cufinufft_plan_t<T>::setpts, dplan, M, d_x_p, d_y_p, d_z_p, 0, nullptr,
+             nullptr, nullptr), setpts_timer);
       timeit(cufinufft_execute_impl<T>, execute_timer, d_c_p, d_fk_p, *dplan);
     }
 

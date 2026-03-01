@@ -122,8 +122,8 @@ int run_test(int method, int type, int N1, int N2, int ntransf, int maxbatchsize
   printf("[time  ] cufinufft plan:\t\t %.3g s\n", milliseconds / 1000);
 
   cudaEventRecord(start);
-  cufinufft_setpts_impl<T>(M, d_x.data().get(), d_y.data().get(), nullptr, N1 * N2,
-                           d_s.data().get(), d_t.data().get(), nullptr, *dplan);
+  dplan->setpts(M, d_x.data().get(), d_y.data().get(), nullptr, N1 * N2,
+                           d_s.data().get(), d_t.data().get(), nullptr);
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
   cudaEventElapsedTime(&milliseconds, start, stop);

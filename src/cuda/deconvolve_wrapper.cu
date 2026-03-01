@@ -11,7 +11,7 @@
 // to N/2-1), modeord=1: FFT-compatible mode ordering in fk (from 0 to N/2-1, then -N/2 up
 // to -1).
 template<typename T, int modeord, int ndim>
-static __global__ void deconvolve_nd(
+static __global__ void deconv_nd(
     cuda::std::array<int, 3> mstu, cuda::std::array<int, 3> nf123, cuda_complex<T> *fw,
     cuda_complex<T> *fk, cuda::std::array<const T *, 3> fwkerhalf, bool fw2fk) {
 
@@ -54,8 +54,8 @@ static __global__ void deconvolve_nd(
   }
 }
 
-template<typename T, int modeord, int ndim>
-static void cudeconvolve_nd(const cufinufft_plan_t<T> &d_plan, int blksize)
+template<typename T> template<int modeord, int ndim>
+void cufinufft_plan_t<T>::deconvolve_nd<modeord, ndim>(int blksize) const
 /*
     wrapper for deconvolution & amplification in 1/2/3D.
 
@@ -64,32 +64,32 @@ static void cudeconvolve_nd(const cufinufft_plan_t<T> &d_plan, int blksize)
 {
   int nmodes = 1, nftot = 1;
   for (int idim = 0; idim < ndim; ++idim) {
-    nmodes *= d_plan.mstu[idim];
-    nftot *= d_plan.nf123[idim];
+    nmodes *= mstu[idim];
+    nftot *= nf123[idim];
   }
 
-  bool fw2fk = d_plan.spopts.spread_direction == 1;
+  bool fw2fk = spopts.spread_direction == 1;
   if (!fw2fk)
     checkCudaErrors(cudaMemsetAsync(
-        d_plan.fw, 0, d_plan.batchsize * nftot * sizeof(cuda_complex<T>), d_plan.stream));
+        fw, 0, batchsize * nftot * sizeof(cuda_complex<T>), stream));
 
   for (int t = 0; t < blksize; t++)
-    deconvolve_nd<T, modeord, ndim><<<(nmodes + 256 - 1) / 256, 256, 0, d_plan.stream>>>(
-        d_plan.mstu, d_plan.nf123, d_plan.fw + t * nftot, d_plan.fk + t * nmodes,
-        dethrust(d_plan.fwkerhalf), fw2fk);
+    deconv_nd<T, modeord, ndim><<<(nmodes + 256 - 1) / 256, 256, 0, stream>>>(
+        mstu, nf123, fw + t * nftot, fk + t * nmodes,
+        dethrust(fwkerhalf), fw2fk);
 }
 
-template<typename T> void cufinufft_plan_t<T>::deconvolve(int blksize) {
+template<typename T> void cufinufft_plan_t<T>::deconvolve(int blksize) const {
   if (dim == 1)
-    (opts.modeord == 0) ? cudeconvolve_nd<T, 0, 1>(*this, blksize)
-                        : cudeconvolve_nd<T, 1, 1>(*this, blksize);
+    (opts.modeord == 0) ? deconvolve_nd<0, 1>(blksize)
+                        : deconvolve_nd<1, 1>(blksize);
   if (dim == 2)
-    (opts.modeord == 0) ? cudeconvolve_nd<T, 0, 2>(*this, blksize)
-                        : cudeconvolve_nd<T, 1, 2>(*this, blksize);
+    (opts.modeord == 0) ? deconvolve_nd<0, 2>(blksize)
+                        : deconvolve_nd<1, 2>(blksize);
   if (dim == 3)
-    (opts.modeord == 0) ? cudeconvolve_nd<T, 0, 3>(*this, blksize)
-                        : cudeconvolve_nd<T, 1, 3>(*this, blksize);
+    (opts.modeord == 0) ? deconvolve_nd<0, 3>(blksize)
+                        : deconvolve_nd<1, 3>(blksize);
 }
 
-template void cufinufft_plan_t<float>::deconvolve(int blksize);
-template void cufinufft_plan_t<double>::deconvolve(int blksize);
+template void cufinufft_plan_t<float>::deconvolve(int blksize) const;
+template void cufinufft_plan_t<double>::deconvolve(int blksize) const;

@@ -73,8 +73,7 @@ int cufinufftf_setpts(cufinufftf_plan d_plan, const int64_t M, const float *d_x,
   return safe_finufft_call([&]() {
     if (M > std::numeric_limits<int32_t>::max()) throw int(FINUFFT_ERR_NDATA_NOTVALID);
 
-    cufinufft_setpts_impl((int)M, d_x, d_y, d_z, N, d_s, d_t, d_u,
-                          *((cufinufft_plan_t<float> *)d_plan));
+    ((cufinufft_plan_t<float> *)d_plan)->setpts((int)M, d_x, d_y, d_z, N, d_s, d_t, d_u);
   });
 }
 
@@ -84,8 +83,7 @@ int cufinufft_setpts(cufinufft_plan d_plan, const int64_t M, const double *d_x,
   return safe_finufft_call([&]() {
     if (M > std::numeric_limits<int32_t>::max()) throw int(FINUFFT_ERR_NDATA_NOTVALID);
 
-    cufinufft_setpts_impl((int)M, d_x, d_y, d_z, N, d_s, d_t, d_u,
-                          *((cufinufft_plan_t<double> *)d_plan));
+    ((cufinufft_plan_t<double> *)d_plan)->setpts((int)M, d_x, d_y, d_z, N, d_s, d_t, d_u);
   });
 }
 
