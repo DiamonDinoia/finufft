@@ -136,7 +136,7 @@ static __global__ void fill_ghost_bins(int binsperobinx, int binsperobiny,
 
 static __global__ void ghost_bin_pts_index(
     int binsperobinx, int binsperobiny, int binsperobinz, int nobinx, int nobiny,
-    int nobinz, int *binsize, int *index, const int *binstartpts, int M) {
+    int nobinz, const int *binsize, int *index, const int *binstartpts, int M) {
   int binx  = threadIdx.x + blockIdx.x * blockDim.x;
   int biny  = threadIdx.y + blockIdx.y * blockDim.y;
   int binz  = threadIdx.z + blockIdx.z * blockDim.z;

@@ -29,7 +29,7 @@ using cuda::std::span;
 
 /* ------------------------ 1d Spreading Kernels ----------------------------*/
 
-static __global__ void calc_subprob_1d(int *bin_size, int *num_subprob,
+static __global__ void calc_subprob_1d(const int *bin_size, int *num_subprob,
                                        int maxsubprobsize, int numbins) {
   for (int i = threadIdx.x + blockIdx.x * blockDim.x; i < numbins;
        i += gridDim.x * blockDim.x) {
@@ -37,8 +37,9 @@ static __global__ void calc_subprob_1d(int *bin_size, int *num_subprob,
   }
 }
 
-static __global__ void map_b_into_subprob_1d(
-    int *d_subprob_to_bin, int *d_subprobstartpts, int *d_numsubprob, int numbins) {
+static __global__ void map_b_into_subprob_1d(int *d_subprob_to_bin,
+                                             const int *d_subprobstartpts,
+                                             const int *d_numsubprob, int numbins) {
   for (int i = threadIdx.x + blockIdx.x * blockDim.x; i < numbins;
        i += gridDim.x * blockDim.x) {
     for (int j = 0; j < d_numsubprob[i]; j++) {
