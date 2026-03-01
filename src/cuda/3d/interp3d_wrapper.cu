@@ -6,11 +6,9 @@
 
 #include <cufinufft/common.h>
 #include <cufinufft/intrinsics.h>
-#include <cufinufft/memtransfer.h>
 #include <cufinufft/spreadinterp.h>
 #include <cufinufft/utils.h>
 
-using namespace cufinufft::memtransfer;
 using namespace cufinufft::common;
 using namespace cufinufft::utils;
 

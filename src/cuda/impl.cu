@@ -8,7 +8,6 @@
 #include <cufinufft/cudeconvolve.h>
 #include <cufinufft/defs.h>
 #include <cufinufft/impl.h>
-#include <cufinufft/memtransfer.h>
 #include <cufinufft/spreadinterp.h>
 #include <cufinufft/types.h>
 #include <cufinufft/utils.h>
@@ -193,7 +192,7 @@ int cufinufft_makeplan_impl(int type, int dim, const int *nmodes, int iflag, int
       }
       d_plan->nf = d_plan->nf123[0] * d_plan->nf123[1] * d_plan->nf123[2];
 
-      cufinufft::memtransfer::allocgpumem_plan(*d_plan);
+      d_plan->allocate();
 
       // We don't need any cuFFT plans or kernel values if we are only spreading /
       // interpolating
@@ -294,7 +293,7 @@ Notes: the type T means either single or double, matching the
 {
   d_plan.M = M;
 
-  cufinufft::memtransfer::allocgpumem_nupts<T>(d_plan);
+  d_plan.allocate();
 
   d_plan.kxyz[0] = d_kx;
   if (d_plan.dim > 1) d_plan.kxyz[1] = d_ky;
@@ -556,7 +555,7 @@ void cufinufft_setpts_impl(int M, const T *d_kx, const T *d_ky, const T *d_kz, i
     // since GPU memory is expensive, we should free it as soon as possible
   }
 
-  cufinufft::memtransfer::allocgpumem_plan<T>(d_plan);
+  d_plan.allocate();
 
   cufinufft_setpts_12_impl(M, d_plan.kxyz[0], d_plan.kxyz[1], d_plan.kxyz[2], d_plan);
   {

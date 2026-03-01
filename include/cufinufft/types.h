@@ -200,6 +200,11 @@ template<typename T> struct cufinufft_plan_t {
     if (fftplan) cufftDestroy(fftplan);
     delete t2_plan;
   }
+
+  void alloc1d();
+  void alloc2d();
+  void alloc3d();
+  void allocate();
 };
 
 template<typename T> static inline constexpr cufftType_t cufft_type();

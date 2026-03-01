@@ -12,12 +12,10 @@
 #include <cufinufft/common.h>
 #include <cufinufft/contrib/helper_cuda.h>
 #include <cufinufft/contrib/helper_math.h>
-#include <cufinufft/memtransfer.h>
 #include <cufinufft/spreadinterp.h>
 #include <cufinufft/utils.h>
 
 using namespace cufinufft::common;
-using namespace cufinufft::memtransfer;
 using namespace cufinufft::utils;
 
 namespace cufinufft {
