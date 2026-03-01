@@ -293,7 +293,7 @@ Notes: the type T means either single or double, matching the
 {
   d_plan.M = M;
 
-  d_plan.allocate();
+  d_plan.allocate_nupts();
 
   d_plan.kxyz[0] = d_kx;
   if (d_plan.dim > 1) d_plan.kxyz[1] = d_ky;

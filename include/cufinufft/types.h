@@ -205,6 +205,11 @@ template<typename T> struct cufinufft_plan_t {
   void alloc2d();
   void alloc3d();
   void allocate();
+
+  void alloc1d_nupts();
+  void alloc2d_nupts();
+  void alloc3d_nupts();
+  void allocate_nupts();
 };
 
 template<typename T> static inline constexpr cufftType_t cufft_type();

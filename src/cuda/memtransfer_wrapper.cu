@@ -164,7 +164,7 @@ template<typename T> void cufinufft_plan_t<T>::allocate() {
 }
 template void cufinufft_plan_t<float>::allocate();
 template void cufinufft_plan_t<double>::allocate();
-#if 0
+
 template<typename T> void cufinufft_plan_t<T>::alloc1d_nupts()
 /*
     wrapper for gpu memory allocation in "setNUpts" stage.
@@ -245,4 +245,3 @@ template<typename T> void cufinufft_plan_t<T>::allocate_nupts() {
 }
 template void cufinufft_plan_t<float>::allocate_nupts();
 template void cufinufft_plan_t<double>::allocate_nupts();
-#endif
