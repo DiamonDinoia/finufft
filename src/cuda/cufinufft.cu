@@ -4,7 +4,7 @@
 #include <limits>
 
 #include <cufinufft.h>
-#include <cufinufft/impl.h>
+#include <cufinufft/types.h>
 #include <finufft_common/safe_call.h>
 
 using finufft::common::safe_finufft_call;

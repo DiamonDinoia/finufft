@@ -6,7 +6,6 @@
 #include <cufinufft.h>
 #include <cufinufft/common.h>
 #include <cufinufft/defs.h>
-#include <cufinufft/impl.h>
 #include <cufinufft/spreadinterp.h>
 #include <cufinufft/types.h>
 #include <cufinufft/utils.h>
