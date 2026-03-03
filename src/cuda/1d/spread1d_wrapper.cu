@@ -456,7 +456,7 @@ static void cuspread1d_subprob_prop(cufinufft_plan_t<T> &d_plan)
   cudaStreamSynchronize(stream);
   THROW_IF_CUDA_ERROR
 
-  gpu_array<int> d_subprob_to_bin(totalnumsubprob, d_plan.ialloc);
+  gpu_array<int> d_subprob_to_bin(totalnumsubprob, d_plan.alloc);
 
   map_b_into_subprob_1d<<<(numbins + 1024 - 1) / 1024, 1024, 0, stream>>>(
       dethrust(d_subprob_to_bin), d_subprobstartpts, d_numsubprob, numbins);

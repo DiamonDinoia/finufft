@@ -3,16 +3,18 @@
 
 #include <cuda/std/array>
 #include <cufft.h>
-#include <cufinufft/types.h>
 #include <cufinufft/defs.h>
+#include <cufinufft/types.h>
 #include <cufinufft_opts.h>
 #include <finufft_common/spread_opts.h>
+#include <finufft_errors.h>
 #include <thrust/device_malloc_allocator.h>
 #include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
 #include <thrust/system/cuda/execution_policy.h>
 #include <type_traits>
 
+#include <cstddef>
 #include <cuComplex.h>
 
 /* This header file contains the internal plan class of cufinufft,
@@ -65,8 +67,14 @@ private:
 public:
   // Prefer explicit stream; no default ctor needed if you always pass alloc to
   // device_vector
+  template<typename U> friend struct ThrustAllocatorAsync;
+
   explicit ThrustAllocatorAsync(cudaStream_t s, int ID, bool supports_pools)
       : stream(s), deviceID(ID), pool(supports_pools) {}
+
+  template<typename U>
+  ThrustAllocatorAsync(const ThrustAllocatorAsync<U> &o)
+      : stream(o.stream), deviceID(o.deviceID), pool(o.pool) {}
 
   pointer allocate(size_type n) {
     DeviceSwitcher switcher(deviceID);
@@ -118,12 +126,8 @@ template<typename T> struct cufinufft_plan_t {
   bool supports_pools = false;
   finufft_spread_opts spopts;
 
-  ThrustAllocatorAsync<int> ialloc{(cudaStream_t)opts.gpu_stream, opts.gpu_device_id,
-                                   supports_pools};
-  ThrustAllocatorAsync<T> alloc{(cudaStream_t)opts.gpu_stream, opts.gpu_device_id,
-                                supports_pools};
-  ThrustAllocatorAsync<cuda_complex<T>> calloc{(cudaStream_t)opts.gpu_stream,
-                                               opts.gpu_device_id, supports_pools};
+  ThrustAllocatorAsync<std::byte> alloc{(cudaStream_t)opts.gpu_stream, opts.gpu_device_id,
+                                        supports_pools};
 
   int type                                    = 0;
   int dim                                     = 0;
@@ -143,11 +147,11 @@ template<typename T> struct cufinufft_plan_t {
   cuda::std::array<const T *, 3> kxyz    = {nullptr, nullptr, nullptr};
   cuda::std::array<gpu_array<T>, 3> kxyzp = {gpu_array<T>{0, alloc}, gpu_array<T>{0, alloc},
                                             gpu_array<T>{0, alloc}};
-  gpu_array<cuda_complex<T>> CpBatch{0, calloc}; // working array of prephased strengths
+  gpu_array<cuda_complex<T>> CpBatch{0, alloc}; // working array of prephased strengths
 
   // no allocs here
   cuda_complex<T> *c = nullptr;
-  gpu_array<cuda_complex<T>> fwp{0, calloc};
+  gpu_array<cuda_complex<T>> fwp{0, alloc};
   cuda_complex<T> *fw = nullptr;
   cuda_complex<T> *fk = nullptr;
 
@@ -165,28 +169,28 @@ template<typename T> struct cufinufft_plan_t {
   // inner type 2 plan for type 3
   cufinufft_plan_t<T> *t2_plan = nullptr;
 
-  gpu_array<cuda_complex<T>> prephase{0, calloc}; // pre-phase, for all input NU pts
-  gpu_array<cuda_complex<T>> deconv{0, calloc};   // reciprocal of kernel FT, phase, all
+  gpu_array<cuda_complex<T>> prephase{0, alloc}; // pre-phase, for all input NU pts
+  gpu_array<cuda_complex<T>> deconv{0, alloc};   // reciprocal of kernel FT, phase, all
                                                  // output NU pts
 
   // Arrays that used in subprob method
-  gpu_array<int> idxnupts{0, ialloc};   // length: #nupts, index of the nupts in the
+  gpu_array<int> idxnupts{0, alloc};   // length: #nupts, index of the nupts in the
                                        // bin-sorted order
-  gpu_array<int> sortidx{0, ialloc};    // length: #nupts, order inside the bin the nupt
+  gpu_array<int> sortidx{0, alloc};    // length: #nupts, order inside the bin the nupt
                                        // belongs to
-  gpu_array<int> numsubprob{0, ialloc}; // length: #bins,  number of subproblems in each
+  gpu_array<int> numsubprob{0, alloc}; // length: #bins,  number of subproblems in each
                                        // bin
-  gpu_array<int> binsize{0, ialloc}; // length: #bins, number of nonuniform ponits in each
+  gpu_array<int> binsize{0, alloc}; // length: #bins, number of nonuniform ponits in each
                                     // bin
-  gpu_array<int> binstartpts{0, ialloc}; // length: #bins, exclusive scan of array binsize
-  gpu_array<int> subprob_to_bin{0, ialloc}; // length: #subproblems, the bin the subproblem
+  gpu_array<int> binstartpts{0, alloc}; // length: #bins, exclusive scan of array binsize
+  gpu_array<int> subprob_to_bin{0, alloc}; // length: #subproblems, the bin the subproblem
                                            // works on
-  gpu_array<int> subprobstartpts{0, ialloc}; // length: #bins, exclusive scan of array
+  gpu_array<int> subprobstartpts{0, alloc}; // length: #bins, exclusive scan of array
                                             // numsubprob
 
   // Arrays for 3d (need to sort out)
-  gpu_array<int> numnupts{0, ialloc};
-  gpu_array<int> subprob_to_nupts{0, ialloc};
+  gpu_array<int> numnupts{0, alloc};
+  gpu_array<int> subprob_to_nupts{0, alloc};
 
   cufftHandle fftplan = 0;
   cudaStream_t stream = 0;
