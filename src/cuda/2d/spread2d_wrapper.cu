@@ -659,7 +659,7 @@ static void cuspread2d_subprob_prop(cufinufft_plan_t<T> &d_plan)
   checkCudaErrors(cudaMemcpyAsync(&totalnumsubprob, &d_subprobstartpts[n], sizeof(int),
                                   cudaMemcpyDeviceToHost, stream));
   cudaStreamSynchronize(stream);
-  gpuArray<int> d_subprob_to_bin(totalnumsubprob, d_plan.ialloc);
+  gpu_array<int> d_subprob_to_bin(totalnumsubprob, d_plan.ialloc);
   map_b_into_subprob_2d<<<(numbins[0] * numbins[1] + 1024 - 1) / 1024, 1024, 0, stream>>>(
       dethrust(d_subprob_to_bin), d_subprobstartpts, d_numsubprob,
       numbins[0] * numbins[1]);

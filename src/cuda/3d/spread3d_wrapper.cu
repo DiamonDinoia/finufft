@@ -920,7 +920,7 @@ static void cuspread3d_blockgather_prop(cufinufft_plan_t<T> &d_plan) {
   checkCudaErrors(cudaMemcpyAsync(&totalNUpts, &d_binstartpts[n], sizeof(int),
                                   cudaMemcpyDeviceToHost, stream));
   cudaStreamSynchronize(stream);
-  gpuArray<int> d_idxnupts(totalNUpts, d_plan.ialloc);
+  gpu_array<int> d_idxnupts(totalNUpts, d_plan.ialloc);
 
   calc_inverse_of_global_sort_index_ghost<<<(M + 1024 - 1) / 1024, 1024, 0, stream>>>(
       M, bin_size_x, bin_size_y, bin_size_z, numobins[0], numobins[1], numobins[2],
@@ -962,7 +962,7 @@ static void cuspread3d_blockgather_prop(cufinufft_plan_t<T> &d_plan) {
   checkCudaErrors(cudaMemcpyAsync(&totalnumsubprob, &d_subprobstartpts[n], sizeof(int),
                                   cudaMemcpyDeviceToHost, stream));
   cudaStreamSynchronize(stream);
-  gpuArray<int> d_subprob_to_bin(totalnumsubprob, d_plan.ialloc);
+  gpu_array<int> d_subprob_to_bin(totalnumsubprob, d_plan.ialloc);
   map_b_into_subprob_3d_v1<<<(n + 1024 - 1) / 1024, 1024, 0, stream>>>(
       dethrust(d_subprob_to_bin), d_subprobstartpts, d_numsubprob, n);
 
@@ -1104,7 +1104,7 @@ template<typename T> static void cuspread3d_subprob_prop(cufinufft_plan_t<T> &d_
   checkCudaErrors(cudaMemcpyAsync(&totalnumsubprob, &d_subprobstartpts[n], sizeof(int),
                                   cudaMemcpyDeviceToHost, stream));
   cudaStreamSynchronize(stream);
-  gpuArray<int> d_subprob_to_bin(totalnumsubprob, d_plan.ialloc);
+  gpu_array<int> d_subprob_to_bin(totalnumsubprob, d_plan.ialloc);
 
   map_b_into_subprob_3d_v2<<<(numbins[0] * numbins[1] + 1024 - 1) / 1024, 1024, 0,
                              stream>>>(dethrust(d_subprob_to_bin), d_subprobstartpts,

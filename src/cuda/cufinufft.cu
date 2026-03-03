@@ -52,7 +52,7 @@ int cufinufftf_makeplan(int type, int dim, const int64_t *nmodes, int iflag, int
     auto res =
         new cufinufft_plan_t<float>(type, dim, nmodes32, iflag, ntransf, tol, planopts);
     *d_plan_ptr = (cufinufftf_plan)res;
-    return res->eps_too_small;
+    return res->eps_too_small ? FINUFFT_WARN_EPS_TOO_SMALL : 0;
   });
 }
 
@@ -79,7 +79,7 @@ int cufinufft_makeplan(int type, int dim, const int64_t *nmodes, int iflag, int 
     auto res =
         new cufinufft_plan_t<double>(type, dim, nmodes32, iflag, ntransf, tol, planopts);
     *d_plan_ptr = (cufinufft_plan)res;
-    return res->eps_too_small;
+    return res->eps_too_small ? FINUFFT_WARN_EPS_TOO_SMALL : 0;
   });
 }
 

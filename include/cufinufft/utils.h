@@ -181,7 +181,7 @@ auto launch_dispatch_ns(Func &&func, int target_ns, Args &&...args) {
  *   SM 7x      :  8 warps  = 128 threads
  *   SM 6x-     :  4 warps  = 64 threads
  */
-inline unsigned optimal_block_threads(int device) {
+inline unsigned optimal_block_threads(int device) noexcept {
   cudaGetDevice(&device);
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, device);

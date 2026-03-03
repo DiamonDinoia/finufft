@@ -14,11 +14,11 @@ namespace common {
 template<typename T>
 void fseries_kernel_compute(
     int dim, cuda::std::array<CUFINUFFT_BIGINT, 3> nf123, const T *d_f, const T *d_phase,
-    cuda::std::array<gpuArray<T>, 3> &d_fwkerhalf, int ns, cudaStream_t stream);
+    cuda::std::array<gpu_array<T>, 3> &d_fwkerhalf, int ns, cudaStream_t stream);
 template<typename T>
 void nuft_kernel_compute(
     int dim, cuda::std::array<CUFINUFFT_BIGINT, 3> nf123, const T *d_f, const T *d_z,
-    cuda::std::array<const T *, 3> d_kxyz, cuda::std::array<gpuArray<T>, 3> &d_fwkerhalf,
+    cuda::std::array<const T *, 3> d_kxyz, cuda::std::array<gpu_array<T>, 3> &d_fwkerhalf,
     int ns, cudaStream_t stream);
 
 void set_nf_type12(CUFINUFFT_BIGINT ms, cufinufft_opts opts, finufft_spread_opts spopts,

@@ -142,8 +142,6 @@ cufinufft_plan_t<T>::cufinufft_plan_t(int type_, int dim_, const int *nmodes, in
   // dynamically request the maximum amount of shared memory available
   // for the spreader
 
-  THROW_IF_CUDA_ERROR
-
   if (type == 1 || type == 2) {
     if (opts.gpu_spreadinterponly) {
       // spread/interp grid is precisely the user "mode" sizes, no upsampling
@@ -298,10 +296,6 @@ void cufinufft_plan_t<T>::setpts(int M_, const T *d_kx, const T *d_ky, const T *
 
   M = M_;
   N = N_;
-  if (type != 3) {
-    fprintf(stderr, "[%s] Invalid type (%d): should be 1, 2, or 3.\n", __func__, type);
-    throw int(FINUFFT_ERR_TYPE_NOTVALID);
-  }
   if (N < 0) {
     fprintf(stderr, "[cufinufft] Invalid N (%d): cannot be negative.\n", N);
     throw int(FINUFFT_ERR_NUM_NU_PTS_INVALID);
@@ -436,8 +430,8 @@ void cufinufft_plan_t<T>::setpts(int M_, const T *d_kx, const T *d_ky, const T *
     std::array<T, 3 * MAX_NQUAD> nuft_precomp_f{};
     thrust::device_vector<T> d_nuft_precomp_z(3 * MAX_NQUAD);
     thrust::device_vector<T> d_nuft_precomp_f(3 * MAX_NQUAD);
-    cuda::std::array<gpuArray<T>, 3> phi_hat123(
-        {gpuArray<T>{0, alloc}, gpuArray<T>{0, alloc}, gpuArray<T>{0, alloc}});
+    cuda::std::array<gpu_array<T>, 3> phi_hat123(
+        {gpu_array<T>{0, alloc}, gpu_array<T>{0, alloc}, gpu_array<T>{0, alloc}});
     for (int idim = 0; idim < dim; ++idim) phi_hat123[idim].resize(N);
     for (int idim = 0; idim < dim; ++idim)
       onedim_nuft_kernel_precomp<T>(nuft_precomp_f.data() + idim * MAX_NQUAD,
@@ -581,7 +575,7 @@ void cufinufft_plan_t<T>::exec1(cuda_complex<T> *d_c, cuda_complex<T> *d_fk)
     if (opts.gpu_spreadinterponly) fw = fk;      // spread directly into user output f
 
     checkCudaErrors(
-        cudaMemsetAsync(fw, 0, batchsize * nf * sizeof(cuda_complex<T>), stream));
+        cudaMemsetAsync(fw, 0, blksize * nf * sizeof(cuda_complex<T>), stream));
 
     // Step 1: Spread
     cuspreadnd<T>(*this, blksize);
@@ -663,7 +657,7 @@ void cufinufft_plan_t<T>::exec3(cuda_complex<T> *d_c, cuda_complex<T> *d_fk) {
     fk = fw;
     // NOTE: fw might need to be set to 0
     checkCudaErrors(
-        cudaMemsetAsync(fw, 0, batchsize * nf * sizeof(cuda_complex<T>), stream));
+        cudaMemsetAsync(fw, 0, blksize * nf * sizeof(cuda_complex<T>), stream));
     // Step 0: pre-phase the input strengths
     for (int block = 0; block < blksize; block++) {
       thrust::transform(thrust::cuda::par.on(stream), dethrust(prephase),
@@ -681,9 +675,9 @@ void cufinufft_plan_t<T>::exec3(cuda_complex<T> *d_c, cuda_complex<T> *d_fk) {
     t2_plan->exec2(d_fkstart, fw);
     // Step 3: deconvolve
     // now we need to d_fk = d_fk*deconv
-    for (int i = 0; i < blksize; i++) {
+    for (int j = 0; j < blksize; j++) {
       thrust::transform(thrust::cuda::par.on(stream), dethrust(deconv),
-                        dethrust(deconv) + N, d_fkstart + i * N, d_fkstart + i * N,
+                        dethrust(deconv) + N, d_fkstart + j * N, d_fkstart + j * N,
                         thrust::multiplies<cuda_complex<T>>());
     }
   }

@@ -48,18 +48,13 @@ static __global__ void interp_3d_nupts_driven(
       eval_kernel_vec<T, ns>(ker2, y1, es_c, es_beta);
       eval_kernel_vec<T, ns>(ker3, z1, es_c, es_beta);
     }
-    if (xstart < 0) {
-      xstart += nf1;
-      xend += nf1;
-    }
-    if (ystart < 0) {
-      ystart += nf2;
-      yend += nf2;
-    }
-    if (zstart < 0) {
-      zstart += nf3;
-      zend += nf3;
-    }
+
+    const int offset1 = xstart < 0 ? nf1 : 0;
+    xstart += offset1; xend += offset1;
+    const int offset2 = ystart < 0 ? nf2 : 0;
+    ystart += offset2; yend += offset2;
+    const int offset3 = zstart < 0 ? nf3 : 0;
+    zstart += offset3; zend += offset3;
 
     cuda_complex<T> cnow{0, 0};
     int xidx[ns];
