@@ -4,7 +4,7 @@
 #include <cuComplex.h>
 #include <cuda.h>
 #include <cufinufft/contrib/helper_cuda.h>
-#include <cufinufft/types.h>
+#include <cufinufft/cufinufft_plan_t.h>
 
 /* Kernel for copying fw to fk with amplication by prefac/ker */
 // Note: assume modeord=0: CMCL-compatible mode ordering in fk (from -N/2 up

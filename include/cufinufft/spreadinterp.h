@@ -3,7 +3,7 @@
 
 #include <cmath>
 #include <cuda.h>
-#include <cufinufft/types.h>
+#include <cufinufft/cufinufft_plan_t.h>
 #include <finufft_common/spread_opts.h>
 
 namespace cufinufft {

@@ -8,7 +8,7 @@
 #include <finufft_common/common.h>
 
 #include <cufinufft/contrib/helper_cuda.h>
-#include <cufinufft/types.h>
+#include <cufinufft/cufinufft_plan_t.h>
 #include <cufinufft/utils.h>
 
 #include <thrust/complex.h>

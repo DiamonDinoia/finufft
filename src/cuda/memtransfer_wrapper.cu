@@ -2,7 +2,7 @@
 #include <iostream>
 
 #include <cuComplex.h>
-#include <cufinufft/types.h>
+#include <cufinufft/cufinufft_plan_t.h>
 #include <cufinufft/utils.h>
 
 #include <cufinufft/contrib/helper_cuda.h>

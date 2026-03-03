@@ -13,7 +13,7 @@ set(SRC
     deconvolve_wrapper.cu
     cufinufft.cu
     common.cu
-    impl.cu
+    cufinufft_plan_t.cu
 )
 
 set(CUFINUFFT_INCLUDE_DIRS
