@@ -4,10 +4,9 @@
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
-#include "finufft/memory.hpp"
 #include "finufft_common/common.h"
-#include "finufft_errors.h"
 
 // All indexing in library that potentially can exceed 2^31 uses 64-bit signed.
 // This includes all calling arguments (eg M,N) that could be huge someday.
@@ -129,11 +128,6 @@ private:
 
     // --- FFT plan (created in constructor or init_grid_kerFT_FFT) ---
     std::unique_ptr<Finufft_FFT_plan<TF>, Finufft_FFT_plan_deleter<TF>> fftPlan;
-
-    // Persistent fwBatch buffer for type 1,2 execute. Allocated once in
-    // init_grid_kerFT_FFT, then marked reclaimable so the OS can drop physical
-    // pages between execute calls under memory pressure.
-    mutable finufft::ReclaimableMemory fwBatchBuf_;
   };
 
   M m; // all mutable computed state lives here
