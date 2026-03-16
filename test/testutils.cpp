@@ -18,8 +18,10 @@
 
 // This switches FLT macro from double to float if SINGLE is defined, etc...
 
+#include "finufft/memory.hpp"
 #include "finufft/utils.hpp"
 #include "utils/norms.hpp"
+#include <cstdint>
 #include <finufft/test_defs.hpp>
 
 namespace finufft::common {
@@ -92,6 +94,49 @@ int main(int argc, char *argv[]) {
   b[0] = CPX(0.0, 0.0); // perturb b from a
   if (std::abs(errtwonorm(M, &a[0], &b[0]) - 1.0) > relerr) return 1;
   if (std::abs(std::sqrt((FLT)M) * relerrtwonorm(M, &a[0], &b[0]) - 1.0) > relerr) return 1;
+
+  // test reclaimable workspace allocator...
+  using RM                    = finufft::ReclaimableMemory;
+  constexpr size_t align_mask = RM::ALIGNMENT - 1;
+
+  RM buf;
+  buf.mark_reclaimable(); // no-op before allocation
+  if (!buf.allocate(0) || buf.size() != 0) return 1;
+
+  // --- small-buffer path (heap via aligned_alloc) ---
+  constexpr size_t small_nbytes = 8192;
+  static_assert(small_nbytes < RM::MIN_MMAP_SIZE,
+                "test needs a size below mmap threshold");
+  if (!buf.allocate(small_nbytes) || buf.data() == nullptr || buf.size() != small_nbytes)
+    return 1;
+  if ((reinterpret_cast<std::uintptr_t>(buf.data()) & align_mask) != 0u) return 1;
+
+  void *ptr = buf.data();
+  if (!buf.allocate(small_nbytes) || buf.data() != ptr) return 1; // same-size reuse
+  buf.mark_reclaimable(); // no-op for small buffers, should be safe
+
+  RM moved = std::move(buf);
+  if (buf.data() != nullptr || buf.size() != 0) return 1;
+  if (moved.data() != ptr || moved.size() != small_nbytes) return 1;
+  moved.mark_reclaimable();
+
+  // --- large-buffer path (mmap / VirtualAlloc) ---
+  constexpr size_t large_nbytes = RM::MIN_MMAP_SIZE * 2;
+  RM large_buf;
+  if (!large_buf.allocate(large_nbytes) || large_buf.data() == nullptr ||
+      large_buf.size() != large_nbytes)
+    return 1;
+  // mmap returns page-aligned memory
+  if ((reinterpret_cast<std::uintptr_t>(large_buf.data()) & 4095u) != 0u) return 1;
+
+  void *lptr = large_buf.data();
+  if (!large_buf.allocate(large_nbytes) || large_buf.data() != lptr) return 1; // reuse
+  large_buf.mark_reclaimable(); // exercises madvise/MEM_RESET path
+
+  RM large_moved = std::move(large_buf);
+  if (large_buf.data() != nullptr || large_buf.size() != 0) return 1;
+  if (large_moved.data() != lptr || large_moved.size() != large_nbytes) return 1;
+  large_moved.mark_reclaimable();
 
 #if defined(__cpp_lib_math_special_functions)
   // std::cyl_bessel_i present: compare std vs custom series
