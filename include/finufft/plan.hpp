@@ -272,14 +272,27 @@ private:
   std::vector<int> gridsize_for_fft() const;
   void do_fft(TC *fwBatch, int ntrans_actual, bool adjoint) const;
 
-  // Precomputed quadrature-based 1D kernel FT evaluator (used by type-3 setpts).
-  // Nested class: has access to plan's private members via implicit friendship.
+  // 1D kernel FT evaluator (used by type-3 setpts).
+  // For PSWF kernels (kerformula >= 7), exploits the self-FT property:
+  //   phihat(k) = J2 * mu0 * phi(k * J2^2 / beta)
+  // where phi is the spreading kernel (evaluated via the precomputed Horner
+  // polynomial), and mu0 = integral_{-1}^{1} pswf(c,t) dt is the FT eigenvalue.
+  // This replaces per-point cosine sums with a single Horner evaluation (~nc FMAs).
+  // Falls back to cosine quadrature for non-PSWF kernels.
   class Kernel_onedim_FT {
+    // Quadrature path (non-PSWF kernels)
     std::vector<TF> z, f;
+    // Analytic PSWF path (using Horner polynomial approximant of kernel)
+    bool use_pswf = false;
+    const FINUFFT_PLAN_T *plan_ptr = nullptr; // for evaluate_kernel_runtime access
+    TF pswf_grid_scale{};  // J2^2 / beta: maps frequency k to grid position
+    TF pswf_prefac{};      // J2 * mu0: overall prefactor
 
   public:
     Kernel_onedim_FT(const FINUFFT_PLAN_T &plan);
     FINUFFT_ALWAYS_INLINE TF operator()(TF k) const {
+      if (use_pswf)
+        return pswf_prefac * plan_ptr->evaluate_kernel_runtime(k * pswf_grid_scale);
       TF x = 0;
       for (size_t n = 0; n < z.size(); ++n)
         x += f[n] * 2 * std::cos(k * z[n]); // pos & neg freq pair

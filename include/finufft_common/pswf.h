@@ -3,7 +3,7 @@
 
 namespace finufft::common {
 /*
-normalized zeroth-order pswf
+normalized zeroth-order pswf: psi_0^c(x) / psi_0^c(0), supported on [-1,1]
 */
 double pswf(double c, double x);
 

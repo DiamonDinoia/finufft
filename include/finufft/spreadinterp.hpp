@@ -110,12 +110,41 @@ TF FINUFFT_PLAN_T<TF>::evaluate_kernel_runtime(TF x) const
 */
 template<typename TF>
 FINUFFT_PLAN_T<TF>::Kernel_onedim_FT::Kernel_onedim_FT(const FINUFFT_PLAN_T &plan) {
-  // Creator: uses slow kernel evals to initialize z and f arrays.
-  using finufft::common::gaussquad;
   TF J2 = plan.m.spopts.nspread / 2.0; // J/2, half-width of ker z-support
-  // # quadr nodes in z (from 0 to J/2; reflections will be added)...
+
+  // For PSWF kernels, exploit the self-FT property of prolate spheroidal wave
+  // functions: phihat(k) = J2 * mu0 * phi(k * J2^2 / beta), where phi is the
+  // kernel (evaluated via the precomputed Horner polynomial) and mu0 is the
+  // FT eigenvalue. This replaces q cosine evaluations per target point with a
+  // single Horner polynomial evaluation (~nc FMAs, no transcendentals).
+  if (plan.m.spopts.kerformula >= 7) {
+    use_pswf       = true;
+    plan_ptr       = &plan;
+    pswf_grid_scale = TF(J2 * J2 / plan.m.spopts.beta); // J2^2 / beta
+
+    // Compute mu0 = integral_{-1}^{1} pswf(c, t) dt via Gaussian quadrature (once).
+    // This is the eigenvalue of the finite Fourier transform operator for the PSWF.
+    using finufft::common::gaussquad;
+    constexpr int nq = 40;
+    double Z[2 * nq], W[2 * nq];
+    gaussquad(2 * nq, Z, W);
+    double mu0 = 0;
+    for (int n = 0; n < 2 * nq; ++n)
+      mu0 += W[n] * finufft::common::pswf(plan.m.spopts.beta, Z[n]);
+
+    pswf_prefac = TF(J2 * mu0);
+    if (plan.opts.debug)
+      printf("[Kernel_onedim_FT] using PSWF self-FT via Horner\n");
+    if (plan.opts.debug > 1)
+      printf("[Kernel_onedim_FT] beta=%.4g mu0=%.6g grid_scale=%.6g\n",
+             plan.m.spopts.beta, mu0, (double)pswf_grid_scale);
+    return;
+  }
+
+  // Fallback: quadrature-based evaluation for non-PSWF kernels
+  using finufft::common::gaussquad;
   int q = (int)(2 + 2.0 * J2); // > pi/2 ratio.  cannot exceed MAX_NQUAD
-  if (plan.m.spopts.debug) printf("q (# ker FT quadr pts) = %d\n", q);
+  if (plan.opts.debug > 1) printf("[Kernel_onedim_FT] using quadrature path with q=%d\n", q);
   std::vector<double> Z(2 * q), W(2 * q);
   gaussquad(2 * q, Z.data(), W.data()); // only half the nodes used, for (0,1)
   z.resize(q);
