@@ -72,7 +72,8 @@ private:
 
   // Type 3 rescaling/centering/phasing parameters:
   struct type3params {
-    std::array<TF, 3> X, C, D, h, gam; // X=halfwid C=center D=freqcen h,gam=rescale
+    std::array<TF, 3> X{0, 0, 0}, C{0, 0, 0}, D{0, 0, 0}, h{0, 0, 0},
+        gam{0, 0, 0}; // X=halfwid C=center D=freqcen h,gam=rescale
   };
 
   int spreadinterpSortedBatch(int batchSize, std::complex<TF> *fwBatch,
@@ -115,16 +116,61 @@ private:
     std::vector<BIGINT> sortIndices;  // bin-sort permutation of NU points
     bool didSort = false;             // whether bin-sorting was applied
 
-    // --- Type 3 workspace (set by setpts for type 3 only) ---
+    // --- Type 3 workspace with caching (set by setpts for type 3 only) ---
     std::array<const TF *, 3> STU{nullptr, nullptr, nullptr};
                                    // pointers to user's target NU-point arrays (no alloc)
-    std::vector<TC> prephase;      // pre-phase factors for all input NU pts
-    std::vector<TC> deconv;        // 1/kernel_FT * phase at all output NU pts
-    std::array<std::vector<TF>, 3> XYZp;  // rescaled/centered source NU points (x'_j)
-    std::array<std::vector<TF>, 3> STUp;  // rescaled/centered target freqs (s'_k)
     type3params t3P;               // type 3 rescaling/centering/phasing params
-    std::unique_ptr<const FINUFFT_PLAN_T<TF>> innerT2plan;
+
+    // RAII cache for type-3 setpts. Owns all computed state that can be
+    // reused across repeated setpts calls. Target-dependent and source-dependent
+    // work are tracked independently so that changing only sources (or only
+    // targets) skips the unaffected half.
+    struct Type3Cache {
+      // --- Target-dependent state (reused when targets unchanged) ---
+      std::vector<TF> invPhiHat;   // cached 1/phiHat(s'_k) per target point
+      std::array<std::vector<TF>, 3> STU; // exact cached target coords for hit checks
+      std::array<std::vector<TF>, 3> STUp; // rescaled/centered target freqs (s'_k)
+      std::unique_ptr<const FINUFFT_PLAN_T<TF>> innerT2plan;
                                    // inner type-2 plan used in step 2 of type 3
+
+      // --- Source-dependent state (reused when sources AND gam/D unchanged) ---
+      std::array<std::vector<TF>, 3> XYZ; // exact cached source coords for hit checks
+      std::array<std::vector<TF>, 3> XYZp; // rescaled/centered source NU points (x'_j)
+      std::vector<TC> prephase;    // pre-phase factors for all input NU pts
+
+      // --- Depends on both (skipped when both caches hit) ---
+      std::vector<TC> deconv;      // 1/kernel_FT * phase at all output NU pts
+
+      // --- Target cache key ---
+      struct TargetKey {
+        BIGINT nk{};
+        std::array<BIGINT, 3> nfdim{0, 0, 0};
+        std::array<TF, 3> S{0, 0, 0};
+        std::array<TF, 3> D{0, 0, 0};
+      };
+      TargetKey tkey;
+      bool target_valid = false;
+
+      bool targets_match(const TargetKey &k) const {
+        return target_valid && tkey.nk == k.nk && tkey.nfdim == k.nfdim &&
+               tkey.S == k.S && tkey.D == k.D;
+      }
+
+      // --- Source cache key ---
+      struct SourceKey {
+        BIGINT nj{};
+        std::array<TF, 3> C{0, 0, 0};
+        std::array<TF, 3> gam{0, 0, 0};
+        std::array<TF, 3> D{0, 0, 0};   // prephase depends on target center D
+      };
+      SourceKey skey;
+      bool source_valid = false;
+
+      bool sources_match(const SourceKey &k) const {
+        return source_valid && skey.nj == k.nj && skey.C == k.C && skey.gam == k.gam &&
+               skey.D == k.D;
+      }
+    } t3cache;
 
     // --- FFT plan (created in constructor or init_grid_kerFT_FFT) ---
     std::unique_ptr<Finufft_FFT_plan<TF>, Finufft_FFT_plan_deleter<TF>> fftPlan;

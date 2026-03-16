@@ -111,6 +111,7 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
 
     std::array<const TF *, 3> XYZ_in{xj, yj, zj};
     std::array<const TF *, 3> STU_in{s, t, u};
+    auto &tc = m.t3cache;
     if (nk < 0) {
       fprintf(stderr, "[%s] nk (%lld) cannot be negative!\n", __func__, (long long)nk);
       throw finufft::exception(FINUFFT_ERR_NUM_NU_PTS_INVALID);
@@ -128,7 +129,7 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
     double upsampfac = bestUpsamplingFactor<TF>(opts.nthreads, 1.0, dim, type, m.tol);
     if (!upsamp_locked && (upsampfac != opts.upsampfac)) {
       opts.upsampfac = upsampfac;
-      if (opts.debug > 1)
+      if (opts.debug)
         printf("[setpts t3] selected upsampfac=%.2f (density=1 used; persisted)\n",
                opts.upsampfac);
       setup_spreadinterp(); // throws on error
@@ -137,10 +138,14 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
 
     // pick x, s intervals & shifts & # fine grid pts (nf) in each dim...
     std::array<TF, 3> S = {0, 0, 0};
+    std::array<bool, 3> source_same = {true, true, true};
+    std::array<bool, 3> target_same = {true, true, true};
     if (opts.debug) printf("\tM=%lld N=%lld\n", (long long)nj, (long long)nk);
     for (int idim = 0; idim < dim; ++idim) {
-      arraywidcen(nj, XYZ_in[idim], &(m.t3P.X[idim]), &(m.t3P.C[idim]));
-      arraywidcen(nk, STU_in[idim], &S[idim], &(m.t3P.D[idim]));
+      source_same[idim] =
+          arraywidcen(nj, XYZ_in[idim], tc.XYZ[idim], &(m.t3P.X[idim]), &(m.t3P.C[idim]));
+      target_same[idim] =
+          arraywidcen(nk, STU_in[idim], tc.STU[idim], &S[idim], &(m.t3P.D[idim]));
       set_nhg_type3(idim, S[idim], m.t3P.X[idim]); // applies twist i)
       if (opts.debug) // report on choices of shifts, centers, etc...
         printf("\tX%d=%.3g C%d=%.3g S%d=%.3g D%d=%.3g gam%d=%g nf%d=%lld h%d=%.3g\t\n",
@@ -159,102 +164,169 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
       throw finufft::exception(FINUFFT_ERR_MAXNALLOC);
     }
 
-    // alloc rescaled NU src pts x'_j (in X etc), rescaled NU targ pts s'_k ...
-    // We do this by resizing Xp, Yp, and Zp, and pointing X, Y, Z to their data;
-    // this avoids any need for explicit cleanup.
+    // --- Build cache keys for this call ---
+    bool target_coords_same = tc.target_valid;
+    bool source_coords_same = tc.source_valid;
     for (int idim = 0; idim < dim; ++idim) {
-      m.XYZp[idim].resize(nj);
-      m.XYZ[idim] = m.XYZp[idim].data();
-      m.STUp[idim].resize(nk);
+      target_coords_same = target_coords_same && target_same[idim];
+      source_coords_same = source_coords_same && source_same[idim];
+    }
+    typename M::Type3Cache::TargetKey cur_tkey{nk, m.nfdim, S, m.t3P.D};
+    typename M::Type3Cache::SourceKey cur_skey{nj, m.t3P.C, m.t3P.gam, m.t3P.D};
+
+    bool tgt_hit = target_coords_same && tc.targets_match(cur_tkey);
+    bool src_hit = source_coords_same && tc.sources_match(cur_skey);
+
+    if (opts.debug)
+      printf("[%s t3] cache lookup: targets %s, sources %s\n", __func__,
+             tgt_hit ? "HIT" : "miss", src_hit ? "HIT" : "miss");
+    if (opts.debug > 1) {
+      printf("[%s t3] target cache %s: invPhiHat, STUp, inner t2 plan\n", __func__,
+             tgt_hit ? "reuse" : "rebuild");
+      printf("[%s t3] source cache %s: primed coords, prephase\n", __func__,
+             src_hit ? "reuse" : "rebuild");
     }
 
-    // always shift as use gam to rescale x_j to x'_j, etc (twist iii)...
-    std::array<TF, 3> ig = {0, 0, 0};
-    for (int idim = 0; idim < dim; ++idim) ig[idim] = 1.0 / m.t3P.gam[idim];
-#pragma omp parallel for num_threads(opts.nthreads) schedule(static)
-    for (BIGINT j = 0; j < nj; ++j) {
-      for (int idim = 0; idim < dim; ++idim)
-        m.XYZp[idim][j] = (XYZ_in[idim][j] - m.t3P.C[idim]) * ig[idim]; // rescale x_j
-    }
-
-    // set up prephase array...
+    // --- Source-dependent work: XYZp rescaling + prephase ---
     TF isign = (fftSign >= 0) ? 1 : -1;
-    m.prephase.resize(nj);
-    if (m.t3P.D[0] != 0.0 || m.t3P.D[1] != 0.0 || m.t3P.D[2] != 0.0) {
-#pragma omp parallel for num_threads(opts.nthreads) schedule(static)
-      for (BIGINT j = 0; j < nj; ++j) { // ... loop over src NU locs
-        TF phase = 0;
-        for (int idim = 0; idim < dim; ++idim) phase += m.t3P.D[idim] * XYZ_in[idim][j];
-        m.prephase[j] = std::polar(TF(1), isign * phase); // Euler
-      }
-    } else
-      for (BIGINT j = 0; j < nj; ++j)
-        m.prephase[j] = {1.0, 0.0}; // *** or keep flag so no mult in exec??
+    if (!src_hit) {
+      timer.restart();
+      for (int idim = 0; idim < dim; ++idim) tc.XYZp[idim].resize(nj);
 
-    // create a 1D phihat evaluator
-    Kernel_onedim_FT onedim_phihat(*this);
-
-    // (old STEP 3a) Compute deconvolution post-factors array (per targ pt)...
-    // (exploits that FT separates because kernel is prod of 1D funcs)
-    m.deconv.resize(nk);
-    // C can be nan or inf if M=0, no input NU pts
-    bool Cfinite = std::isfinite(m.t3P.C[0]) && std::isfinite(m.t3P.C[1]) &&
-                   std::isfinite(m.t3P.C[2]);
-    bool Cnonzero = m.t3P.C[0] != 0.0 || m.t3P.C[1] != 0.0 || m.t3P.C[2] != 0.0;
-    bool do_phase = Cfinite && Cnonzero;
+      // rescale x_j to x'_j (twist iii)
+      std::array<TF, 3> ig = {0, 0, 0};
+      for (int idim = 0; idim < dim; ++idim) ig[idim] = 1.0 / m.t3P.gam[idim];
 #pragma omp parallel for num_threads(opts.nthreads) schedule(static)
-    for (BIGINT k = 0; k < nk; ++k) { // .... loop over NU targ freqs
-      TF phiHat = 1;
-      TF phase  = 0;
-      for (int idim = 0; idim < dim; ++idim) {
-        auto tSTUin = STU_in[idim][k];
-        // rescale the target s_k etc to s'_k etc...
-        auto tSTUp =
-            m.t3P.h[idim] * m.t3P.gam[idim] * (tSTUin - m.t3P.D[idim]); // |s'_k| < pi/R
-        phiHat *= onedim_phihat(tSTUp);
-        if (do_phase) phase += (tSTUin - m.t3P.D[idim]) * m.t3P.C[idim];
-        m.STUp[idim][k] = tSTUp;
+      for (BIGINT j = 0; j < nj; ++j) {
+        for (int idim = 0; idim < dim; ++idim)
+          tc.XYZp[idim][j] = (XYZ_in[idim][j] - m.t3P.C[idim]) * ig[idim];
       }
-      m.deconv[k] =
-          do_phase ? std::polar(TF(1) / phiHat, isign * phase) : TF(1) / phiHat;
+
+      // prephase
+      tc.prephase.resize(nj);
+      if (m.t3P.D[0] != 0.0 || m.t3P.D[1] != 0.0 || m.t3P.D[2] != 0.0) {
+        if (opts.debug > 1)
+          printf("[%s t3] source prephase via polynomial cis\n", __func__);
+#pragma omp parallel for num_threads(opts.nthreads) schedule(static)
+        for (BIGINT j = 0; j < nj; ++j) {
+          TF phase = 0;
+          for (int idim = 0; idim < dim; ++idim)
+            phase += m.t3P.D[idim] * XYZ_in[idim][j];
+          tc.prephase[j] = std::polar(TF(1), isign * phase);
+        }
+      } else
+        for (BIGINT j = 0; j < nj; ++j) tc.prephase[j] = {1.0, 0.0};
+      if (opts.debug > 1)
+        printf("[%s t3] source cache rebuild:\t%.3g s\n", __func__, timer.elapsedsec());
+    } else if (opts.debug > 1) {
+      printf("[%s t3] source cache reuse:\t\tno work\n", __func__);
     }
-    if (opts.debug)
-      printf("[%s t3] phase & deconv factors:\t%.3g s\n", __func__, timer.elapsedsec());
+    // XYZ raw pointers always point into the (possibly cached) XYZp vectors
+    for (int idim = 0; idim < dim; ++idim) m.XYZ[idim] = tc.XYZp[idim].data();
 
-    // Set up sort for spreading Cp (from primed NU src pts X, Y, Z) to fw...
-    timer.restart();
-    m.sortIndices.resize(nj);
-    m.spopts.spread_direction = 1;
-    indexSort();
-    if (opts.debug)
-      printf("[%s t3] sort (didSort=%d):\t\t%.3g s\n", __func__, (int)m.didSort,
-             timer.elapsedsec());
+    // --- Target-dependent work: invPhiHat, STUp, innerT2plan ---
+    if (!tgt_hit) {
+      // Build into locals for exception safety; move into cache only on success.
+      std::vector<TF> new_invPhiHat(nk);
+      std::array<std::vector<TF>, 3> new_STUp;
+      for (int idim = 0; idim < dim; ++idim) new_STUp[idim].resize(nk);
 
-    // Plan and setpts once, for the (repeated) inner type 2 finufft call...
-    timer.restart();
-    BIGINT t2nmodes[]   = {m.nfdim[0], m.nfdim[1], m.nfdim[2]}; // t2's input actually fw
-    finufft_opts t2opts = opts;                           // deep copy, since not ptrs
-    t2opts.modeord      = 0;                              // needed for correct t3!
-    t2opts.debug        = std::max(0, opts.debug - 1);    // don't print as much detail
-    t2opts.spread_debug = std::max(0, opts.spread_debug - 1);
-    t2opts.showwarn     = 0;                              // so don't see warnings 2x
-    if (!upsamp_locked)
-      t2opts.upsampfac = 0.0; // if the upsampfac was auto, let inner
-                              // t2 pick it again (from density=nj/Nf)
-    // (...could vary other t2opts here?)
-    // MR: temporary hack, until we have figured out the C++ interface.
-    FINUFFT_PLAN_T<TF> *tmpplan;
-    finufft_makeplan_t<TF>(2, d, t2nmodes, fftSign, batchSize, m.tol, &tmpplan,
-                           &t2opts); // throws on error
-    // Use a non-const unique_ptr to ensure cleanup if setpts throws, then
-    // transfer to the const unique_ptr member.
-    std::unique_ptr<FINUFFT_PLAN_T<TF>> guard(tmpplan);
-    tmpplan->setpts(nk, m.STUp[0].data(), m.STUp[1].data(), m.STUp[2].data(), 0,
-                    nullptr, nullptr,
-                    nullptr); // note nk = # output points (not nj); throws on error
-    m.innerT2plan = std::move(guard);
-    if (opts.debug)
-      printf("[%s t3] inner t2 plan & setpts: \t%.3g s\n", __func__, timer.elapsedsec());
+      Kernel_onedim_FT onedim_phihat(*this);
+#pragma omp parallel for num_threads(opts.nthreads) schedule(static)
+      for (BIGINT k = 0; k < nk; ++k) {
+        TF phiHat = 1;
+        for (int idim = 0; idim < dim; ++idim) {
+          auto tSTUin            = STU_in[idim][k];
+          auto tSTUp             = m.t3P.h[idim] * m.t3P.gam[idim] * (tSTUin - m.t3P.D[idim]);
+          phiHat                *= onedim_phihat(tSTUp);
+          new_STUp[idim][k]      = tSTUp;
+        }
+        new_invPhiHat[k] = TF(1) / phiHat;
+      }
+
+      // Build inner type-2 plan (can throw)
+      timer.restart();
+      BIGINT t2nmodes[]   = {m.nfdim[0], m.nfdim[1], m.nfdim[2]};
+      finufft_opts t2opts = opts;
+      t2opts.modeord      = 0;
+      t2opts.debug        = std::max(0, opts.debug - 1);
+      t2opts.spread_debug = std::max(0, opts.spread_debug - 1);
+      t2opts.showwarn     = 0;
+      if (!upsamp_locked) t2opts.upsampfac = 0.0;
+
+      FINUFFT_PLAN_T<TF> *tmpplan;
+      finufft_makeplan_t<TF>(2, d, t2nmodes, fftSign, batchSize, m.tol, &tmpplan,
+                             &t2opts); // throws on error
+      std::unique_ptr<FINUFFT_PLAN_T<TF>> guard(tmpplan);
+      tmpplan->setpts(nk, new_STUp[0].data(), new_STUp[1].data(), new_STUp[2].data(), 0,
+                      nullptr, nullptr, nullptr); // throws on error
+
+      // All allocations/computations succeeded — commit atomically via moves
+      tc.invPhiHat    = std::move(new_invPhiHat);
+      tc.STUp         = std::move(new_STUp);
+      tc.innerT2plan  = std::move(guard);
+      for (int idim = 0; idim < dim; ++idim)
+        tc.STU[idim].assign(STU_in[idim], STU_in[idim] + nk);
+      tc.tkey         = cur_tkey;
+      tc.target_valid = true;
+
+      if (opts.debug)
+        printf("[%s t3] inner t2 plan & setpts: \t%.3g s\n", __func__, timer.elapsedsec());
+    } else if (opts.debug > 1) {
+      printf("[%s t3] target cache reuse:\t\tno work\n", __func__);
+    }
+
+    // --- Deconv factors (depend on both sources and targets) ---
+    if (tgt_hit && src_hit) {
+      // Full cache hit: deconv unchanged, skip entirely
+      if (opts.debug)
+        printf("[%s t3] deconv from full cache (no-op):\t%.3g s\n", __func__,
+               timer.elapsedsec());
+    } else {
+      timer.restart();
+      tc.deconv.resize(nk);
+      bool Cfinite = std::isfinite(m.t3P.C[0]) && std::isfinite(m.t3P.C[1]) &&
+                     std::isfinite(m.t3P.C[2]);
+      bool Cnonzero = m.t3P.C[0] != 0.0 || m.t3P.C[1] != 0.0 || m.t3P.C[2] != 0.0;
+      bool do_phase = Cfinite && Cnonzero;
+      if (opts.debug > 1 && do_phase)
+        printf("[%s t3] deconv phasing via polynomial polar\n", __func__);
+#pragma omp parallel for num_threads(opts.nthreads) schedule(static)
+      for (BIGINT k = 0; k < nk; ++k) {
+        TF inv = tc.invPhiHat[k];
+        if (do_phase) {
+          TF phase = 0;
+          for (int idim = 0; idim < dim; ++idim)
+            phase += (STU_in[idim][k] - m.t3P.D[idim]) * m.t3P.C[idim];
+          tc.deconv[k] = std::polar(inv, isign * phase);
+        } else {
+          tc.deconv[k] = TC(inv);
+        }
+      }
+      if (opts.debug)
+        printf("[%s t3] deconv factors:\t\t%.3g s\n", __func__, timer.elapsedsec());
+    }
+
+    // --- Sort (depends on source coords + grid; skip on full cache hit) ---
+    if (!src_hit || !tgt_hit) {
+      timer.restart();
+      m.sortIndices.resize(nj);
+      m.spopts.spread_direction = 1;
+      indexSort();
+      if (opts.debug)
+        printf("[%s t3] sort (didSort=%d):\t\t%.3g s\n", __func__, (int)m.didSort,
+               timer.elapsedsec());
+    } else if (opts.debug > 1) {
+      printf("[%s t3] sort reuse:\t\t\tno work\n", __func__);
+    }
+
+    // Commit source cache key (after all source work succeeded)
+    if (!src_hit) {
+      for (int idim = 0; idim < dim; ++idim)
+        tc.XYZ[idim].assign(XYZ_in[idim], XYZ_in[idim] + nj);
+      tc.skey         = cur_skey;
+      tc.source_valid = true;
+    }
   }
   return 0;
 }

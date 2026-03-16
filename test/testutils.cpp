@@ -95,6 +95,107 @@ int main(int argc, char *argv[]) {
   if (std::abs(errtwonorm(M, &a[0], &b[0]) - 1.0) > relerr) return 1;
   if (std::abs(std::sqrt((FLT)M) * relerrtwonorm(M, &a[0], &b[0]) - 1.0) > relerr) return 1;
 
+  // type-3 cache keys must follow source/target values, not pointer identity
+  {
+    const auto run_type3 = [](const std::vector<FLT> &x, const std::vector<FLT> &s,
+                              const std::vector<CPX> &c, std::vector<CPX> &out) {
+      finufft_opts opts;
+      FINUFFT_DEFAULT_OPTS(&opts);
+      opts.nthreads = 1;
+
+      FINUFFT_PLAN plan = nullptr;
+      BIGINT nmodes[1]  = {0};
+      int ier           = FINUFFT_MAKEPLAN(3, 1, nmodes, +1, 1, (FLT)1e-12, &plan, &opts);
+      if (ier != 0) {
+        printf("fail: type3 cache test makeplan ier=%d\n", ier);
+        return false;
+      }
+
+      ier = FINUFFT_SETPTS(plan, (BIGINT)x.size(), x.data(), nullptr, nullptr,
+                           (BIGINT)s.size(), s.data(), nullptr, nullptr);
+      if (ier != 0) {
+        printf("fail: type3 cache test setpts ier=%d\n", ier);
+        FINUFFT_DESTROY(plan);
+        return false;
+      }
+
+      out.resize(s.size());
+      ier = FINUFFT_EXECUTE(plan, const_cast<CPX *>(c.data()), out.data());
+      if (ier != 0) {
+        printf("fail: type3 cache test execute ier=%d\n", ier);
+        FINUFFT_DESTROY(plan);
+        return false;
+      }
+
+      FINUFFT_DESTROY(plan);
+      return true;
+    };
+
+    const auto check_reused_plan = [&](std::vector<FLT> x, std::vector<FLT> s,
+                                       BIGINT mutate_index, FLT delta, bool mutate_targets,
+                                       const char *label) {
+      const std::vector<CPX> c = {
+          CPX(0.4, -0.2), CPX(-0.3, 0.1), CPX(0.2, 0.5), CPX(-0.1, -0.4), CPX(0.3, 0.2)};
+
+      finufft_opts opts;
+      FINUFFT_DEFAULT_OPTS(&opts);
+      opts.nthreads = 1;
+
+      FINUFFT_PLAN plan = nullptr;
+      BIGINT nmodes[1]  = {0};
+      int ier           = FINUFFT_MAKEPLAN(3, 1, nmodes, +1, 1, (FLT)1e-12, &plan, &opts);
+      if (ier != 0) {
+        printf("fail: %s makeplan ier=%d\n", label, ier);
+        return false;
+      }
+
+      ier = FINUFFT_SETPTS(plan, (BIGINT)x.size(), x.data(), nullptr, nullptr,
+                           (BIGINT)s.size(), s.data(), nullptr, nullptr);
+      if (ier != 0) {
+        printf("fail: %s first setpts ier=%d\n", label, ier);
+        FINUFFT_DESTROY(plan);
+        return false;
+      }
+
+      if (mutate_targets)
+        s[mutate_index] += delta;
+      else
+        x[mutate_index] += delta;
+
+      ier = FINUFFT_SETPTS(plan, (BIGINT)x.size(), x.data(), nullptr, nullptr,
+                           (BIGINT)s.size(), s.data(), nullptr, nullptr);
+      if (ier != 0) {
+        printf("fail: %s second setpts ier=%d\n", label, ier);
+        FINUFFT_DESTROY(plan);
+        return false;
+      }
+
+      std::vector<CPX> reused_out(s.size()), fresh_out;
+      ier = FINUFFT_EXECUTE(plan, const_cast<CPX *>(c.data()), reused_out.data());
+      if (ier != 0) {
+        printf("fail: %s reused execute ier=%d\n", label, ier);
+        FINUFFT_DESTROY(plan);
+        return false;
+      }
+      FINUFFT_DESTROY(plan);
+
+      if (!run_type3(x, s, c, fresh_out)) return false;
+
+      const FLT rel_err = relerrtwonorm((BIGINT)fresh_out.size(), fresh_out.data(),
+                                        reused_out.data());
+      if (rel_err > (FLT)1e-12) {
+        printf("fail: %s stale cache rel_err=%g\n", label, (double)rel_err);
+        return false;
+      }
+      return true;
+    };
+
+    std::vector<FLT> x = {-1.75, -0.5, 0.1, 0.6, 1.8};
+    std::vector<FLT> s = {-2.0, -0.75, 0.25, 1.1, 2.3};
+    if (!check_reused_plan(x, s, 2, (FLT)0.55, true, "type3 target cache")) return 1;
+    if (!check_reused_plan(x, s, 2, (FLT)-0.45, false, "type3 source cache")) return 1;
+  }
+
   // test reclaimable workspace allocator...
   using RM                    = finufft::ReclaimableMemory;
   constexpr size_t align_mask = RM::ALIGNMENT - 1;
@@ -130,7 +231,10 @@ int main(int argc, char *argv[]) {
   if ((reinterpret_cast<std::uintptr_t>(large_buf.data()) & 4095u) != 0u) return 1;
 
   void *lptr = large_buf.data();
-  if (!large_buf.allocate(large_nbytes) || large_buf.data() != lptr) return 1; // reuse
+  if (!large_buf.allocate(large_nbytes) || large_buf.data() != lptr)
+    return 1; // same-size
+  // Smaller request reuses existing allocation (>= check)
+  if (!large_buf.allocate(large_nbytes / 2) || large_buf.data() != lptr) return 1;
   large_buf.mark_reclaimable(); // exercises madvise/MEM_RESET path
 
   RM large_moved = std::move(large_buf);

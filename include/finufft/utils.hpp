@@ -40,6 +40,48 @@ FINUFFT_ALWAYS_INLINE void arraywidcen(BIGINT n, const T *a, T *w, T *c)
   }
 }
 
+template<typename T>
+FINUFFT_ALWAYS_INLINE bool arraywidcen(BIGINT n, const T *a, const std::vector<T> &cached,
+                                       T *w, T *c)
+// Same as arraywidcen, but also checks exact value equality against cached.
+// Returns false if cached has the wrong length or any value differs.
+{
+  if (n == 0) {
+    arraywidcen(n, a, w, c); // sets w,c to non-finite (documented n==0 behavior)
+    return cached.empty();   // "same" only if previously also had n==0
+  }
+  T lo = INFINITY;
+  T hi = -INFINITY;
+  if (cached.size() != static_cast<std::size_t>(n)) {
+    for (BIGINT m = 0; m < n; ++m) {
+      const T x = a[m];
+      if (x < lo) lo = x;
+      if (x > hi) hi = x;
+    }
+    *w = (hi - lo) / 2;
+    *c = (hi + lo) / 2;
+    if (std::abs(*c) < common::ARRAYWIDCEN_GROWFRAC * (*w)) {
+      *w += std::abs(*c);
+      *c = 0.0;
+    }
+    return false;
+  }
+  bool all_equal = true;
+  for (BIGINT m = 0; m < n; ++m) {
+    const T x = a[m];
+    if (x < lo) lo = x;
+    if (x > hi) hi = x;
+    all_equal &= (x == cached[static_cast<std::size_t>(m)]);
+  }
+  *w = (hi - lo) / 2;
+  *c = (hi + lo) / 2;
+  if (std::abs(*c) < common::ARRAYWIDCEN_GROWFRAC * (*w)) {
+    *w += std::abs(*c);
+    *c = 0.0;
+  }
+  return all_equal;
+}
+
 // routines in utils.cpp ...
 FINUFFT_EXPORT_TEST BIGINT next235even(BIGINT n);
 // jfm's timer class
