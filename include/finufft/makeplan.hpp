@@ -9,9 +9,10 @@
 #include <vector>
 
 #include <finufft/plan.hpp>
-#include <finufft/utils.hpp>
 #include <finufft/spreadinterp.hpp>
+#include <finufft/utils.hpp>
 #include <finufft_common/kernel.h>
+#include <finufft_common/trig.hpp>
 #include <finufft_common/utils.h>
 
 // ---------- local math routines (were in common.cpp; no need now): --------
@@ -79,13 +80,18 @@ void FINUFFT_PLAN_T<TF>::onedim_fseries_kernel(BIGINT nf,
   double z[2 * MAX_NQUAD], w[2 * MAX_NQUAD];
   gaussquad(2 * q, z, w); // only half the nodes used, eg on (0,1)
   std::complex<TF> a[MAX_NQUAD];
+  TF phase_step[MAX_NQUAD];
   for (int n = 0; n < q; ++n) {            // set up nodes z_n and vals f_n
     z[n] *= J2;                            // rescale nodes
                                            // vals & quadr weighs
     f[n] = J2 * (TF)w[n] * evaluate_kernel_runtime(TF(z[n]));
-    // phase winding rates
-    a[n] = -std::exp(2 * PI * std::complex<double>(0, 1) * z[n] / double(nf));
+    // phase winding rates; +pi encodes the sign flip for the centered kernel.
+    phase_step[n] = static_cast<TF>(2 * PI * z[n] / double(nf) + PI);
+    a[n]          = finufft::common::math::cis(phase_step[n]);
   }
+  if (opts.debug > 1)
+    printf("[%s] kernel FS phase winding via %s (q=%d)\n", __func__,
+           std::is_same_v<TF, float> ? "libm sincosf" : "inline polynomial cis", q);
   BIGINT nout = nf / 2 + 1; // how many values we're writing to
   int nt      = std::min(nout, (BIGINT)m.spopts.nthreads); // how many chunks
   std::vector<BIGINT> brk(nt + 1);                       // start indices for each thread
@@ -96,7 +102,7 @@ void FINUFFT_PLAN_T<TF>::onedim_fseries_kernel(BIGINT nf,
     int t = MY_OMP_GET_THREAD_NUM();
     std::complex<TF> aj[MAX_NQUAD];                // phase rotator for this thread
     for (int n = 0; n < q; ++n)
-      aj[n] = std::pow(a[n], (TF)brk[t]);          // init phase factors for chunk
+      aj[n] = finufft::common::math::cis(phase_step[n] * static_cast<TF>(brk[t]));
     for (BIGINT j = brk[t]; j < brk[t + 1]; ++j) { // loop along output array
       TF x = 0.0;                                  // accumulator for answer at this j
       for (int n = 0; n < q; ++n) {

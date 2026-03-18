@@ -13,6 +13,8 @@
 #endif
 #include <xsimd/xsimd.hpp>
 
+#include <finufft_common/trig.hpp>
+
 #include <array>
 #include <cinttypes>
 #include <cmath>
@@ -78,6 +80,54 @@ template<class T> constexpr std::size_t GetPaddedSIMDWidth(int runtime_ns) {
 
 } // namespace finufft::utils
 #endif // XSIMD_VERSION_MAJOR >=14
+
+namespace finufft::common::math {
+
+namespace detail {
+// SIMD Horner evaluation using xsimd::fma
+template<typename C, std::size_t N, typename B, std::size_t... I>
+FINUFFT_ALWAYS_INLINE B simd_horner_impl(const std::array<C, N> &coeffs, const B &x,
+                                         std::index_sequence<I...>) {
+  B acc(coeffs[0]);
+  ((acc = xsimd::fma(acc, x, B(coeffs[I + 1]))), ...);
+  return acc;
+}
+template<typename C, std::size_t N, typename B>
+FINUFFT_ALWAYS_INLINE B simd_eval_horner(const std::array<C, N> &coeffs, const B &x) {
+  static_assert(N > 0);
+  return simd_horner_impl(coeffs, x, std::make_index_sequence<N - 1>{});
+}
+} // namespace detail
+
+// SIMD sincos overload for xsimd::batch<T, Arch>.
+template<typename T, typename Arch, int TolDigits = default_approx_digits<T>>
+FINUFFT_FLATTEN FINUFFT_ALWAYS_INLINE auto sincos(const xsimd::batch<T, Arch> &angle) {
+  using B            = xsimd::batch<T, Arch>;
+  constexpr auto &si = detail::approx_coefficients<TolDigits, T>::sin_poly;
+  constexpr auto &ct = detail::approx_coefficients<TolDigits, T>::cos_poly;
+
+  const auto qf = xsimd::nearbyint(angle * B(detail::consts::inv_pi_over_2));
+  const auto x1 = xsimd::fma(qf, B(detail::consts::neg_pi_over_2), angle);
+  // Keep the SIMD quadrant tag in floating lanes. The previous integer-mask path
+  // regressed type-3 accuracy on Windows clang-cl.
+  const auto q4 = xsimd::fma(B(T(-4)), xsimd::floor(qf * B(T(0.25))), qf);
+
+  // Evaluate reduced-range polynomial
+  const auto t2 = x1 * x1;
+  const auto t3 = t2 * x1;
+  const auto s1 = xsimd::fma(detail::simd_eval_horner(si, t2), t3, x1);
+  const auto c1 = xsimd::fma(detail::simd_eval_horner(ct, t2), t2, B(T(1)));
+
+  // Quadrant fixup: swap sin/cos for odd quadrants, then flip sign via XOR
+  const auto even = (q4 == B(T(0))) | (q4 == B(T(2)));
+  const auto s2   = xsimd::select(even, s1, c1);
+  const auto c2   = xsimd::select(even, c1, -s1);
+  // select(low, x, -x) == x ^ andnot(sign_bit, low_mask)
+  const auto flip = xsimd::bitwise_andnot(B(T(-0.0)), xsimd::bitwise_cast(q4 < B(T(2))));
+  return std::tuple{s2 ^ flip, c2 ^ flip};
+}
+
+} // namespace finufft::common::math
 
 namespace finufft::spreadinterp {
 

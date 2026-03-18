@@ -20,9 +20,11 @@
 
 #include "finufft/memory.hpp"
 #include "finufft/utils.hpp"
+#include "finufft_common/trig.hpp"
 #include "utils/norms.hpp"
 #include <cstdint>
 #include <finufft/test_defs.hpp>
+#include <type_traits>
 
 namespace finufft::common {
 double cyl_bessel_i_custom(double nu, double x) noexcept;
@@ -94,6 +96,32 @@ int main(int argc, char *argv[]) {
   b[0] = CPX(0.0, 0.0); // perturb b from a
   if (std::abs(errtwonorm(M, &a[0], &b[0]) - 1.0) > relerr) return 1;
   if (std::abs(std::sqrt((FLT)M) * relerrtwonorm(M, &a[0], &b[0]) - 1.0) > relerr) return 1;
+
+  // test custom cis/polar approximation used by type-3 setpts and makeplan
+  static_assert(finufft::common::math::default_approx_digits<float> == 7);
+  static_assert(finufft::common::math::default_approx_digits<double> == 15);
+  {
+    auto check_trig = [](auto max_err) {
+      using T               = decltype(max_err);
+      constexpr T magnitude = T(1.25);
+      for (int i = -2000; i <= 2000; i += 17) {
+        const T angle    = T(0.125) * T(i) + T(1e-4) * T(i) * T(i);
+        const auto got_c = finufft::common::math::cis(angle, magnitude);
+        const auto got_p = finufft::common::math::polar(magnitude, angle);
+        const auto ref   = std::polar(magnitude, angle);
+        const auto err   = (std::max)(std::abs(got_c - ref), std::abs(got_p - ref));
+        if (err > max_err) {
+          printf("fail: trig<%s> angle=%g err=%g bound=%g\n",
+                 std::is_same_v<T, float> ? "float" : "double", (double)angle,
+                 (double)err, (double)max_err);
+          return false;
+        }
+      }
+      return true;
+    };
+    if (!check_trig(1e-6f)) return 1;
+    if (!check_trig(2e-12)) return 1;
+  }
 
   // type-3 cache keys must follow source/target values, not pointer identity
   {

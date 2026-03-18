@@ -1,15 +1,18 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <complex>
 #include <cstdio>
 #include <vector>
 
-#include <finufft/spreadinterp.hpp>
-#include <finufft/plan.hpp>
-#include <finufft/utils.hpp>
 #include <finufft/heuristics.hpp>
+#include <finufft/plan.hpp>
+#include <finufft/simd.hpp>
+#include <finufft/spreadinterp.hpp>
+#include <finufft/utils.hpp>
+#include <finufft_common/trig.hpp>
 
 // ---------- local math routines for type-3 setpts: --------
 
@@ -205,14 +208,43 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
       // prephase
       tc.prephase.resize(nj);
       if (m.t3P.D[0] != 0.0 || m.t3P.D[1] != 0.0 || m.t3P.D[2] != 0.0) {
-        if (opts.debug > 1)
-          printf("[%s t3] source prephase via polynomial cis\n", __func__);
-#pragma omp parallel for num_threads(opts.nthreads) schedule(static)
-        for (BIGINT j = 0; j < nj; ++j) {
-          TF phase = 0;
-          for (int idim = 0; idim < dim; ++idim)
-            phase += m.t3P.D[idim] * XYZ_in[idim][j];
-          tc.prephase[j] = std::polar(TF(1), isign * phase);
+        using batch                        = xsimd::batch<TF>;
+        constexpr std::size_t batch_width = batch::size;
+        constexpr BIGINT batch_size       = static_cast<BIGINT>(batch_width);
+        const BIGINT nbatches             = nj / batch_size;
+        if (opts.debug > 1) {
+          if (nbatches != 0)
+            printf("[%s t3] source prephase via xsimd sincos batches + scalar polar tails (W=%zu)\n",
+                   __func__, batch_width);
+          else
+            printf("[%s t3] source prephase via scalar polar\n", __func__);
+        }
+#pragma omp parallel num_threads(opts.nthreads)
+        {
+          std::array<TF, batch_width> re_buf;
+          std::array<TF, batch_width> im_buf;
+          const auto isign_batch = batch(isign);
+#pragma omp for schedule(static)
+          for (BIGINT jb = 0; jb < nbatches; ++jb) {
+            const BIGINT j = jb * batch_size;
+            auto phase     = batch(TF(0));
+            for (int idim = 0; idim < dim; ++idim)
+              phase = xsimd::fma(batch(m.t3P.D[idim]),
+                                 batch::load_unaligned(XYZ_in[idim] + j), phase);
+            auto [s, c] = finufft::common::math::sincos(isign_batch * phase);
+            c.store_unaligned(re_buf.data());
+            s.store_unaligned(im_buf.data());
+            for (std::size_t lane = 0; lane < batch_width; ++lane)
+              tc.prephase[j + static_cast<BIGINT>(lane)] =
+                  TC(re_buf[lane], im_buf[lane]);
+          }
+#pragma omp for schedule(static)
+          for (BIGINT j = nbatches * batch_size; j < nj; ++j) {
+            TF phase = 0;
+            for (int idim = 0; idim < dim; ++idim)
+              phase += m.t3P.D[idim] * XYZ_in[idim][j];
+            tc.prephase[j] = std::polar(TF(1), isign * phase);
+          }
         }
       } else
         for (BIGINT j = 0; j < nj; ++j) tc.prephase[j] = {1.0, 0.0};
@@ -289,19 +321,50 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
                      std::isfinite(m.t3P.C[2]);
       bool Cnonzero = m.t3P.C[0] != 0.0 || m.t3P.C[1] != 0.0 || m.t3P.C[2] != 0.0;
       bool do_phase = Cfinite && Cnonzero;
-      if (opts.debug > 1 && do_phase)
-        printf("[%s t3] deconv phasing via polynomial polar\n", __func__);
-#pragma omp parallel for num_threads(opts.nthreads) schedule(static)
-      for (BIGINT k = 0; k < nk; ++k) {
-        TF inv = tc.invPhiHat[k];
-        if (do_phase) {
-          TF phase = 0;
-          for (int idim = 0; idim < dim; ++idim)
-            phase += (STU_in[idim][k] - m.t3P.D[idim]) * m.t3P.C[idim];
-          tc.deconv[k] = std::polar(inv, isign * phase);
-        } else {
-          tc.deconv[k] = TC(inv);
+      if (do_phase) {
+        using batch                        = xsimd::batch<TF>;
+        constexpr std::size_t batch_width = batch::size;
+        constexpr BIGINT batch_size       = static_cast<BIGINT>(batch_width);
+        const BIGINT nbatches             = nk / batch_size;
+        if (opts.debug > 1) {
+          if (nbatches != 0)
+            printf("[%s t3] deconv phasing via xsimd sincos batches + scalar polar tails (W=%zu)\n",
+                   __func__, batch_width);
+          else
+            printf("[%s t3] deconv phasing via scalar polar\n", __func__);
         }
+#pragma omp parallel num_threads(opts.nthreads)
+        {
+          std::array<TF, batch_width> re_buf;
+          std::array<TF, batch_width> im_buf;
+          const auto isign_batch = batch(isign);
+#pragma omp for schedule(static)
+          for (BIGINT kb = 0; kb < nbatches; ++kb) {
+            const BIGINT k = kb * batch_size;
+            auto phase     = batch(TF(0));
+            for (int idim = 0; idim < dim; ++idim) {
+              const auto stu = batch::load_unaligned(STU_in[idim] + k);
+              phase          = xsimd::fma(batch(m.t3P.C[idim]),
+                                 stu - batch(m.t3P.D[idim]), phase);
+            }
+            const auto inv = batch::load_unaligned(tc.invPhiHat.data() + k);
+            auto [s, c] = finufft::common::math::sincos(isign_batch * phase);
+            (inv * c).store_unaligned(re_buf.data());
+            (inv * s).store_unaligned(im_buf.data());
+            for (std::size_t lane = 0; lane < batch_width; ++lane)
+              tc.deconv[k + static_cast<BIGINT>(lane)] = TC(re_buf[lane], im_buf[lane]);
+          }
+#pragma omp for schedule(static)
+          for (BIGINT k = nbatches * batch_size; k < nk; ++k) {
+            TF phase = 0;
+            for (int idim = 0; idim < dim; ++idim)
+              phase += (STU_in[idim][k] - m.t3P.D[idim]) * m.t3P.C[idim];
+            tc.deconv[k] = std::polar(tc.invPhiHat[k], isign * phase);
+          }
+        }
+      } else {
+#pragma omp parallel for num_threads(opts.nthreads) schedule(static)
+        for (BIGINT k = 0; k < nk; ++k) tc.deconv[k] = TC(tc.invPhiHat[k]);
       }
       if (opts.debug)
         printf("[%s t3] deconv factors:\t\t%.3g s\n", __func__, timer.elapsedsec());
