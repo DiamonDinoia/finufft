@@ -2,7 +2,7 @@ CPMAddPackage(
     NAME
     xsimd
     GIT_REPOSITORY
-    "https://github.com/xtensor-stack/xsimd.git"
+    ${XSIMD_REPOSITORY}
     GIT_TAG
     ${XSIMD_VERSION}
     EXCLUDE_FROM_ALL
