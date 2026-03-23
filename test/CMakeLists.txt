@@ -8,6 +8,7 @@ set(TESTS
     finufft2dmany_test
     finufft3d_test
     finufft3dmany_test
+    setpts_replan
     spreadinterp1d_test
     adjointness
     tolsweep
@@ -126,6 +127,8 @@ function(add_tests_with_prec PREC REQ_TOL CHECK_TOL SUFFIX)
     add_test(NAME run_tolsweep_${PREC} COMMAND tolsweep${SUFFIX} WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
     add_test(NAME run_adjointness_${PREC} COMMAND adjointness${SUFFIX} WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+    add_test(NAME run_setpts_replan_${PREC} COMMAND setpts_replan${SUFFIX} WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 endfunction()
 
 # use above function to actually add the tests, with certain requested and check

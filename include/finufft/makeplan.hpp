@@ -114,6 +114,7 @@ template<typename TF> void FINUFFT_PLAN_T<TF>::setup_spreadinterp() {
   using namespace finufft::common;
   using namespace finufft::kernel;
   /* Sets spread/interp (gridding) kernel params in spopts struct (ns, etc),
+    then refreshes the derived Horner interpolation tables.
     based on:
     tol - desired user relative tolerance (a.k.a eps)
     opts.upsampfac - fixed upsampling factor (=sigma), previously set.
@@ -121,9 +122,8 @@ template<typename TF> void FINUFFT_PLAN_T<TF>::setup_spreadinterp() {
     All of these (spopts, opts, tol) are plan class members.
     See finufft_common/spread_opts.h for docs on all spopts fields.
     Note that spopts.spread_direction is not set.
-    Throws on error (see codes in finufft_errors.h), including
-    FINUFFT_ERR_EPS_TOO_SMALL if requested eps (tol) is below machine epsilon,
-    unless opts.allow_eps_too_small requests clamp-and-proceed behavior.
+    Throws on error (see codes in finufft_errors.h). The constructor already
+    ensures m.tol is feasible wrt machine epsilon before this is called.
     Barbone (Dec/25): ensure legacy kereval/kerpad user opts are treated as no-ops.
     1/8/26: Barnett redo (merges setup_spreader & setup_spreader_for_nufft of 2017).
     Barbone (3/4/26): eps-too-small is now a hard error (throw), not a warning.
@@ -149,17 +149,6 @@ template<typename TF> void FINUFFT_PLAN_T<TF>::setup_spreadinterp() {
 
   // crucial: where the default kerformula is set ....*    see kernel.{h,cpp}
   m.spopts.kerformula = (opts.spread_kerformula == 0) ? 8 : opts.spread_kerformula;
-
-  constexpr TF EPSILON = std::numeric_limits<TF>::epsilon(); // 2.2e-16 or 1.2e-7
-  if (m.tol < EPSILON) { // unfeasible request: no hope of beating eps_mach...
-    if (opts.allow_eps_too_small) {
-      m.tol = EPSILON;
-    } else {
-      fprintf(stderr, "%s error: requested tol=%.3g is below eps_mach=%.3g.\n", __func__,
-              (double)m.tol, (double)EPSILON);
-      throw finufft::exception(FINUFFT_ERR_EPS_TOO_SMALL);
-    }
-  }
 
   // choose nspread and set it in spopts...
   int ns = theoretical_kernel_ns((double)m.tol, dim, type, opts.debug, m.spopts);
@@ -281,19 +270,14 @@ template<typename TF> void FINUFFT_PLAN_T<TF>::precompute_horner_coeffs() {
   if (m.nc < static_cast<int>(nc_fit)) {
     const size_t shift = nc_fit - m.nc;
     for (size_t k = 0; k < static_cast<size_t>(m.nc); ++k) {
-      const size_t src_row = k + shift;
-      const size_t dst_row = k;
-      for (size_t j = 0; j < m.padded_ns; ++j) {
-        m.horner_coeffs[dst_row * m.padded_ns + j] =
-            m.horner_coeffs[src_row * m.padded_ns + j];
-      }
+      const size_t src_row = (k + shift) * m.padded_ns;
+      const size_t dst_row = k * m.padded_ns;
+      std::copy_n(m.horner_coeffs.begin() + src_row, m.padded_ns,
+                  m.horner_coeffs.begin() + dst_row);
     }
     // Zero out the now-unused tail rows for cleanliness
-    for (size_t k = m.nc; k < static_cast<size_t>(nc_fit); ++k) {
-      for (size_t j = 0; j < m.padded_ns; ++j) {
-        m.horner_coeffs[k * m.padded_ns + j] = TF(0);
-      }
-    }
+    for (size_t k = m.nc; k < static_cast<size_t>(nc_fit); ++k)
+      std::fill_n(m.horner_coeffs.begin() + k * m.padded_ns, m.padded_ns, TF(0));
   }
   double t = timer.elapsedsec();
 
@@ -327,7 +311,7 @@ FINUFFT_PLAN_T<TF>::FINUFFT_PLAN_T(int type_, int dim_, const BIGINT *n_modes, i
 // Throws finufft::exception on error.
 {
   using namespace finufft::utils;
-  m.tol = tol_;    // save user tolerance (setup_spreadinterp may clamp it)
+  m.tol = tol_;    // save user tolerance (constructor may clamp it)
   if (!opts_)      // use default opts
     finufft_default_opts_t(&opts);
   else             // or read from what's passed in
@@ -423,6 +407,17 @@ FINUFFT_PLAN_T<TF>::FINUFFT_PLAN_T(int type_, int dim_, const BIGINT *n_modes, i
     }
   }
 
+  const TF eps_mach = std::numeric_limits<TF>::epsilon();
+  if (m.tol < eps_mach) {
+    if (opts.allow_eps_too_small) {
+      m.tol = eps_mach;
+    } else {
+      fprintf(stderr, "%s error: requested tol=%.3g is below eps_mach=%.3g.\n", __func__,
+              (double)m.tol, (double)eps_mach);
+      throw finufft::exception(FINUFFT_ERR_EPS_TOO_SMALL);
+    }
+  }
+
   // heuristic to choose default upsampfac: defer selection to setpts unless
   // the user explicitly forced a nonzero value in opts. In that case initialize
   // spreader/Horner internals now using the provided upsampfac.
@@ -435,16 +430,6 @@ FINUFFT_PLAN_T<TF>::FINUFFT_PLAN_T(int type_, int dim_, const BIGINT *n_modes, i
     //  ------------------------ types 1,2: planning needed ---------------------
     if (type == 1 || type == 2) {
       init_grid_kerFT_FFT(); // throws on error
-    }
-  } else {
-    // If upsampfac was left as 0.0 (auto) we defer setup_spreader to setpts.
-    // However, we can still reject or clamp unachievable tiny tolerances now.
-    const TF eps_mach = std::numeric_limits<TF>::epsilon();
-    if (m.tol < eps_mach) {
-      if (opts.allow_eps_too_small) {
-        m.tol = eps_mach;
-      } else
-        throw finufft::exception(FINUFFT_ERR_EPS_TOO_SMALL);
     }
   }
 

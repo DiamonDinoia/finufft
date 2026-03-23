@@ -59,6 +59,25 @@ int main(void) {
 
   finufft_destroy(plan);
 
+  // Make a valid type-3 plan, then exercise setpts with negative nk
+  rc = finufft_makeplan(3, 1, N, 1, 1, 1e-6, &plan, &opts);
+  if (rc) {
+    fprintf(stderr, "makeplan (valid type3) failed: rc=%d\n", rc);
+    return 7;
+  }
+
+  double x_ok[1] = {0.0};
+  int64_t neg_nk = -1;
+  rc             = finufft_setpts(plan, 1, x_ok, NULL, NULL, neg_nk, NULL, NULL, NULL);
+  if (rc != FINUFFT_ERR_NUM_NU_PTS_INVALID) {
+    fprintf(stderr, "setpts negative nk: expected %d got %d\n",
+            FINUFFT_ERR_NUM_NU_PTS_INVALID, rc);
+    finufft_destroy(plan);
+    return 8;
+  }
+
+  finufft_destroy(plan);
+
 #ifdef _OPENMP
   // Invalid lock function pairing -> expect FINUFFT_ERR_LOCK_FUNS_INVALID
   finufft_default_opts(&opts);
@@ -68,7 +87,7 @@ int main(void) {
   if (rc != FINUFFT_ERR_LOCK_FUNS_INVALID) {
     fprintf(stderr, "lock funs invalid: expected %d got %d\n",
             FINUFFT_ERR_LOCK_FUNS_INVALID, rc);
-    return 7;
+    return 9;
   }
 #endif
 
@@ -79,7 +98,7 @@ int main(void) {
   if (rc != FINUFFT_ERR_SPREAD_THREAD_NOTVALID) {
     fprintf(stderr, "spread_thread invalid: expected %d got %d\n",
             FINUFFT_ERR_SPREAD_THREAD_NOTVALID, rc);
-    return 8;
+    return 10;
   }
 
   // Invalid upsampfac -> expect FINUFFT_ERR_UPSAMPFAC_TOO_SMALL
@@ -89,7 +108,7 @@ int main(void) {
   if (rc != FINUFFT_ERR_UPSAMPFAC_TOO_SMALL) {
     fprintf(stderr, "upsampfac too small: expected %d got %d\n",
             FINUFFT_ERR_UPSAMPFAC_TOO_SMALL, rc);
-    return 9;
+    return 11;
   }
 
   // Invalid kernel formula -> expect FINUFFT_ERR_KERFORMULA_NOTVALID
@@ -100,7 +119,7 @@ int main(void) {
   if (rc != FINUFFT_ERR_KERFORMULA_NOTVALID) {
     fprintf(stderr, "kerformula invalid: expected %d got %d\n",
             FINUFFT_ERR_KERFORMULA_NOTVALID, rc);
-    return 10;
+    return 12;
   }
 
   printf("error_handling: PASS\n");

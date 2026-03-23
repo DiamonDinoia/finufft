@@ -55,41 +55,53 @@ void FINUFFT_PLAN_T<TF>::set_nhg_type3(int idim, TF S, TF X)
   m.t3P.gam[idim] = TF(m.nfdim[idim] / (2.0 * opts.upsampfac * Ssafe)); // x scale fac
 }
 
-// --------- setpts user guru interface driver ----------
-
 template<typename TF>
 int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *zj,
                                BIGINT nk, const TF *s, const TF *t, const TF *u) {
-  using namespace finufft::utils;
   using namespace finufft::heuristics;
+  using namespace finufft::utils;
   // Method function to set NU points and do precomputations. Barnett 2020.
   // Barbone (3/4/26): removed warning_code_ plumbing (eps-too-small now throws).
   // See ../docs/cguru.doc for current documentation.
-  int d = dim;       // abbrev for spatial dim
+
+  auto check_nu_count = [](BIGINT n, const char *arg_name) {
+    if (n < 0) {
+      fprintf(stderr, "[setpts] %s (%lld) cannot be negative!\n", arg_name, (long long)n);
+      throw finufft::exception(FINUFFT_ERR_NUM_NU_PTS_INVALID);
+    }
+    if (n > MAX_NU_PTS) {
+      fprintf(stderr, "[setpts] %s (%lld) exceeds MAX_NU_PTS\n", arg_name, (long long)n);
+      throw finufft::exception(FINUFFT_ERR_NUM_NU_PTS_INVALID);
+    }
+  };
+
   CNTime timer;
   timer.start();
+  check_nu_count(nj, "nj");
   m.nj = nj; // the user only now chooses how many NU (x,y,z) pts
-  if (nj < 0) {
-    fprintf(stderr, "[%s] nj (%lld) cannot be negative!\n", __func__, (long long)nj);
-    throw finufft::exception(FINUFFT_ERR_NUM_NU_PTS_INVALID);
-  } else if (nj > MAX_NU_PTS) {
-    fprintf(stderr, "[%s] nj (%lld) exceeds MAX_NU_PTS\n", __func__, (long long)nj);
-    throw finufft::exception(FINUFFT_ERR_NUM_NU_PTS_INVALID);
-  }
+
+  auto sort_nu_pts = [&](const char *label) {
+    timer.restart();
+    m.sortIndices.resize(m.nj);
+    indexSort();
+    if (opts.debug)
+      printf("%s sort (didSort=%d):\t\t%.3g s\n", label, (int)m.didSort,
+             timer.elapsedsec());
+  };
 
   if (type != 3) { // ------------------ TYPE 1,2 SETPTS -------------------
                    // (all we can do is check and maybe bin-sort the NU pts)
     // If upsampfac is not locked by user (auto mode), choose or update it now
     // based on the actual density nj/N(). Re-plan if density changed significantly.
     if (!upsamp_locked) {
-      double density   = double(nj) / double(N());
+      double density   = double(m.nj) / double(N());
       double upsampfac = bestUpsamplingFactor<TF>(opts.nthreads, density, dim, type, m.tol);
       // Re-plan if this is the first call (upsampfac==0) or if upsampfac changed
       if (upsampfac != opts.upsampfac) {
         opts.upsampfac = upsampfac;
         if (opts.debug)
           printf("[setpts] selected best upsampfac=%.3g (density=%.3g, nj=%lld)\n",
-                 opts.upsampfac, density, (long long)nj);
+                 opts.upsampfac, density, (long long)m.nj);
         setup_spreadinterp(); // throws on error
         precompute_horner_coeffs();
         // Perform the planning steps (first call or re-plan due to density change).
@@ -99,25 +111,14 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
 
     m.XYZ   = {xj, yj, zj}; // plan must keep pointers to user's fixed NU pts
     spreadcheck();          // throws on error
-    timer.restart();
-    m.sortIndices.resize(nj);
-    indexSort();
-    if (opts.debug)
-      printf("[%s] sort (didSort=%d):\t\t%.3g s\n", __func__, (int)m.didSort,
-             timer.elapsedsec());
+    sort_nu_pts("[setpts]");
 
   } else { // ------------------------- TYPE 3 SETPTS -----------------------
            // (here we can precompute pre/post-phase factors and plan the t2)
 
     std::array<const TF *, 3> XYZ_in{xj, yj, zj};
     std::array<const TF *, 3> STU_in{s, t, u};
-    if (nk < 0) {
-      fprintf(stderr, "[%s] nk (%lld) cannot be negative!\n", __func__, (long long)nk);
-      throw finufft::exception(FINUFFT_ERR_NUM_NU_PTS_INVALID);
-    } else if (nk > MAX_NU_PTS) {
-      fprintf(stderr, "[%s] nk (%lld) exceeds MAX_NU_PTS\n", __func__, (long long)nk);
-      throw finufft::exception(FINUFFT_ERR_NUM_NU_PTS_INVALID);
-    }
+    check_nu_count(nk, "nk");
     m.nk = nk; // user set # targ freq pts
     m.STU = {s, t, u};
 
@@ -180,16 +181,19 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
     // set up prephase array...
     TF isign = (fftSign >= 0) ? 1 : -1;
     m.prephase.resize(nj);
-    if (m.t3P.D[0] != 0.0 || m.t3P.D[1] != 0.0 || m.t3P.D[2] != 0.0) {
+    if (std::any_of(m.t3P.D.begin(), m.t3P.D.end(),
+                    [](TF shift) { return shift != 0.0; })) {
 #pragma omp parallel for num_threads(opts.nthreads) schedule(static)
       for (BIGINT j = 0; j < nj; ++j) { // ... loop over src NU locs
         TF phase = 0;
         for (int idim = 0; idim < dim; ++idim) phase += m.t3P.D[idim] * XYZ_in[idim][j];
         m.prephase[j] = std::polar(TF(1), isign * phase); // Euler
       }
-    } else
-      for (BIGINT j = 0; j < nj; ++j)
-        m.prephase[j] = {1.0, 0.0}; // *** or keep flag so no mult in exec??
+    } else {
+      std::fill(m.prephase.begin(), m.prephase.end(),
+                std::complex<TF>{TF(1.0), TF(0.0)}); // *** or keep flag so no mult in
+                                                     // exec??
+    }
 
     // create a 1D phihat evaluator
     Kernel_onedim_FT onedim_phihat(*this);
@@ -198,10 +202,11 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
     // (exploits that FT separates because kernel is prod of 1D funcs)
     m.deconv.resize(nk);
     // C can be nan or inf if M=0, no input NU pts
-    bool Cfinite = std::isfinite(m.t3P.C[0]) && std::isfinite(m.t3P.C[1]) &&
-                   std::isfinite(m.t3P.C[2]);
-    bool Cnonzero = m.t3P.C[0] != 0.0 || m.t3P.C[1] != 0.0 || m.t3P.C[2] != 0.0;
-    bool do_phase = Cfinite && Cnonzero;
+    const bool Cfinite  = std::all_of(m.t3P.C.begin(), m.t3P.C.end(),
+                                      [](TF center) { return std::isfinite(center); });
+    const bool Cnonzero = std::any_of(m.t3P.C.begin(), m.t3P.C.end(),
+                                      [](TF center) { return center != 0.0; });
+    const bool do_phase = Cfinite && Cnonzero;
 #pragma omp parallel for num_threads(opts.nthreads) schedule(static)
     for (BIGINT k = 0; k < nk; ++k) { // .... loop over NU targ freqs
       TF phiHat = 1;
@@ -222,13 +227,8 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
       printf("[%s t3] phase & deconv factors:\t%.3g s\n", __func__, timer.elapsedsec());
 
     // Set up sort for spreading Cp (from primed NU src pts X, Y, Z) to fw...
-    timer.restart();
-    m.sortIndices.resize(nj);
     m.spopts.spread_direction = 1;
-    indexSort();
-    if (opts.debug)
-      printf("[%s t3] sort (didSort=%d):\t\t%.3g s\n", __func__, (int)m.didSort,
-             timer.elapsedsec());
+    sort_nu_pts("[setpts t3]");
 
     // Plan and setpts once, for the (repeated) inner type 2 finufft call...
     timer.restart();
@@ -244,7 +244,7 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
     // (...could vary other t2opts here?)
     // MR: temporary hack, until we have figured out the C++ interface.
     FINUFFT_PLAN_T<TF> *tmpplan;
-    finufft_makeplan_t<TF>(2, d, t2nmodes, fftSign, batchSize, m.tol, &tmpplan,
+    finufft_makeplan_t<TF>(2, dim, t2nmodes, fftSign, batchSize, m.tol, &tmpplan,
                            &t2opts); // throws on error
     // Use a non-const unique_ptr to ensure cleanup if setpts throws, then
     // transfer to the const unique_ptr member.
