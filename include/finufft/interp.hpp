@@ -459,11 +459,12 @@ void interp_cube(T *FINUFFT_RESTRICT target, const T *du, const T *ker1,
 //   simd.hpp -> finufft/plan.hpp
 //
 // Previous args (sort_indices, N1, N2, N3, M, kx, ky, kz, opts, horner_coeffs_ptr) are
-// now plan members. Dimensionality uses runtime plan member dim (replacing the old
-// ndims_from_Ns(N1,N2,N3) call). Converted to class member, Barbone 2/24/26.
+// now plan members. Dimensionality is now the compile-time template parameter DIM;
+// runtime plan member dim selects interpSorted_dispatch<DIM>. Converted to class member,
+// Barbone 2/24/26.
 
 template<typename TF>
-template<int NS, int NC, int NDIMS>
+template<int NS, int NC, int DIM>
 FINUFFT_NEVER_INLINE int FINUFFT_PLAN_T<TF>::interpSorted_kernel(
     TF *data_uniform, TF *data_nonuniform) const
 // Interpolate to NU pts in sorted order from a uniform grid. See spreadinterp() for doc.
@@ -492,8 +493,8 @@ FINUFFT_NEVER_INLINE int FINUFFT_PLAN_T<TF>::interpSorted_kernel(
   nthr = 1;
 #endif
   if (m.spopts.debug)
-    printf("\tinterp %dD (M=%lld; N1=%lld,N2=%lld,N3=%lld), nthr=%d\n", NDIMS,
-           (long long)M, (long long)N1, (long long)N2, (long long)N3, nthr);
+    printf("\tinterp %dD (M=%lld; N1=%lld,N2=%lld,N3=%lld), nthr=%d\n", DIM, (long long)M,
+           (long long)N1, (long long)N2, (long long)N3, nthr);
   timer.start();
 #pragma omp parallel num_threads(nthr)
   {
@@ -515,8 +516,8 @@ FINUFFT_NEVER_INLINE int FINUFFT_PLAN_T<TF>::interpSorted_kernel(
         UBIGINT j    = m.sortIndices[i + ibuf];
         jlist[ibuf]  = j;
         xjlist[ibuf] = fold_rescale<TF>(kx[j], N1);
-        if constexpr (NDIMS >= 2) yjlist[ibuf] = fold_rescale<TF>(ky[j], N2);
-        if constexpr (NDIMS == 3) zjlist[ibuf] = fold_rescale<TF>(kz[j], N3);
+        if constexpr (DIM >= 2) yjlist[ibuf] = fold_rescale<TF>(ky[j], N2);
+        if constexpr (DIM == 3) zjlist[ibuf] = fold_rescale<TF>(kz[j], N3);
       }
 
       for (UBIGINT ibuf = 0; ibuf < bufsize; ibuf++) {
@@ -527,11 +528,11 @@ FINUFFT_NEVER_INLINE int FINUFFT_PLAN_T<TF>::interpSorted_kernel(
         const auto i1 = BIGINT(std::ceil(xj - ns2));
         const auto x1 = std::ceil(xj - ns2) - xj;
 
-        if constexpr (NDIMS == 1) {
+        if constexpr (DIM == 1) {
           evaluate_kernel_vector<NS, NC, TF, simd_type>(kernel_values.data(),
                                                         horner_coeffs_ptr, x1);
           interp_line<TF, NS, simd_type>(target, data_uniform, ker1, i1, N1);
-        } else if constexpr (NDIMS == 2) {
+        } else if constexpr (DIM == 2) {
           const auto yj = yjlist[ibuf];
           const auto i2 = BIGINT(std::ceil(yj - ns2));
           const auto x2 = std::ceil(yj - ns2) - yj;
@@ -564,7 +565,7 @@ FINUFFT_NEVER_INLINE int FINUFFT_PLAN_T<TF>::interpSorted_kernel(
   return 0;
 }
 
-// ---------- FINUFFT_PLAN_T interp nested caller definition ----------
+// ---------- FINUFFT_PLAN_T interp nested dispatcher definition ----------
 // Out-of-class definition of the nested type declared in plan.hpp.
 // Member function templates are not allowed in local classes (GCC restriction),
 // so this must be a proper nested class definition of FINUFFT_PLAN_T<TF>.
@@ -572,91 +573,51 @@ FINUFFT_NEVER_INLINE int FINUFFT_PLAN_T<TF>::interpSorted_kernel(
 // Previous free-function args are now read from the plan reference via
 // interpSorted_kernel. Converted to nested class of FINUFFT_PLAN_T, Barbone 2/24/26.
 
-template<typename TF> struct FINUFFT_PLAN_T<TF>::InterpSorted1dCaller {
-  const FINUFFT_PLAN_T &plan;
-  TF *du;
-  TF *dnu;
-  template<int NS, int NC> int operator()() const {
-    if constexpr (!::finufft::kernel::ValidKernelParams<NS, NC>())
-      return finufft::spreadinterp::report_invalid_kernel_params(NS, NC);
-    else
-      return plan.template interpSorted_kernel<NS, NC, 1>(du, dnu);
-  }
-};
-
-template<typename TF> struct FINUFFT_PLAN_T<TF>::InterpSorted2dCaller {
-  const FINUFFT_PLAN_T &plan;
-  TF *du;
-  TF *dnu;
-  template<int NS, int NC> int operator()() const {
-    if constexpr (!::finufft::kernel::ValidKernelParams<NS, NC>())
-      return finufft::spreadinterp::report_invalid_kernel_params(NS, NC);
-    else
-      return plan.template interpSorted_kernel<NS, NC, 2>(du, dnu);
-  }
-};
-
-template<typename TF> struct FINUFFT_PLAN_T<TF>::InterpSorted3dCaller {
+template<typename TF>
+template<int DIM>
+struct FINUFFT_PLAN_T<TF>::InterpSortedDispatcher {
   const FINUFFT_PLAN_T &plan;
   TF *du;
   TF *dnu;
   template<int NS, int NC>
   int operator()() const {
+    static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
     if constexpr (!::finufft::kernel::ValidKernelParams<NS, NC>())
       return finufft::spreadinterp::report_invalid_kernel_params(NS, NC);
     else
-      return plan.template interpSorted_kernel<NS, NC, 3>(du, dnu);
+      return plan.template interpSorted_kernel<NS, NC, DIM>(du, dnu);
   }
 };
 
-// ---------- FINUFFT_PLAN_T interpSorted_Nd method definitions ----------
-// Per-dimension entry points: same dispatch logic as interpSorted, but each is a
-// separate symbol so that per-dimension TUs (spreadinterp_1d/2d/3d.cpp) can
-// provide explicit instantiations without repeating the other dimensions.
+// ---------- FINUFFT_PLAN_T interpSorted_dispatch method definition ----------
+// Compile-time DIM dispatch entry point: same dispatch logic as interpSorted,
+// but with DIM fixed so that per-dimension TUs can explicitly instantiate only
+// the needed wrapper symbols.
 
 template<typename TF>
-int FINUFFT_PLAN_T<TF>::interpSorted_1d(TF *data_uniform, TF *data_nonuniform) const {
+template<int DIM>
+int FINUFFT_PLAN_T<TF>::interpSorted_dispatch(TF *data_uniform,
+                                              TF *data_nonuniform) const {
+  static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
   using namespace finufft::spreadinterp;
   using namespace finufft::common;
-  InterpSorted1dCaller caller{*this, data_uniform, data_nonuniform};
+  InterpSortedDispatcher<DIM> dispatcher{*this, data_uniform, data_nonuniform};
   using NsSeq = make_range<MIN_NSPREAD, MAX_NSPREAD>;
   using NcSeq = make_range<MIN_NC, MAX_NC>;
-  return dispatch(caller, std::make_tuple(DispatchParam<NsSeq>{m.spopts.nspread},
-                                          DispatchParam<NcSeq>{m.nc}));
-}
-
-template<typename TF>
-int FINUFFT_PLAN_T<TF>::interpSorted_2d(TF *data_uniform, TF *data_nonuniform) const {
-  using namespace finufft::spreadinterp;
-  using namespace finufft::common;
-  InterpSorted2dCaller caller{*this, data_uniform, data_nonuniform};
-  using NsSeq = make_range<MIN_NSPREAD, MAX_NSPREAD>;
-  using NcSeq = make_range<MIN_NC, MAX_NC>;
-  return dispatch(caller, std::make_tuple(DispatchParam<NsSeq>{m.spopts.nspread},
-                                          DispatchParam<NcSeq>{m.nc}));
-}
-
-template<typename TF>
-int FINUFFT_PLAN_T<TF>::interpSorted_3d(TF *data_uniform, TF *data_nonuniform) const {
-  using namespace finufft::spreadinterp;
-  using namespace finufft::common;
-  InterpSorted3dCaller caller{*this, data_uniform, data_nonuniform};
-  using NsSeq = make_range<MIN_NSPREAD, MAX_NSPREAD>;
-  using NcSeq = make_range<MIN_NC, MAX_NC>;
-  return dispatch(caller, std::make_tuple(DispatchParam<NsSeq>{m.spopts.nspread},
-                                          DispatchParam<NcSeq>{m.nc}));
+  return dispatch(dispatcher, std::make_tuple(DispatchParam<NsSeq>{m.spopts.nspread},
+                                              DispatchParam<NcSeq>{m.nc}));
 }
 
 // ---------- FINUFFT_PLAN_T interpSorted method definition ----------
 
 template<typename TF>
 int FINUFFT_PLAN_T<TF>::interpSorted(TF *data_uniform, TF *data_nonuniform) const
-// Dispatches to the per-dimension interpSorted_Nd based on this->dim.
+// Dispatches to interpSorted_dispatch<DIM> based on this->dim.
 // Uses plan members sortIndices, nfdim, nj, XYZ, spopts, nc, horner_coeffs, dim.
 // Previous args (sort_indices, N1, N2, N3, M, kx, ky, kz, opts, horner_coeffs, nc)
 // are now plan members. Converted to class member, Barbone 2/24/26.
 {
-  if (dim == 1) return interpSorted_1d(data_uniform, data_nonuniform);
-  if (dim == 2) return interpSorted_2d(data_uniform, data_nonuniform);
-  return interpSorted_3d(data_uniform, data_nonuniform);
+  if (dim == 1) return interpSorted_dispatch<1>(data_uniform, data_nonuniform);
+  if (dim == 2) return interpSorted_dispatch<2>(data_uniform, data_nonuniform);
+  return interpSorted_dispatch<3>(data_uniform, data_nonuniform);
 }

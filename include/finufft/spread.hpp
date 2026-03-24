@@ -828,128 +828,66 @@ void FINUFFT_PLAN_T<TF>::get_subgrid(BIGINT &offset1, BIGINT &offset2, BIGINT &o
   }
 }
 
-// ---------- FINUFFT_PLAN_T spread-subproblem nested caller definitions ----------
-// Out-of-class definitions of the nested types declared in plan.hpp.
+// ---------- FINUFFT_PLAN_T spread-subproblem nested dispatcher definition ----------
+// Out-of-class definition of the nested type declared in plan.hpp.
 // Member function templates are not allowed in local classes (GCC restriction),
-// so these must be proper nested class definitions of FINUFFT_PLAN_T<TF>.
+// so this must be a proper nested class definition of FINUFFT_PLAN_T<TF>.
 
 template<typename TF>
-struct FINUFFT_PLAN_T<TF>::SpreadSubproblem1dCaller {
-  const FINUFFT_PLAN_T &plan;
-  BIGINT off1;
-  UBIGINT size1;
-  TF *du;
-  UBIGINT M;
-  const TF *kx;
-  const TF *dd;
-  template<int NS, int NC>
-  int operator()() const {
-    if constexpr (!::finufft::kernel::ValidKernelParams<NS, NC>())
-      return finufft::spreadinterp::report_invalid_kernel_params(NS, NC);
-    else {
-      plan.template spread_subproblem_1d_kernel<NS, NC>(off1, size1, du, M, kx, dd);
-      return 0;
-    }
-  }
-};
-
-template<typename TF>
-struct FINUFFT_PLAN_T<TF>::SpreadSubproblem2dCaller {
-  const FINUFFT_PLAN_T &plan;
-  BIGINT off1, off2;
-  UBIGINT size1, size2;
-  TF *du;
-  UBIGINT M;
-  const TF *kx;
-  const TF *ky;
-  const TF *dd;
-  template<int NS, int NC>
-  int operator()() const {
-    if constexpr (!::finufft::kernel::ValidKernelParams<NS, NC>())
-      return finufft::spreadinterp::report_invalid_kernel_params(NS, NC);
-    else {
-      plan.template spread_subproblem_2d_kernel<NS, NC>(off1, off2, size1, size2, du, M,
-                                                        kx, ky, dd);
-      return 0;
-    }
-  }
-};
-
-template<typename TF>
-struct FINUFFT_PLAN_T<TF>::SpreadSubproblem3dCaller {
+template<int DIM>
+struct FINUFFT_PLAN_T<TF>::SpreadSubproblemDispatcher {
   const FINUFFT_PLAN_T &plan;
   BIGINT off1, off2, off3;
   UBIGINT size1, size2, size3;
   TF *du;
   UBIGINT M;
-  TF *kx;
-  TF *ky;
-  TF *kz;
-  TF *dd;
+  const TF *kx;
+  const TF *ky;
+  const TF *kz;
+  const TF *dd;
   template<int NS, int NC>
   int operator()() const {
+    static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
     if constexpr (!::finufft::kernel::ValidKernelParams<NS, NC>())
       return finufft::spreadinterp::report_invalid_kernel_params(NS, NC);
     else {
-      plan.template spread_subproblem_3d_kernel<NS, NC>(off1, off2, off3, size1, size2,
-                                                        size3, du, M, kx, ky, kz, dd);
+      if constexpr (DIM == 1) {
+        plan.template spread_subproblem_1d_kernel<NS, NC>(off1, size1, du, M, kx, dd);
+      } else if constexpr (DIM == 2) {
+        plan.template spread_subproblem_2d_kernel<NS, NC>(off1, off2, size1, size2, du,
+                                                          M, kx, ky, dd);
+      } else {
+        plan.template spread_subproblem_3d_kernel<NS, NC>(off1, off2, off3, size1, size2,
+                                                          size3, du, M, kx, ky, kz, dd);
+      }
       return 0;
     }
   }
 };
 
-// ---------- FINUFFT_PLAN_T spread-subproblem method definitions ----------
+// ---------- FINUFFT_PLAN_T spread-subproblem dispatch method definition ----------
 // FINUFFT_PLAN_T is already defined via the transitive include chain:
 //   simd.hpp -> finufft/plan.hpp
 
 template<typename TF>
-void FINUFFT_PLAN_T<TF>::spread_subproblem_1d(BIGINT off1, UBIGINT size1, TF *du,
-                                              UBIGINT M, TF *kx, TF *dd) const noexcept
-// Spread M NU points (kx, dd) into subgrid du of length size1 starting at off1.
+template<int DIM>
+void FINUFFT_PLAN_T<TF>::spread_subproblem_dispatch(
+    BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT size1, UBIGINT size2, UBIGINT size3,
+    TF *FINUFFT_RESTRICT du, UBIGINT M, const TF *kx, const TF *ky, const TF *kz,
+    const TF *dd) const noexcept
+// Spread M NU points into subgrid du, with compile-time DIM selecting the
+// specialized spread kernel and wrapper dispatch.
 // Uses plan members spopts.nspread, nc, horner_coeffs for the kernel dispatch.
 // Previous args (opts, horner_coeffs_ptr, nc) are now plan members.
 // Converted to class member, Barbone 2/24/26.
 {
+  static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
   using namespace finufft::spreadinterp;
   using namespace finufft::common;
-  SpreadSubproblem1dCaller caller{*this, off1, size1, du, M, kx, dd};
+  SpreadSubproblemDispatcher<DIM> dispatcher{*this, off1, off2, off3, size1, size2, size3,
+                                             du,    M,    kx,   ky,   kz,   dd};
   using NsSeq = make_range<MIN_NSPREAD, MAX_NSPREAD>;
   using NcSeq = make_range<MIN_NC, MAX_NC>;
-  dispatch(caller, std::make_tuple(DispatchParam<NsSeq>{m.spopts.nspread},
-                                   DispatchParam<NcSeq>{m.nc}));
-}
-
-template<typename TF>
-void FINUFFT_PLAN_T<TF>::spread_subproblem_2d(
-    BIGINT off1, BIGINT off2, UBIGINT size1, UBIGINT size2, TF *FINUFFT_RESTRICT du,
-    UBIGINT M, const TF *kx, const TF *ky, const TF *dd) const noexcept
-// 2D version of spread_subproblem_1d.
-// Previous args (opts, horner_coeffs_ptr, nc) are now plan members.
-// Converted to class member, Barbone 2/24/26.
-{
-  using namespace finufft::spreadinterp;
-  using namespace finufft::common;
-  SpreadSubproblem2dCaller caller{*this, off1, off2, size1, size2, du, M, kx, ky, dd};
-  using NsSeq = make_range<MIN_NSPREAD, MAX_NSPREAD>;
-  using NcSeq = make_range<MIN_NC, MAX_NC>;
-  dispatch(caller, std::make_tuple(DispatchParam<NsSeq>{m.spopts.nspread},
-                                   DispatchParam<NcSeq>{m.nc}));
-}
-
-template<typename TF>
-void FINUFFT_PLAN_T<TF>::spread_subproblem_3d(
-    BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT size1, UBIGINT size2, UBIGINT size3,
-    TF *du, UBIGINT M, TF *kx, TF *ky, TF *kz, TF *dd) const noexcept
-// 3D version of spread_subproblem_1d.
-// Previous args (opts, horner_coeffs_ptr, nc) are now plan members.
-// Converted to class member, Barbone 2/24/26.
-{
-  using namespace finufft::spreadinterp;
-  using namespace finufft::common;
-  SpreadSubproblem3dCaller caller{*this, off1, off2, off3, size1, size2, size3, du, M,
-                                  kx,    ky,   kz,   dd};
-  using NsSeq = make_range<MIN_NSPREAD, MAX_NSPREAD>;
-  using NcSeq = make_range<MIN_NC, MAX_NC>;
-  dispatch(caller, std::make_tuple(DispatchParam<NsSeq>{m.spopts.nspread},
-                                   DispatchParam<NcSeq>{m.nc}));
+  dispatch(dispatcher, std::make_tuple(DispatchParam<NsSeq>{m.spopts.nspread},
+                                       DispatchParam<NcSeq>{m.nc}));
 }

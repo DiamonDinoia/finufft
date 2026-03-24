@@ -322,7 +322,7 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
 /* Spread NU pts (in sort order) to a uniform grid. See spreadinterpSorted() for doc.
    Plan members used in place of the former free-function arguments:
    sortIndices, nfdim[0..2], nj, XYZ[0..2], spopts, didSort, horner_coeffs, nc.
-   Instantiated in src/spread.cpp; extern template in execute.cpp suppresses
+   Instantiated in src/spreadinterp.cpp; extern template in execute.cpp suppresses
    re-instantiation there.
 */
 {
@@ -424,15 +424,17 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
         du0.resize(2 * padded_size1 * size2 * size3); // complex
         // Spread to subgrid without need for bounds checking or wrapping
         if (ndims == 1)
-          spread_subproblem_1d(offset1, padded_size1, du0.data(), M0, kx0.data(),
-                               dd0.data());
+          spread_subproblem_dispatch<1>(offset1, offset2, offset3, padded_size1, size2,
+                                        size3, du0.data(), M0, kx0.data(), ky0.data(),
+                                        kz0.data(), dd0.data());
         else if (ndims == 2)
-          spread_subproblem_2d(offset1, offset2, padded_size1, size2, du0.data(), M0,
-                               kx0.data(), ky0.data(), dd0.data());
+          spread_subproblem_dispatch<2>(offset1, offset2, offset3, padded_size1, size2,
+                                        size3, du0.data(), M0, kx0.data(), ky0.data(),
+                                        kz0.data(), dd0.data());
         else
-          spread_subproblem_3d(offset1, offset2, offset3, padded_size1, size2, size3,
-                               du0.data(), M0, kx0.data(), ky0.data(), kz0.data(),
-                               dd0.data());
+          spread_subproblem_dispatch<3>(offset1, offset2, offset3, padded_size1, size2,
+                                        size3, du0.data(), M0, kx0.data(), ky0.data(),
+                                        kz0.data(), dd0.data());
         // add subgrid to output (always do this); atomic vs critical chosen
         if (nthr > m.spopts.atomic_threshold) {
           add_wrapped_subgrid<true>(offset1, offset2, offset3, padded_size1, size1, size2,

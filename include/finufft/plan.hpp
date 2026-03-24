@@ -169,7 +169,7 @@ private:
   void set_nhg_type3(int idim, TF S, TF X);
   // Compile-time-dispatched kernel method templates (NS=nspread, NC=horner degree).
   // Bodies are defined in interp.hpp and spread.hpp respectively.
-  template<int NS, int NC, int NDIMS>
+  template<int NS, int NC, int DIM>
   int interpSorted_kernel(TF *data_uniform, TF *data_nonuniform) const;
   template<int NS, int NC>
   void spread_subproblem_1d_kernel(BIGINT off1, UBIGINT size1, TF *FINUFFT_RESTRICT du,
@@ -184,14 +184,10 @@ private:
                                    UBIGINT M, const TF *kx, const TF *ky, const TF *kz,
                                    const TF *dd) const noexcept;
 
-  // Nested caller types used to dispatch to compile-time ns/nc kernel specialisations.
+  // Nested dispatcher types used to select compile-time ns/nc kernel specialisations.
   // Bodies are defined in spread.hpp and interp.hpp respectively.
-  struct SpreadSubproblem1dCaller;
-  struct SpreadSubproblem2dCaller;
-  struct SpreadSubproblem3dCaller;
-  struct InterpSorted1dCaller;
-  struct InterpSorted2dCaller;
-  struct InterpSorted3dCaller;
+  template<int DIM> struct SpreadSubproblemDispatcher;
+  template<int DIM> struct InterpSortedDispatcher;
 
   void bin_sort_singlethread(double bin_size_x, double bin_size_y, double bin_size_z);
   void bin_sort_multithread(double bin_size_x, double bin_size_y, double bin_size_z,
@@ -207,20 +203,18 @@ private:
 
   void spreadcheck() const;
   void indexSort();
-  void spread_subproblem_1d(BIGINT off1, UBIGINT size1, TF *du, UBIGINT M, TF *kx,
-                            TF *dd) const noexcept;
-  void spread_subproblem_2d(BIGINT off1, BIGINT off2, UBIGINT size1, UBIGINT size2,
-                            TF *FINUFFT_RESTRICT du, UBIGINT M, const TF *kx,
-                            const TF *ky, const TF *dd) const noexcept;
-  void spread_subproblem_3d(BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT size1,
-                            UBIGINT size2, UBIGINT size3, TF *du, UBIGINT M, TF *kx,
-                            TF *ky, TF *kz, TF *dd) const noexcept;
+  template<int DIM>
+  void spread_subproblem_dispatch(BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT size1,
+                                  UBIGINT size2, UBIGINT size3, TF *FINUFFT_RESTRICT du,
+                                  UBIGINT M, const TF *kx, const TF *ky, const TF *kz,
+                                  const TF *dd) const noexcept;
+  // Shared 3D-shaped signature is intentional: lower-dimensional specialisations
+  // ignore the unused trailing offsets, sizes, and coordinate arrays.
   int spreadSorted(TF *FINUFFT_RESTRICT data_uniform, const TF *data_nonuniform) const;
   int interpSorted(TF *FINUFFT_RESTRICT data_uniform,
                    TF *FINUFFT_RESTRICT data_nonuniform) const;
-  int interpSorted_1d(TF *data_uniform, TF *data_nonuniform) const;
-  int interpSorted_2d(TF *data_uniform, TF *data_nonuniform) const;
-  int interpSorted_3d(TF *data_uniform, TF *data_nonuniform) const;
+  template<int DIM>
+  int interpSorted_dispatch(TF *data_uniform, TF *data_nonuniform) const;
   int spreadinterpSorted(TF *data_uniform, TF *data_nonuniform, bool adjoint) const;
   TF evaluate_kernel_runtime(TF x) const;
   std::vector<int> gridsize_for_fft() const;
