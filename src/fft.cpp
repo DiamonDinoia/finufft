@@ -452,12 +452,11 @@ template<typename TF> void FINUFFT_PLAN_T<TF>::init_grid_kerFT_FFT() {
     }
 
     timer.restart();
-    int nthr_fft  = opts.nthreads;
     const auto ns = gridsize_for_fft();
-    m.fftPlan->plan(ns, batchSize, fftSign, opts.fftw, nthr_fft);
+    m.fftPlan->plan(ns, batchSize, fftSign, opts.fftw, opts.nthreads);
     if (opts.debug)
-      printf("[%s] FFT plan (mode %d, nthr=%d):\t%.3g s\n", __func__, opts.fftw, nthr_fft,
-             timer.elapsedsec());
+      printf("[%s] FFT plan (mode %d, nthr=%d):\t%.3g s\n", __func__, opts.fftw,
+             opts.nthreads, timer.elapsedsec());
   }
 }
 template void FINUFFT_PLAN_T<float>::init_grid_kerFT_FFT();

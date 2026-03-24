@@ -284,11 +284,11 @@ int rand_r(unsigned int * /*seedp*/)
 
 namespace finufft::spreadinterp {
 
-void print_subgrid_info(int ndims, BIGINT offset1, BIGINT offset2, BIGINT offset3,
+void print_subgrid_info(int dim, BIGINT offset1, BIGINT offset2, BIGINT offset3,
                         UBIGINT padded_size1, UBIGINT size1, UBIGINT size2, UBIGINT size3,
                         UBIGINT M0) {
   printf("size1 %" PRIu64 ", padded_size1 %" PRIu64 "\n", size1, padded_size1);
-  switch (ndims) {
+  switch (dim) {
   case 1:
     printf("\tsubgrid: off %" PRId64 "\t siz %" PRIu64 "\t #NU %" PRIu64 "\n", offset1,
            padded_size1, M0);
@@ -304,7 +304,7 @@ void print_subgrid_info(int ndims, BIGINT offset1, BIGINT offset2, BIGINT offset
            offset1, offset2, offset3, padded_size1, size2, size3, M0);
     break;
   default:
-    printf("Invalid number of dimensions: %d\n", ndims);
+    printf("Invalid number of dimensions: %d\n", dim);
     break;
   }
 }

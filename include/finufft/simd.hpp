@@ -215,19 +215,11 @@ template<typename T> FINUFFT_ALWAYS_INLINE auto xsimd_to_array(const T &vec) noe
 
 // Forward declarations (defined in src/utils.cpp):
 FINUFFT_NEVER_INLINE void print_subgrid_info(
-    int ndims, BIGINT offset1, BIGINT offset2, BIGINT offset3, UBIGINT padded_size1,
+    int dim, BIGINT offset1, BIGINT offset2, BIGINT offset3, UBIGINT padded_size1,
     UBIGINT size1, UBIGINT size2, UBIGINT size3, UBIGINT M0);
 // Helper for runtime diagnostic when dispatch picks invalid kernel params.
 // Defined noinline to avoid code bloat on the valid path.
 FINUFFT_NEVER_INLINE int report_invalid_kernel_params(int ns, int nc);
-
-constexpr uint8_t ndims_from_Ns(const UBIGINT /*N1*/, const UBIGINT N2, const UBIGINT N3)
-/* rule for getting number of spreading dimensions from the list of Ns per dim.
-   Split out, Barnett 7/26/18
-*/
-{
-  return 1 + (N2 > 1) + (N3 > 1);
-}
 
 /* local NU coord fold+rescale macro. Folds x into [-pi,pi) by addition of some integer
    multiple of 2pi, then linearly maps [-pi,pi) to [0,N). This is done in precision T

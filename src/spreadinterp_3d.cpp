@@ -1,6 +1,6 @@
 #include <finufft/spreadinterp.hpp>
 
-// Per-dimension TU: explicit instantiation of 3D wrapper templates for one precision.
+// Per-dimension TU: explicit instantiation of 3D entry points for one precision.
 // Compiled twice (with/without FINUFFT_SINGLE) to cover both float and double.
 
 #ifdef FINUFFT_SINGLE

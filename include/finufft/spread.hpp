@@ -414,36 +414,102 @@ void FINUFFT_PLAN_T<TF>::add_wrapped_subgrid(
   }
 }
 
-// SIMD-vectorized bin sort helpers, templated on ndims to eliminate branching.
-// Called by the FINUFFT_PLAN_T methods below via runtime ndims dispatch.
-namespace {
+// SIMD-vectorized bin sort helpers, templated on dimension to eliminate branching.
+// Declared on FINUFFT_PLAN_T in plan.hpp; defined here with the rest of the spread code.
 
-// FIXME: bin_sort_singlethread_impl can be changed to take XYZ directly
-// instead of separate kx, ky, kz and N1, N2, N3, bin_size_x/y/z arguments.
-template<typename T, int ndims>
-inline void bin_sort_singlethread_impl(std::vector<BIGINT> &ret, UBIGINT M, const T *kx,
-                                       const T *ky, const T *kz, UBIGINT N1, UBIGINT N2,
-                                       UBIGINT N3, double bin_size_x, double bin_size_y,
-                                       double bin_size_z)
+template<typename TF>
+template<int DIM> struct FINUFFT_PLAN_T<TF>::BinIndexer {
+  static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
+
+  using simd_type                 = xsimd::batch<TF>;
+  using simd_int_type             = decltype(xsimd::to_int(simd_type(TF(0))));
+  static constexpr auto simd_size = simd_type::size;
+
+  const TF *const kx;
+  const TF *const ky;
+  const TF *const kz;
+  const UBIGINT M;
+  const UBIGINT N1;
+  const UBIGINT N2;
+  const UBIGINT N3;
+  const BIGINT nbins1;
+  const BIGINT nbins2;
+  const BIGINT nbins3;
+  const BIGINT nbins;
+  const TF inv_bin_size_x;
+  const TF inv_bin_size_y;
+  const TF inv_bin_size_z;
+  const simd_type inv_bin_size_x_vec;
+  const simd_type inv_bin_size_y_vec;
+  const simd_type inv_bin_size_z_vec;
+
+  BinIndexer(const FINUFFT_PLAN_T &plan_, double bin_size_x, double bin_size_y,
+             double bin_size_z)
+      : kx(plan_.m.XYZ[0]), ky(plan_.m.XYZ[1]), kz(plan_.m.XYZ[2]), M(UBIGINT(plan_.m.nj)),
+        N1(UBIGINT(plan_.m.nfdim[0])), N2(UBIGINT(plan_.m.nfdim[1])),
+        N3(UBIGINT(plan_.m.nfdim[2])),
+        // +1 allows roundoff near +pi to map to the last bin.
+        nbins1(BIGINT(TF(N1) / bin_size_x + 1)),
+        nbins2(DIM > 1 ? BIGINT(TF(N2) / bin_size_y + 1) : 1),
+        nbins3(DIM > 2 ? BIGINT(TF(N3) / bin_size_z + 1) : 1), nbins(nbins1 * nbins2 * nbins3),
+        inv_bin_size_x(TF(1.0 / bin_size_x)), inv_bin_size_y(TF(1.0 / bin_size_y)),
+        inv_bin_size_z(TF(1.0 / bin_size_z)), inv_bin_size_x_vec(inv_bin_size_x),
+        inv_bin_size_y_vec(inv_bin_size_y), inv_bin_size_z_vec(inv_bin_size_z) {}
+
+  FINUFFT_ALWAYS_INLINE simd_int_type compute_bin_indices(UBIGINT offset) const {
+    const auto i1 = xsimd::to_int(::finufft::spreadinterp::fold_rescale(
+                                      simd_type::load_unaligned(kx + offset), N1) *
+                                  inv_bin_size_x_vec);
+    auto bin      = i1;
+    if constexpr (DIM > 1) {
+      const auto i2 = xsimd::to_int(::finufft::spreadinterp::fold_rescale(
+                                        simd_type::load_unaligned(ky + offset), N2) *
+                                    inv_bin_size_y_vec);
+      bin           = i1 + nbins1 * i2;
+    }
+    if constexpr (DIM > 2) {
+      const auto i3 = xsimd::to_int(::finufft::spreadinterp::fold_rescale(
+                                        simd_type::load_unaligned(kz + offset), N3) *
+                                    inv_bin_size_z_vec);
+      bin           = bin + nbins1 * nbins2 * i3;
+    }
+    return bin;
+  }
+
+  FINUFFT_ALWAYS_INLINE BIGINT compute_bin_index(UBIGINT idx) const {
+    auto bin =
+        BIGINT(::finufft::spreadinterp::fold_rescale<TF>(kx[idx], N1) * inv_bin_size_x);
+    if constexpr (DIM > 1)
+      bin += nbins1 *
+             BIGINT(::finufft::spreadinterp::fold_rescale<TF>(ky[idx], N2) * inv_bin_size_y);
+    if constexpr (DIM > 2)
+      bin += nbins1 * nbins2
+             * BIGINT(::finufft::spreadinterp::fold_rescale<TF>(kz[idx], N3) * inv_bin_size_z);
+    return bin;
+  }
+};
+
+template<typename TF>
+template<int DIM>
+void FINUFFT_PLAN_T<TF>::bin_sort_singlethread_dim(double bin_size_x, double bin_size_y,
+                                                   double bin_size_z)
 /* Returns permutation of all nonuniform points with good RAM access,
  * ie less cache misses for spreading, in 1D, 2D, or 3D.
  *
  * This is achieved by binning into cuboids (of given bin_size within the
  * overall box domain), then reading out the indices within these bins in a
  * Cartesian cuboid ordering (x fastest, y med, z slowest). Finally the
- * permutation is inverted, so that the good ordering is: the NU pt of index
- * ret[0], the NU pt of index ret[1], ..., NU pt of index ret[M-1].
+ * permutation is inverted, so that the good ordering is the NU point of index
+ * m.sortIndices[0], then m.sortIndices[1], ..., through m.sortIndices[M - 1].
  *
- * Inputs: M - number of input NU points.
- *         kx,ky,kz - length-M arrays of real coords of NU pts in [-pi, pi).
- *                    Points outside this range are folded into it.
- *         N1,N2,N3 - integer sizes of overall box (N2=N3=1 for 1D, N3=1 for 2D)
- *         bin_size_x,y,z - what binning box size to use in each dimension
+ * Inputs: bin_size_x,y,z - what binning box size to use in each dimension
  *                    (in rescaled coords where ranges are [0,Ni] ).
  *                    For 1D, only bin_size_x is used; for 2D, it & bin_size_y.
+ *         point coordinates, grid shape, and output permutation are read from
+ *         the plan state (m.XYZ, m.nfdim, m.nj, m.sortIndices).
  * Output:
- *         writes to ret a vector list of indices, each in the range 0,..,M-1.
- *         Thus, ret must have been preallocated for M BIGINTs.
+ *         writes to m.sortIndices a vector list of indices, each in the range 0,..,M-1.
+ *         Thus, m.sortIndices must have been preallocated for M BIGINTs.
  *
  * Notes: I compared RAM usage against declaring an internal vector and passing
  * back; the latter used more RAM and was slower.
@@ -455,108 +521,56 @@ inline void bin_sort_singlethread_impl(std::vector<BIGINT> &ret, UBIGINT M, cons
  * Implementation: SIMD-vectorized bin index computation (xsimd::batch<T>),
  * scalar histogram accumulation (scatter/gather rejected: duplicate-bin
  * conflicts dominate). uint32_t counts halve cache footprint vs BIGINT.
- * Templated on ndims to eliminate isky/iskz branching in inner loops.
- * SIMD vectorization, uint32_t counts, ndims dispatch: Barbone 2/2026.
+ * Templated on DIM to eliminate isky/iskz branching in inner loops.
+ * SIMD vectorization, uint32_t counts, DIM dispatch: Barbone 2/2026.
  */
 {
-  using namespace finufft::spreadinterp;
-  static_assert(ndims >= 1 && ndims <= 3, "ndims must be 1, 2, or 3");
-  using simd_type                 = xsimd::batch<T>;
-  using arch_t                    = typename simd_type::arch_type;
-  static constexpr auto simd_size = simd_type::size;
-  static constexpr auto alignment = arch_t::alignment();
-
-  static constexpr auto to_array = [](const auto &vec) constexpr noexcept {
-    using VT = decltype(std::decay_t<decltype(vec)>());
-    alignas(alignment) std::array<typename VT::value_type, VT::size> arr{};
-    vec.store_aligned(arr.data());
-    return arr;
-  };
-
-  // here the +1 is needed to allow round-off error causing i1=N1/bin_size_x,
-  // for kx near +pi, ie foldrescale gives N1 (exact arith would be 0 to N1-1).
-  // Note that round-off near kx=-pi stably rounds negative to i1=0.
-  const auto nbins1             = BIGINT(T(N1) / bin_size_x + 1);
-  const auto nbins2             = ndims > 1 ? BIGINT(T(N2) / bin_size_y + 1) : 1;
-  const auto nbins3             = ndims > 2 ? BIGINT(T(N3) / bin_size_z + 1) : 1;
-  const auto nbins              = nbins1 * nbins2 * nbins3;
-  const auto inv_bin_size_x     = T(1.0 / bin_size_x);
-  const auto inv_bin_size_y     = T(1.0 / bin_size_y);
-  const auto inv_bin_size_z     = T(1.0 / bin_size_z);
-  const auto inv_bin_size_x_vec = simd_type(1.0 / bin_size_x);
-  const auto inv_bin_size_y_vec = simd_type(1.0 / bin_size_y);
-  const auto inv_bin_size_z_vec = simd_type(1.0 / bin_size_z);
-
-  // lambda to compute SIMD bin indices from a given offset into kx/ky/kz
-  auto compute_bins = [&](UBIGINT offset) {
-    const auto i1 = xsimd::to_int(
-        fold_rescale(simd_type::load_unaligned(kx + offset), N1) * inv_bin_size_x_vec);
-    auto bin = i1;
-    if constexpr (ndims > 1) {
-      const auto i2 = xsimd::to_int(
-          fold_rescale(simd_type::load_unaligned(ky + offset), N2) * inv_bin_size_y_vec);
-      bin = i1 + nbins1 * i2;
-    }
-    if constexpr (ndims > 2) {
-      const auto i3 = xsimd::to_int(
-          fold_rescale(simd_type::load_unaligned(kz + offset), N3) * inv_bin_size_z_vec);
-      bin = bin + nbins1 * nbins2 * i3;
-    }
-    return bin;
-  };
-
-  // lambda to compute scalar bin index for a single point
-  auto compute_bin_scalar = [&](UBIGINT idx) {
-    auto bin = BIGINT(fold_rescale<T>(kx[idx], N1) * inv_bin_size_x);
-    if constexpr (ndims > 1)
-      bin += nbins1 * BIGINT(fold_rescale<T>(ky[idx], N2) * inv_bin_size_y);
-    if constexpr (ndims > 2)
-      bin += nbins1 * nbins2 * BIGINT(fold_rescale<T>(kz[idx], N3) * inv_bin_size_z);
-    return bin;
-  };
+  static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
+  using bin_indexer_t             = BinIndexer<DIM>;
+  constexpr std::size_t simd_size = bin_indexer_t::simd_size;
+  const auto simd_mask            = UBIGINT(-static_cast<BIGINT>(simd_size));
+  auto &sort_indices              = m.sortIndices;
+  const bin_indexer_t bin_indexer{*this, bin_size_x, bin_size_y, bin_size_z};
 
   // uint32_t counts halves cache footprint vs BIGINT (int64_t)
-  std::vector<uint32_t> counts(nbins, 0);
-  const auto simd_M = M & UBIGINT(-simd_size); // round down to simd_size multiple
+  std::vector<uint32_t> counts(bin_indexer.nbins, 0);
+  const auto simd_M = bin_indexer.M & simd_mask;
   UBIGINT i{};
 
   // counting pass: SIMD bin compute, scalar accumulate
   for (i = 0; i < simd_M; i += simd_size) {
-    const auto bin       = compute_bins(i);
-    const auto bin_array = to_array(bin);
+    const auto bin       = bin_indexer.compute_bin_indices(i);
+    const auto bin_array = ::finufft::spreadinterp::xsimd_to_array(bin);
     for (std::size_t j = 0; j < simd_size; ++j) ++counts[bin_array[j]];
   }
-  for (; i < M; i++) ++counts[compute_bin_scalar(i)];
+  for (; i < bin_indexer.M; ++i) ++counts[bin_indexer.compute_bin_index(i)];
 
   // compute the offsets directly in the counts array (Reinecke's trick)
   std::exclusive_scan(counts.begin(), counts.end(), counts.begin(), uint32_t{0});
 
   // placement pass: SIMD bin compute, scalar placement
   for (i = 0; i < simd_M; i += simd_size) {
-    const auto bin       = compute_bins(i);
-    const auto bin_array = to_array(bin);
+    const auto bin       = bin_indexer.compute_bin_indices(i);
+    const auto bin_array = ::finufft::spreadinterp::xsimd_to_array(bin);
     for (std::size_t j = 0; j < simd_size; ++j) {
-      ret[counts[bin_array[j]]] = BIGINT(j + i);
+      sort_indices[counts[bin_array[j]]] = BIGINT(i + static_cast<UBIGINT>(j));
       ++counts[bin_array[j]];
     }
   }
-  for (; i < M; i++) {
-    const auto bin   = compute_bin_scalar(i);
-    ret[counts[bin]] = BIGINT(i);
+  for (; i < bin_indexer.M; ++i) {
+    const auto bin   = bin_indexer.compute_bin_index(i);
+    sort_indices[counts[bin]] = BIGINT(i);
     ++counts[bin];
   }
 }
 
-// FIXME: same as bin_sort_singlethread_impl — can take XYZ/nfdim/bin_size arrays
-// instead of separate per-dimension arguments.
-template<typename T, int ndims>
-inline void bin_sort_multithread_impl(std::vector<BIGINT> &ret, UBIGINT M, const T *kx,
-                                      const T *ky, const T *kz, UBIGINT N1, UBIGINT N2,
-                                      UBIGINT N3, double bin_size_x, double bin_size_y,
-                                      double bin_size_z, int nthr)
+template<typename TF>
+template<int DIM>
+void FINUFFT_PLAN_T<TF>::bin_sort_multithread_dim(double bin_size_x, double bin_size_y,
+                                                  double bin_size_z, int nthr)
 /* Mostly-OpenMP'ed version of bin_sort, SIMD-vectorized per thread.
-   Templated on ndims to eliminate branching in inner loops.
-   For documentation see: bin_sort_singlethread_impl.
+   Templated on DIM to eliminate branching in inner loops.
+   Same algorithm as the single-thread DIM-specialized variant.
    Caution: when M (# NU pts) << N (# U pts), is SLOWER than single-thread.
    Originally by Barnett 2/8/18
    Explicit #threads control argument 7/20/20.
@@ -565,67 +579,22 @@ inline void bin_sort_multithread_impl(std::vector<BIGINT> &ret, UBIGINT M, const
    Todo: if debug, print timing breakdowns.
  */
 {
-  using namespace finufft::spreadinterp;
-  static_assert(ndims >= 1 && ndims <= 3, "ndims must be 1, 2, or 3");
-  using simd_type                 = xsimd::batch<T>;
-  using arch_t                    = typename simd_type::arch_type;
-  static constexpr auto simd_size = simd_type::size;
-  static constexpr auto alignment = arch_t::alignment();
-
-  static constexpr auto to_array = [](const auto &vec) constexpr noexcept {
-    using VT = decltype(std::decay_t<decltype(vec)>());
-    alignas(alignment) std::array<typename VT::value_type, VT::size> arr{};
-    vec.store_aligned(arr.data());
-    return arr;
-  };
-
-  const auto nbins1             = BIGINT(T(N1) / bin_size_x + 1);
-  const auto nbins2             = ndims > 1 ? BIGINT(T(N2) / bin_size_y + 1) : 1;
-  const auto nbins3             = ndims > 2 ? BIGINT(T(N3) / bin_size_z + 1) : 1;
-  const auto nbins              = nbins1 * nbins2 * nbins3;
-  const auto inv_bin_size_x_vec = simd_type(1.0 / bin_size_x);
-  const auto inv_bin_size_y_vec = simd_type(1.0 / bin_size_y);
-  const auto inv_bin_size_z_vec = simd_type(1.0 / bin_size_z);
-  const auto inv_bin_size_x     = T(1.0 / bin_size_x);
-  const auto inv_bin_size_y     = T(1.0 / bin_size_y);
-  const auto inv_bin_size_z     = T(1.0 / bin_size_z);
-
-  // lambda to compute SIMD bin indices from a given offset into kx/ky/kz
-  auto compute_bins = [&](UBIGINT offset) {
-    const auto i1 = xsimd::to_int(
-        fold_rescale(simd_type::load_unaligned(kx + offset), N1) * inv_bin_size_x_vec);
-    auto bin = i1;
-    if constexpr (ndims > 1) {
-      const auto i2 = xsimd::to_int(
-          fold_rescale(simd_type::load_unaligned(ky + offset), N2) * inv_bin_size_y_vec);
-      bin = i1 + nbins1 * i2;
-    }
-    if constexpr (ndims > 2) {
-      const auto i3 = xsimd::to_int(
-          fold_rescale(simd_type::load_unaligned(kz + offset), N3) * inv_bin_size_z_vec);
-      bin = bin + nbins1 * nbins2 * i3;
-    }
-    return bin;
-  };
-
-  // lambda to compute scalar bin index for a single point
-  auto compute_bin_scalar = [&](UBIGINT idx) {
-    auto bin = BIGINT(fold_rescale<T>(kx[idx], N1) * inv_bin_size_x);
-    if constexpr (ndims > 1)
-      bin += nbins1 * BIGINT(fold_rescale<T>(ky[idx], N2) * inv_bin_size_y);
-    if constexpr (ndims > 2)
-      bin += nbins1 * nbins2 * BIGINT(fold_rescale<T>(kz[idx], N3) * inv_bin_size_z);
-    return bin;
-  };
+  static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
+  using bin_indexer_t             = BinIndexer<DIM>;
+  constexpr std::size_t simd_size = bin_indexer_t::simd_size;
+  const auto simd_mask            = UBIGINT(-static_cast<BIGINT>(simd_size));
+  auto &sort_indices              = m.sortIndices;
+  const bin_indexer_t bin_indexer{*this, bin_size_x, bin_size_y, bin_size_z};
 
   if (nthr == 0) fprintf(stderr, "[%s] nthr (%d) must be positive!\n", __func__, nthr);
-  int nt = std::min(M, UBIGINT(nthr));
+  int nt = std::min(bin_indexer.M, UBIGINT(nthr));
   std::vector<UBIGINT> brk(nt + 1);
 
-  for (int t = 0; t <= nt; ++t) brk[t] = (UBIGINT)(0.5 + M * t / (double)nt);
+  for (int t = 0; t <= nt; ++t)
+    brk[t] = (UBIGINT)(0.5 + bin_indexer.M * t / (double)nt);
 
   std::vector<std::vector<uint32_t>> counts(nt);
-  std::vector<uint32_t> bin_offset(nbins);
+  std::vector<uint32_t> bin_offset(bin_indexer.nbins);
   std::vector<uint32_t> thread_totals(nt);
 
 #pragma omp parallel num_threads(nt)
@@ -633,30 +602,29 @@ inline void bin_sort_multithread_impl(std::vector<BIGINT> &ret, UBIGINT M, const
     const int t            = MY_OMP_GET_THREAD_NUM();
     const auto chunk_start = brk[t];
     const auto chunk_end   = brk[t + 1];
-    const auto chunk_simd =
-        chunk_start + ((chunk_end - chunk_start) & UBIGINT(-simd_size));
+    const auto chunk_simd  = chunk_start + ((chunk_end - chunk_start) & simd_mask);
 
     // each thread allocates its own histogram
-    counts[t].resize(nbins, 0);
+    counts[t].resize(bin_indexer.nbins, 0);
     auto &my_counts = counts[t];
 
     // counting pass: SIMD bin compute, scalar accumulate
     UBIGINT i;
     for (i = chunk_start; i < chunk_simd; i += simd_size) {
-      const auto bin       = compute_bins(i);
-      const auto bin_array = to_array(bin);
+      const auto bin       = bin_indexer.compute_bin_indices(i);
+      const auto bin_array = ::finufft::spreadinterp::xsimd_to_array(bin);
       for (std::size_t j = 0; j < simd_size; ++j) ++my_counts[bin_array[j]];
     }
-    for (; i < chunk_end; i++) ++my_counts[compute_bin_scalar(i)];
+    for (; i < chunk_end; ++i) ++my_counts[bin_indexer.compute_bin_index(i)];
 
     // ensure all threads have finished counting before computing offsets
 #pragma omp barrier
 
     // Phase 1+2a (parallel): per-bin totals and local exclusive prefix sum.
     // Each thread owns a static chunk of bins; stores its running total.
-    const BIGINT bin_chunk = (nbins + nt - 1) / nt;
+    const BIGINT bin_chunk = (bin_indexer.nbins + nt - 1) / nt;
     const BIGINT bin_start = t * bin_chunk;
-    const BIGINT bin_end   = std::min(bin_start + bin_chunk, nbins);
+    const BIGINT bin_end   = std::min(bin_start + bin_chunk, bin_indexer.nbins);
     uint32_t running       = 0;
     for (BIGINT b = bin_start; b < bin_end; ++b) {
       uint32_t total = 0;
@@ -688,63 +656,53 @@ inline void bin_sort_multithread_impl(std::vector<BIGINT> &ret, UBIGINT M, const
 
     // placement pass: SIMD bin compute, scalar placement
     for (i = chunk_start; i < chunk_simd; i += simd_size) {
-      const auto bin       = compute_bins(i);
-      const auto bin_array = to_array(bin);
+      const auto bin       = bin_indexer.compute_bin_indices(i);
+      const auto bin_array = ::finufft::spreadinterp::xsimd_to_array(bin);
       for (std::size_t j = 0; j < simd_size; ++j) {
-        ret[my_counts[bin_array[j]]] = BIGINT(j + i);
+        sort_indices[my_counts[bin_array[j]]] = BIGINT(i + static_cast<UBIGINT>(j));
         ++my_counts[bin_array[j]];
       }
     }
-    for (; i < chunk_end; i++) {
-      const auto bin      = compute_bin_scalar(i);
-      ret[my_counts[bin]] = BIGINT(i);
+    for (; i < chunk_end; ++i) {
+      const auto bin               = bin_indexer.compute_bin_index(i);
+      sort_indices[my_counts[bin]] = BIGINT(i);
       ++my_counts[bin];
     }
   }
 }
 
-} // anonymous namespace
-
 template<typename TF>
 void FINUFFT_PLAN_T<TF>::bin_sort_singlethread(double bin_size_x, double bin_size_y,
                                                double bin_size_z) {
-  const UBIGINT N1 = m.nfdim[0], N2 = m.nfdim[1], N3 = m.nfdim[2];
-  const int ndims = finufft::spreadinterp::ndims_from_Ns(N1, N2, N3);
-  switch (ndims) {
+  switch (dim) {
   case 1:
-    bin_sort_singlethread_impl<TF, 1>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                      N1, N2, N3, bin_size_x, bin_size_y, bin_size_z);
-    break;
+    bin_sort_singlethread_dim<1>(bin_size_x, bin_size_y, bin_size_z);
+    return;
   case 2:
-    bin_sort_singlethread_impl<TF, 2>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                      N1, N2, N3, bin_size_x, bin_size_y, bin_size_z);
-    break;
-  default:
-    bin_sort_singlethread_impl<TF, 3>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                      N1, N2, N3, bin_size_x, bin_size_y, bin_size_z);
-    break;
+    bin_sort_singlethread_dim<2>(bin_size_x, bin_size_y, bin_size_z);
+    return;
+  case 3:
+    bin_sort_singlethread_dim<3>(bin_size_x, bin_size_y, bin_size_z);
+    return;
   }
+  FINUFFT_UNREACHABLE;
 }
 
 template<typename TF>
 void FINUFFT_PLAN_T<TF>::bin_sort_multithread(double bin_size_x, double bin_size_y,
                                               double bin_size_z, int nthr) {
-  const UBIGINT N1 = m.nfdim[0], N2 = m.nfdim[1], N3 = m.nfdim[2];
-  const int ndims = finufft::spreadinterp::ndims_from_Ns(N1, N2, N3);
-  switch (ndims) {
+  switch (dim) {
   case 1:
-    bin_sort_multithread_impl<TF, 1>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                     N1, N2, N3, bin_size_x, bin_size_y, bin_size_z, nthr);
-    break;
+    bin_sort_multithread_dim<1>(bin_size_x, bin_size_y, bin_size_z, nthr);
+    return;
   case 2:
-    bin_sort_multithread_impl<TF, 2>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                     N1, N2, N3, bin_size_x, bin_size_y, bin_size_z, nthr);
-    break;
-  default:
-    bin_sort_multithread_impl<TF, 3>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                     N1, N2, N3, bin_size_x, bin_size_y, bin_size_z, nthr);
-    break;
+    bin_sort_multithread_dim<2>(bin_size_x, bin_size_y, bin_size_z, nthr);
+    return;
+  case 3:
+    bin_sort_multithread_dim<3>(bin_size_x, bin_size_y, bin_size_z, nthr);
+    return;
   }
+  FINUFFT_UNREACHABLE;
 }
 
 template<typename TF>
@@ -801,14 +759,13 @@ void FINUFFT_PLAN_T<TF>::get_subgrid(BIGINT &offset1, BIGINT &offset2, BIGINT &o
   using finufft::utils::arrayrange;
   using T       = TF;
   const int ns  = m.spopts.nspread;
-  const int ndims = dim;
   T ns2 = (T)ns / 2;
   T min_kx, max_kx; // 1st (x) dimension: get min/max of nonuniform points
   arrayrange(M, kx, &min_kx, &max_kx);
   offset1      = (BIGINT)std::ceil(min_kx - ns2); // min index touched by kernel
   size1        = (BIGINT)std::ceil(max_kx - ns2) - offset1 + ns; // int(ceil) first!
   padded_size1 = size1 + get_padding<T>(2 * ns) / 2;
-  if (ndims > 1) {
+  if (dim > 1) {
     T min_ky, max_ky; // 2nd (y) dimension: get min/max of nonuniform points
     arrayrange(M, ky, &min_ky, &max_ky);
     offset2 = (BIGINT)std::ceil(min_ky - ns2);
@@ -817,7 +774,7 @@ void FINUFFT_PLAN_T<TF>::get_subgrid(BIGINT &offset1, BIGINT &offset2, BIGINT &o
     offset2 = 0;
     size2   = 1;
   }
-  if (ndims > 2) {
+  if (dim > 2) {
     T min_kz, max_kz; // 3rd (z) dimension: get min/max of nonuniform points
     arrayrange(M, kz, &min_kz, &max_kz);
     offset3 = (BIGINT)std::ceil(min_kz - ns2);
@@ -876,18 +833,13 @@ void FINUFFT_PLAN_T<TF>::spread_subproblem_dispatch(
     TF *FINUFFT_RESTRICT du, UBIGINT M, const TF *kx, const TF *ky, const TF *kz,
     const TF *dd) const noexcept
 // Spread M NU points into subgrid du, with compile-time DIM selecting the
-// specialized spread kernel and wrapper dispatch.
+// specialized spread kernel and shared NS/NC dispatch.
 // Uses plan members spopts.nspread, nc, horner_coeffs for the kernel dispatch.
 // Previous args (opts, horner_coeffs_ptr, nc) are now plan members.
 // Converted to class member, Barbone 2/24/26.
 {
   static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
-  using namespace finufft::spreadinterp;
-  using namespace finufft::common;
   SpreadSubproblemDispatcher<DIM> dispatcher{*this, off1, off2, off3, size1, size2, size3,
                                              du,    M,    kx,   ky,   kz,   dd};
-  using NsSeq = make_range<MIN_NSPREAD, MAX_NSPREAD>;
-  using NcSeq = make_range<MIN_NC, MAX_NC>;
-  dispatch(dispatcher, std::make_tuple(DispatchParam<NsSeq>{m.spopts.nspread},
-                                       DispatchParam<NcSeq>{m.nc}));
+  dispatch_ns_nc(dispatcher);
 }

@@ -590,22 +590,16 @@ struct FINUFFT_PLAN_T<TF>::InterpSortedDispatcher {
 };
 
 // ---------- FINUFFT_PLAN_T interpSorted_dispatch method definition ----------
-// Compile-time DIM dispatch entry point: same dispatch logic as interpSorted,
-// but with DIM fixed so that per-dimension TUs can explicitly instantiate only
-// the needed wrapper symbols.
+// Compile-time DIM entry point: fixes DIM, then runs the shared NS/NC dispatch
+// so that the per-dimension TUs instantiate only the needed entry points.
 
 template<typename TF>
 template<int DIM>
 int FINUFFT_PLAN_T<TF>::interpSorted_dispatch(TF *data_uniform,
                                               TF *data_nonuniform) const {
   static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
-  using namespace finufft::spreadinterp;
-  using namespace finufft::common;
   InterpSortedDispatcher<DIM> dispatcher{*this, data_uniform, data_nonuniform};
-  using NsSeq = make_range<MIN_NSPREAD, MAX_NSPREAD>;
-  using NcSeq = make_range<MIN_NC, MAX_NC>;
-  return dispatch(dispatcher, std::make_tuple(DispatchParam<NsSeq>{m.spopts.nspread},
-                                              DispatchParam<NcSeq>{m.nc}));
+  return dispatch_ns_nc(dispatcher);
 }
 
 // ---------- FINUFFT_PLAN_T interpSorted method definition ----------

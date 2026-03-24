@@ -1,6 +1,6 @@
 #include <finufft/spreadinterp.hpp>
 
-// Per-dimension wrapper templates are explicitly instantiated in
+// Per-dimension entry points are explicitly instantiated in
 // spreadinterp_1d/2d/3d.cpp. This TU handles the remaining per-precision symbols.
 
 #ifdef FINUFFT_SINGLE

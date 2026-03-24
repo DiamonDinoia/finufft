@@ -277,8 +277,9 @@ int FINUFFT_PLAN_T<TF>::spreadinterpSorted(TF *data_uniform, TF *data_nonuniform
   didSort      - bool indicating whether a sort was actually performed.
             This can affect subproblem splitting heuristics inside the
             routine.
+  dim          - plan dimension (1, 2, or 3); this selects the per-dimension
+            spread/interp path.
   nfdim        - grid sizes in x (fastest), y (medium), z (slowest) respectively.
-            If nfdim[1]==1, 1D spreading is done. If nfdim[2]==1, 2D.
   nj           - number of NU pts.
   XYZ          - pointers to length-nj real arrays of NU point coordinates
             (only XYZ[0] read in 1D, only XYZ[0] and XYZ[1] read in 2D).
@@ -336,18 +337,16 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
   const auto *kx                = m.XYZ[0];
   const auto *ky                = m.XYZ[1];
   const auto *kz                = m.XYZ[2];
-  const auto did_sort = (int)m.didSort;
   CNTime timer{};
-  const auto ndims = ndims_from_Ns(N1, N2, N3);
-  const auto N     = N1 * N2 * N3; // output array size
-  auto nthr        = MY_OMP_GET_MAX_THREADS(); // guess # threads to use to spread
+  const auto N = N1 * N2 * N3;                         // output array size
+  auto nthr    = MY_OMP_GET_MAX_THREADS();             // guess # threads to use to spread
   if (m.spopts.nthreads > 0) nthr = m.spopts.nthreads; // user override, now without limit
 #ifndef _OPENMP
   nthr = 1; // single-threaded lib must override user
 #endif
   if (m.spopts.debug)
-    printf("\tspread %dD (M=%lld; N1=%lld,N2=%lld,N3=%lld), nthr=%d\n", ndims,
-           (long long)M, (long long)N1, (long long)N2, (long long)N3, nthr);
+    printf("\tspread %dD (M=%lld; N1=%lld,N2=%lld,N3=%lld), nthr=%d\n", dim, (long long)M,
+           (long long)N1, (long long)N2, (long long)N3, nthr);
   timer.start();
   std::fill(data_uniform, data_uniform + 2 * N, 0.0); // zero the output array
   if (m.spopts.debug) printf("\tzero output array\t%.3g s\n", timer.elapsedsec());
@@ -381,7 +380,7 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
       nb = M;
       if (m.spopts.debug) printf("\tusing low-density speed rescue nb=M...\n");
     }
-    if (!did_sort && nthr == 1) {
+    if (!m.didSort && nthr == 1) {
       nb = 1;
       if (m.spopts.debug) printf("\tunsorted nthr=1: forcing single subproblem...\n");
     }
@@ -417,24 +416,26 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
         get_subgrid(offset1, offset2, offset3, padded_size1, size1, size2, size3, M0,
                     kx0.data(), ky0.data(), kz0.data());
         if (m.spopts.debug > 1) {
-          print_subgrid_info(ndims, offset1, offset2, offset3, padded_size1, size1, size2,
+          print_subgrid_info(dim, offset1, offset2, offset3, padded_size1, size1, size2,
                              size3, M0);
         }
         // allocate output data for this subgrid
         du0.resize(2 * padded_size1 * size2 * size3); // complex
         // Spread to subgrid without need for bounds checking or wrapping
-        if (ndims == 1)
+        if (dim == 1)
           spread_subproblem_dispatch<1>(offset1, offset2, offset3, padded_size1, size2,
                                         size3, du0.data(), M0, kx0.data(), ky0.data(),
                                         kz0.data(), dd0.data());
-        else if (ndims == 2)
+        else if (dim == 2)
           spread_subproblem_dispatch<2>(offset1, offset2, offset3, padded_size1, size2,
                                         size3, du0.data(), M0, kx0.data(), ky0.data(),
                                         kz0.data(), dd0.data());
-        else
+        else if (dim == 3)
           spread_subproblem_dispatch<3>(offset1, offset2, offset3, padded_size1, size2,
                                         size3, du0.data(), M0, kx0.data(), ky0.data(),
                                         kz0.data(), dd0.data());
+        else
+          FINUFFT_UNREACHABLE;
         // add subgrid to output (always do this); atomic vs critical chosen
         if (nthr > m.spopts.atomic_threshold) {
           add_wrapped_subgrid<true>(offset1, offset2, offset3, padded_size1, size1, size2,

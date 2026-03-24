@@ -184,14 +184,20 @@ private:
                                    UBIGINT M, const TF *kx, const TF *ky, const TF *kz,
                                    const TF *dd) const noexcept;
 
-  // Nested dispatcher types used to select compile-time ns/nc kernel specialisations.
-  // Bodies are defined in spread.hpp and interp.hpp respectively.
+  // Nested helper types used by the dimension-specialized entry points.
+  // Bodies are defined in spread.hpp and interp.hpp.
   template<int DIM> struct SpreadSubproblemDispatcher;
   template<int DIM> struct InterpSortedDispatcher;
+  template<int DIM> struct BinIndexer;
 
   void bin_sort_singlethread(double bin_size_x, double bin_size_y, double bin_size_z);
   void bin_sort_multithread(double bin_size_x, double bin_size_y, double bin_size_z,
                             int nthr);
+  template<int DIM>
+  void bin_sort_singlethread_dim(double bin_size_x, double bin_size_y, double bin_size_z);
+  template<int DIM>
+  void bin_sort_multithread_dim(double bin_size_x, double bin_size_y, double bin_size_z,
+                                int nthr);
   template<bool thread_safe>
   void add_wrapped_subgrid(BIGINT offset1, BIGINT offset2, BIGINT offset3,
                            UBIGINT padded_size1, UBIGINT size1, UBIGINT size2,
@@ -203,6 +209,14 @@ private:
 
   void spreadcheck() const;
   void indexSort();
+  template<typename Dispatcher>
+  decltype(auto) dispatch_ns_nc(Dispatcher &dispatcher) const {
+    using namespace finufft::common;
+    using NsSeq = make_range<MIN_NSPREAD, MAX_NSPREAD>;
+    using NcSeq = make_range<MIN_NC, MAX_NC>;
+    return dispatch(dispatcher, std::make_tuple(DispatchParam<NsSeq>{m.spopts.nspread},
+                                                DispatchParam<NcSeq>{m.nc}));
+  }
   template<int DIM>
   void spread_subproblem_dispatch(BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT size1,
                                   UBIGINT size2, UBIGINT size3, TF *FINUFFT_RESTRICT du,
