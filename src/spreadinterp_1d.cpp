@@ -9,7 +9,7 @@ using FLT = float;
 using FLT = double;
 #endif
 
-template void FINUFFT_PLAN_T<FLT>::spread_subproblem_dispatch<1>(
-    BIGINT, BIGINT, BIGINT, UBIGINT, UBIGINT, UBIGINT, FLT *FINUFFT_RESTRICT, UBIGINT,
-    const FLT *, const FLT *, const FLT *, const FLT *) const noexcept;
+template void FINUFFT_PLAN_T<FLT>::spread_subproblem_dispatch_1d(
+    BIGINT, UBIGINT, FLT *FINUFFT_RESTRICT, UBIGINT, const FLT *,
+    const FLT *) const noexcept;
 template int FINUFFT_PLAN_T<FLT>::interpSorted_dispatch<1>(FLT *, FLT *) const;

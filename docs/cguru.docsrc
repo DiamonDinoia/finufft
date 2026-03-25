@@ -2,10 +2,13 @@ int @G_makeplan(int type, int dim, int64_t* nmodes, int iflag, int ntr, double e
 
   Make a plan to perform one or more general transforms.
 
-  Under the hood, for type 1 and 2, this chooses spread/interp kernel
-  parameters, precomputes the kernel Fourier transform, and (for FFTW), plans
-  a pair of FFTs. For type 3, only the kernel parameters are chosen, since
-  the FFT sizes are not yet known.
+  Under the hood, for type 1 and 2, fixed-upsampfac plans choose spread/interp
+  kernel parameters, precompute the kernel Fourier transform, and (for FFTW)
+  plan a pair of FFTs here. If opts->upsampfac is left at 0.0, that work is
+  deferred to setpts(), which chooses an internal upsampfac from the current
+  NU-point density and may redo the setup on later setpts() calls. For type 3,
+  makeplan only prepares the state independent of the eventual source/target
+  geometry, since the fine-grid sizes are not yet known.
 
 Inputs:
      type   type of transform (1,2, or 3)
@@ -37,10 +40,15 @@ int @G_setpts(@G_plan plan, int64_t M, double* x, double* y, double* z, int64_t 
   and possibly u), into an existing plan. If type is 1 or 2 then the last four
   arguments are ignored. Unused dimensions are ignored.
 
-  Under the hood, for type 1 or 2, this routine bin-sorts the points (storing
-  just the permutation rather than new copies of the coordinates). For type
-  3 it also bin-sorts the frequencies, chooses two levels of grid sizes, then
-  plans the inner type 2 call (interpolation and FFTW).
+  Under the hood, for type 1 or 2, this routine stores and bin-sorts the
+  points (storing just the permutation rather than new copies of the
+  coordinates). If the plan was created with opts->upsampfac=0.0, it may also
+  choose or update the internal upsampfac from the current point density,
+  rebuild the kernel/Horner tables, and recreate the fine-grid / FFT planning
+  state before sorting. For type 3 it also bin-sorts the sources, chooses fine
+  grid sizes and phase/deconvolution factors, then plans the inner type 2 call
+  (interpolation and FFTW). In auto-upsampfac mode, the chosen internal
+  upsampfac is persisted on the plan.
 
   Inputs:
      M      number of nonuniform spatial points (used by all types)

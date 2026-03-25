@@ -95,13 +95,14 @@ private:
   // Configuration set once in the constructor stays on the plan itself.
   struct M {
     // --- Spreader configuration (computed by setup_spreadinterp) ---
-    TF tol{};                     // user tolerance, clamped to machine eps by spreader
+    TF tol{};                     // user tolerance, clamped in the constructor if needed
     finufft_spread_opts spopts{}; // spreading kernel parameters (nspread, beta, etc.)
     int nc           = 0;         // number of Horner polynomial coefficients (<= MAX_NC)
     size_t padded_ns = 0;         // SIMD-padded kernel width
     alignas(64) std::array<TF, finufft::common::MAX_NSPREAD *
                                    finufft::common::MAX_NC> horner_coeffs{0};
-    // piecewise Horner coefficients table (ns x nc layout)
+    // piecewise Horner coefficient table in transposed, SIMD-padded layout:
+    // horner_coeffs[k * padded_ns + j] = kth Horner coeff for panel j
 
     // --- Fine grid (computed by init_grid_kerFT_FFT or set_nhg_type3) ---
     std::array<BIGINT, 3> nfdim{1, 1, 1};  // upsampled grid dimensions
@@ -161,8 +162,10 @@ public:
 private:
   int execute_internal(TC *cj, TC *fk, bool adjoint = false, int ntrans_actual = -1,
                        TC *aligned_scratch = nullptr, size_t scratch_size = 0) const;
-  void setup_spreadinterp(); // throws FINUFFT_ERR_EPS_TOO_SMALL if tol unachievable
+  void setup_spreadinterp(); // sets m.spopts from current m.tol and opts.upsampfac
   void precompute_horner_coeffs();
+  void refresh_spreadinterp_state(bool refresh_grid);
+  bool maybe_update_auto_upsampfac(double upsampfac, bool refresh_grid);
   void set_nf_type12(BIGINT ms, BIGINT *nf) const;
   void onedim_fseries_kernel(BIGINT nf, std::vector<TF> &fwkerhalf) const;
   void set_nhg_type3(int idim, TF S, TF X);
@@ -181,7 +184,8 @@ private:
 
   // Nested helper types used by the dimension-specialized entry points.
   // Bodies are defined in spread.hpp and interp.hpp.
-  template<int DIM> struct SpreadSubproblemDispatcher;
+  struct SpreadSubproblem1dDispatcher;
+  template<int DIM> struct SpreadSubproblemNdDispatcher;
   template<int DIM> struct InterpSortedDispatcher;
   template<int DIM> struct BinIndexer;
 
@@ -214,17 +218,28 @@ private:
   }
   // Convert runtime dim (1,2,3) to compile-time DIM via a generic callable.
   template<typename F> decltype(auto) dispatch_dim(F &&f) const {
-    if (dim == 1) return f(std::integral_constant<int, 1>{});
-    if (dim == 2) return f(std::integral_constant<int, 2>{});
-    return f(std::integral_constant<int, 3>{});
+    switch (dim) {
+    case 1:
+      return f(std::integral_constant<int, 1>{});
+    case 2:
+      return f(std::integral_constant<int, 2>{});
+    case 3:
+      return f(std::integral_constant<int, 3>{});
+    default:
+      throw finufft::exception(FINUFFT_ERR_DIM_NOTVALID);
+    }
+    FINUFFT_UNREACHABLE;
   }
-  template<int DIM>
-  void spread_subproblem_dispatch(BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT size1,
-                                  UBIGINT size2, UBIGINT size3, TF *FINUFFT_RESTRICT du,
-                                  UBIGINT M, const TF *kx, const TF *ky, const TF *kz,
-                                  const TF *dd) const noexcept;
-  // Shared 3D-shaped signature is intentional: lower-dimensional specialisations
-  // ignore the unused trailing offsets, sizes, and coordinate arrays.
+  void spread_subproblem_dispatch_1d(BIGINT off1, UBIGINT size1, TF *FINUFFT_RESTRICT du,
+                                     UBIGINT M, const TF *kx,
+                                     const TF *dd) const noexcept;
+  void spread_subproblem_dispatch_2d(
+      BIGINT off1, BIGINT off2, UBIGINT size1, UBIGINT size2, TF *FINUFFT_RESTRICT du,
+      UBIGINT M, const TF *kx, const TF *ky, const TF *dd) const noexcept;
+  void spread_subproblem_dispatch_3d(
+      BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT size1, UBIGINT size2, UBIGINT size3,
+      TF *FINUFFT_RESTRICT du, UBIGINT M, const TF *kx, const TF *ky, const TF *kz,
+      const TF *dd) const noexcept;
   int spreadSorted(TF *FINUFFT_RESTRICT data_uniform, const TF *data_nonuniform) const;
   int interpSorted(TF *FINUFFT_RESTRICT data_uniform,
                    TF *FINUFFT_RESTRICT data_nonuniform) const;

@@ -114,7 +114,6 @@ template<typename TF> void FINUFFT_PLAN_T<TF>::setup_spreadinterp() {
   using namespace finufft::common;
   using namespace finufft::kernel;
   /* Sets spread/interp (gridding) kernel params in spopts struct (ns, etc),
-    then refreshes the derived Horner interpolation tables.
     based on:
     tol - desired user relative tolerance (a.k.a eps)
     opts.upsampfac - fixed upsampling factor (=sigma), previously set.
@@ -190,6 +189,21 @@ template<typename TF> void FINUFFT_PLAN_T<TF>::setup_spreadinterp() {
   // nthr above which switch OMP critical->atomic (add_wrapped..). R Blackwell's val:
   m.spopts.atomic_threshold =
       (opts.spread_nthr_atomic >= 0) ? opts.spread_nthr_atomic : 10;
+}
+
+template<typename TF>
+void FINUFFT_PLAN_T<TF>::refresh_spreadinterp_state(bool refresh_grid) {
+  setup_spreadinterp();
+  precompute_horner_coeffs();
+  if (refresh_grid) init_grid_kerFT_FFT();
+}
+
+template<typename TF>
+bool FINUFFT_PLAN_T<TF>::maybe_update_auto_upsampfac(double upsampfac, bool refresh_grid) {
+  if (upsamp_locked || upsampfac == opts.upsampfac) return false;
+  opts.upsampfac = upsampfac;
+  refresh_spreadinterp_state(refresh_grid);
+  return true;
 }
 
 // ------------------- piecewise-poly Horner setup utility -----------------
@@ -424,13 +438,7 @@ FINUFFT_PLAN_T<TF>::FINUFFT_PLAN_T(int type_, int dim_, const BIGINT *n_modes, i
   if (opts.upsampfac != 0.0) {
     upsamp_locked = true; // user explicitly set upsampfac, don't auto-update
     if (opts.debug) printf("\t\tuser locked upsampfac=%g\n", opts.upsampfac);
-    setup_spreadinterp(); // throws on error
-    precompute_horner_coeffs();
-
-    //  ------------------------ types 1,2: planning needed ---------------------
-    if (type == 1 || type == 2) {
-      init_grid_kerFT_FFT(); // throws on error
-    }
+    refresh_spreadinterp_state(type == 1 || type == 2);
   }
 
   if (type == 3) { // -------------------------- type 3 (no planning) ------------

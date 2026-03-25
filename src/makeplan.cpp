@@ -16,6 +16,8 @@ template FINUFFT_PLAN_T<FLT>::FINUFFT_PLAN_T(int, int, const BIGINT *, int, int,
 template void FINUFFT_PLAN_T<FLT>::setup_spreadinterp();
 
 template void FINUFFT_PLAN_T<FLT>::precompute_horner_coeffs();
+template void FINUFFT_PLAN_T<FLT>::refresh_spreadinterp_state(bool);
+template bool FINUFFT_PLAN_T<FLT>::maybe_update_auto_upsampfac(double, bool);
 
 // These are called by init_grid_kerFT_FFT (instantiated in fft.cpp), so must be
 // explicitly instantiated here where their bodies (in makeplan.hpp) are visible.

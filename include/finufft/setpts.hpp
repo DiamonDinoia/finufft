@@ -96,17 +96,9 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
     if (!upsamp_locked) {
       double density   = double(m.nj) / double(N());
       double upsampfac = bestUpsamplingFactor<TF>(opts.nthreads, density, dim, type, m.tol);
-      // Re-plan if this is the first call (upsampfac==0) or if upsampfac changed
-      if (upsampfac != opts.upsampfac) {
-        opts.upsampfac = upsampfac;
-        if (opts.debug)
-          printf("[setpts] selected best upsampfac=%.3g (density=%.3g, nj=%lld)\n",
-                 opts.upsampfac, density, (long long)m.nj);
-        setup_spreadinterp(); // throws on error
-        precompute_horner_coeffs();
-        // Perform the planning steps (first call or re-plan due to density change).
-        init_grid_kerFT_FFT();       // throws on error
-      }
+      if (maybe_update_auto_upsampfac(upsampfac, true) && opts.debug)
+        printf("[setpts] selected best upsampfac=%.3g (density=%.3g, nj=%lld)\n",
+               opts.upsampfac, density, (long long)m.nj);
     }
 
     m.XYZ   = {xj, yj, zj}; // plan must keep pointers to user's fixed NU pts
@@ -127,14 +119,9 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
     // have a concrete upsampfac to work with. This choice is persisted so inner
     // type-2 plans will inherit it.
     double upsampfac = bestUpsamplingFactor<TF>(opts.nthreads, 1.0, dim, type, m.tol);
-    if (!upsamp_locked && (upsampfac != opts.upsampfac)) {
-      opts.upsampfac = upsampfac;
-      if (opts.debug > 1)
-        printf("[setpts t3] selected upsampfac=%.2f (density=1 used; persisted)\n",
-               opts.upsampfac);
-      setup_spreadinterp(); // throws on error
-      precompute_horner_coeffs();
-    }
+    if (maybe_update_auto_upsampfac(upsampfac, false) && opts.debug > 1)
+      printf("[setpts t3] selected upsampfac=%.2f (density=1 used; persisted)\n",
+             opts.upsampfac);
 
     // pick x, s intervals & shifts & # fine grid pts (nf) in each dim...
     std::array<TF, 3> S = {0, 0, 0};

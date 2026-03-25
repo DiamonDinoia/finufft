@@ -210,27 +210,27 @@ int FINUFFT_PLAN_T<TF>::spreadinterpSorted(TF *data_uniform, TF *data_nonuniform
                                            bool adjoint) const
 /* ------------Spreader/interpolator for 1, 2, or 3 dimensions --------------
   The concrete operation performed depends on both `spopts.spread_direction`
-  and the `adjoint` flag passed by the caller. When `adjoint` is false the
-  function implements the semantics of `spopts.spread_direction` directly; when
-  `adjoint` is true the semantics are transposed (spread <-> interp swapped).
+  and the `adjoint` flag passed by the caller. When `adjoint` is false,
+  `spopts.spread_direction==1` means spreading from nonuniform sources to the
+  uniform grid, while `spopts.spread_direction==2` means interpolation from the
+  uniform grid to nonuniform targets. When `adjoint` is true those semantics are
+  swapped.
 
   For illustration, in the 1D case with `adjoint==false`:
 
   - If opts.spread_direction==1, the implemented operation is
 
-                 N1-1
-    data_nonuniform[j] =  SUM phi(kx[j] - n) data_uniform[n],   for j=0...M-1
-                 n=0
-
-  - If opts.spread_direction==2, the implemented operation is the transpose
-
                M-1
     data_uniform[n] =  SUM phi(kx[j] - n) data_nonuniform[j],   for n=0...N1-1
                j=0
 
-  When `adjoint==true` the two formulas above are swapped (i.e. the
-  function dispatches to the interpolation implementation when the pair
-  `(opts.spread_direction, adjoint)` indicates it).
+  - If opts.spread_direction==2, the implemented operation is the transpose
+
+                 N1-1
+    data_nonuniform[j] =  SUM phi(kx[j] - n) data_uniform[n],   for j=0...M-1
+                 n=0
+
+  When `adjoint==true` the two formulas above are swapped.
 
    In each case phi is the spreading kernel, which has support
    [-opts.nspread/2,opts.nspread/2]. In 2D or 3D, the generalization with
@@ -266,8 +266,8 @@ int FINUFFT_PLAN_T<TF>::spreadinterpSorted(TF *data_uniform, TF *data_nonuniform
             this function dispatches to the two internal routines as follows:
             it calls `spreadSorted(...)` when (spopts.spread_direction == 1) !=
             adjoint, and calls `interpSorted(...)` otherwise. In short,
-            `adjoint` flips whether spreading (uniform->nonuniform) or
-            interpolation (nonuniform->uniform) is performed relative to the
+            `adjoint` flips whether spreading (nonuniform->uniform) or
+            interpolation (uniform->nonuniform) is performed relative to the
             meaning of `spopts.spread_direction`.
 
   The following args from the old free-function interface are now read as plan
@@ -413,11 +413,21 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
         // allocate output data for this subgrid
         du0.resize(2 * padded_size1 * size2 * size3); // complex
         // Spread to subgrid without need for bounds checking or wrapping
-        dispatch_dim([&](auto D) {
-          spread_subproblem_dispatch<D()>(offset1, offset2, offset3, padded_size1, size2,
-                                          size3, du0.data(), M0, kx0.data(), ky0.data(),
-                                          kz0.data(), dd0.data());
-        });
+        switch (dim) {
+        case 1:
+          spread_subproblem_dispatch_1d(offset1, padded_size1, du0.data(), M0, kx0.data(),
+                                        dd0.data());
+          break;
+        case 2:
+          spread_subproblem_dispatch_2d(offset1, offset2, padded_size1, size2, du0.data(),
+                                        M0, kx0.data(), ky0.data(), dd0.data());
+          break;
+        default:
+          spread_subproblem_dispatch_3d(offset1, offset2, offset3, padded_size1, size2,
+                                        size3, du0.data(), M0, kx0.data(), ky0.data(),
+                                        kz0.data(), dd0.data());
+          break;
+        }
         // add subgrid to output (always do this); atomic vs critical chosen
         if (nthr > m.spopts.atomic_threshold) {
           add_wrapped_subgrid<true>(offset1, offset2, offset3, padded_size1, size1, size2,

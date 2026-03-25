@@ -349,6 +349,47 @@ void FINUFFT_PLAN_T<TF>::add_wrapped_subgrid(
    The nbins calculation uses +1 to guard against roundoff near +pi mapping to an
    out-of-range bin index. Barbone 2/2026. */
 
+namespace finufft::spreadinterp {
+
+template<typename BinIndexer, typename Counts>
+FINUFFT_ALWAYS_INLINE void count_bins(const BinIndexer &bin_indexer, Counts &counts,
+                                      UBIGINT begin, UBIGINT end) {
+  constexpr std::size_t simd_size = BinIndexer::simd_size;
+  const auto simd_mask            = UBIGINT(-static_cast<BIGINT>(simd_size));
+  const auto simd_end             = begin + ((end - begin) & simd_mask);
+  UBIGINT i                       = begin;
+  for (; i < simd_end; i += simd_size) {
+    const auto bin       = bin_indexer.compute_bin_indices(i);
+    const auto bin_array = xsimd_to_array(bin);
+    for (std::size_t j = 0; j < simd_size; ++j) ++counts[bin_array[j]];
+  }
+  for (; i < end; ++i) ++counts[bin_indexer.compute_bin_index(i)];
+}
+
+template<typename BinIndexer, typename Counts, typename SortIndices>
+FINUFFT_ALWAYS_INLINE void place_bins(const BinIndexer &bin_indexer, Counts &counts,
+                                      SortIndices &sort_indices, UBIGINT begin, UBIGINT end) {
+  constexpr std::size_t simd_size = BinIndexer::simd_size;
+  const auto simd_mask            = UBIGINT(-static_cast<BIGINT>(simd_size));
+  const auto simd_end             = begin + ((end - begin) & simd_mask);
+  UBIGINT i                       = begin;
+  for (; i < simd_end; i += simd_size) {
+    const auto bin       = bin_indexer.compute_bin_indices(i);
+    const auto bin_array = xsimd_to_array(bin);
+    for (std::size_t j = 0; j < simd_size; ++j) {
+      sort_indices[counts[bin_array[j]]] = BIGINT(i + static_cast<UBIGINT>(j));
+      ++counts[bin_array[j]];
+    }
+  }
+  for (; i < end; ++i) {
+    const auto bin            = bin_indexer.compute_bin_index(i);
+    sort_indices[counts[bin]] = BIGINT(i);
+    ++counts[bin];
+  }
+}
+
+} // namespace finufft::spreadinterp
+
 template<typename TF> template<int DIM> struct FINUFFT_PLAN_T<TF>::BinIndexer {
   static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
 
@@ -459,42 +500,19 @@ void FINUFFT_PLAN_T<TF>::bin_sort_singlethread_dim(double bin_size_x, double bin
  */
 {
   static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
-  using bin_indexer_t             = BinIndexer<DIM>;
-  constexpr std::size_t simd_size = bin_indexer_t::simd_size;
-  const auto simd_mask            = UBIGINT(-static_cast<BIGINT>(simd_size));
-  auto &sort_indices              = m.sortIndices;
+  using bin_indexer_t = BinIndexer<DIM>;
+  auto &sort_indices  = m.sortIndices;
   const bin_indexer_t bin_indexer{*this, bin_size_x, bin_size_y, bin_size_z};
 
   // uint32_t counts halves cache footprint vs BIGINT (int64_t)
   std::vector<uint32_t> counts(bin_indexer.nbins, 0);
-  const auto simd_M = bin_indexer.M & simd_mask;
-  UBIGINT i{};
-
-  // counting pass: SIMD bin compute, scalar accumulate
-  for (i = 0; i < simd_M; i += simd_size) {
-    const auto bin       = bin_indexer.compute_bin_indices(i);
-    const auto bin_array = ::finufft::spreadinterp::xsimd_to_array(bin);
-    for (std::size_t j = 0; j < simd_size; ++j) ++counts[bin_array[j]];
-  }
-  for (; i < bin_indexer.M; ++i) ++counts[bin_indexer.compute_bin_index(i)];
+  ::finufft::spreadinterp::count_bins(bin_indexer, counts, UBIGINT(0), bin_indexer.M);
 
   // compute the offsets directly in the counts array (Reinecke's trick)
   std::exclusive_scan(counts.begin(), counts.end(), counts.begin(), uint32_t{0});
 
-  // placement pass: SIMD bin compute, scalar placement
-  for (i = 0; i < simd_M; i += simd_size) {
-    const auto bin       = bin_indexer.compute_bin_indices(i);
-    const auto bin_array = ::finufft::spreadinterp::xsimd_to_array(bin);
-    for (std::size_t j = 0; j < simd_size; ++j) {
-      sort_indices[counts[bin_array[j]]] = BIGINT(i + static_cast<UBIGINT>(j));
-      ++counts[bin_array[j]];
-    }
-  }
-  for (; i < bin_indexer.M; ++i) {
-    const auto bin            = bin_indexer.compute_bin_index(i);
-    sort_indices[counts[bin]] = BIGINT(i);
-    ++counts[bin];
-  }
+  ::finufft::spreadinterp::place_bins(bin_indexer, counts, sort_indices, UBIGINT(0),
+                                      bin_indexer.M);
 }
 
 template<typename TF>
@@ -513,10 +531,8 @@ void FINUFFT_PLAN_T<TF>::bin_sort_multithread_dim(double bin_size_x, double bin_
  */
 {
   static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
-  using bin_indexer_t             = BinIndexer<DIM>;
-  constexpr std::size_t simd_size = bin_indexer_t::simd_size;
-  const auto simd_mask            = UBIGINT(-static_cast<BIGINT>(simd_size));
-  auto &sort_indices              = m.sortIndices;
+  using bin_indexer_t = BinIndexer<DIM>;
+  auto &sort_indices  = m.sortIndices;
   const bin_indexer_t bin_indexer{*this, bin_size_x, bin_size_y, bin_size_z};
 
   if (nthr == 0) fprintf(stderr, "[%s] nthr (%d) must be positive!\n", __func__, nthr);
@@ -534,20 +550,12 @@ void FINUFFT_PLAN_T<TF>::bin_sort_multithread_dim(double bin_size_x, double bin_
     const int t            = MY_OMP_GET_THREAD_NUM();
     const auto chunk_start = brk[t];
     const auto chunk_end   = brk[t + 1];
-    const auto chunk_simd  = chunk_start + ((chunk_end - chunk_start) & simd_mask);
 
     // each thread allocates its own histogram
     counts[t].resize(bin_indexer.nbins, 0);
     auto &my_counts = counts[t];
 
-    // counting pass: SIMD bin compute, scalar accumulate
-    UBIGINT i;
-    for (i = chunk_start; i < chunk_simd; i += simd_size) {
-      const auto bin       = bin_indexer.compute_bin_indices(i);
-      const auto bin_array = ::finufft::spreadinterp::xsimd_to_array(bin);
-      for (std::size_t j = 0; j < simd_size; ++j) ++my_counts[bin_array[j]];
-    }
-    for (; i < chunk_end; ++i) ++my_counts[bin_indexer.compute_bin_index(i)];
+    ::finufft::spreadinterp::count_bins(bin_indexer, my_counts, chunk_start, chunk_end);
 
     // ensure all threads have finished counting before computing offsets
 #pragma omp barrier
@@ -586,20 +594,8 @@ void FINUFFT_PLAN_T<TF>::bin_sort_multithread_dim(double bin_size_x, double bin_
 
 #pragma omp barrier
 
-    // placement pass: SIMD bin compute, scalar placement
-    for (i = chunk_start; i < chunk_simd; i += simd_size) {
-      const auto bin       = bin_indexer.compute_bin_indices(i);
-      const auto bin_array = ::finufft::spreadinterp::xsimd_to_array(bin);
-      for (std::size_t j = 0; j < simd_size; ++j) {
-        sort_indices[my_counts[bin_array[j]]] = BIGINT(i + static_cast<UBIGINT>(j));
-        ++my_counts[bin_array[j]];
-      }
-    }
-    for (; i < chunk_end; ++i) {
-      const auto bin               = bin_indexer.compute_bin_index(i);
-      sort_indices[my_counts[bin]] = BIGINT(i);
-      ++my_counts[bin];
-    }
+    ::finufft::spreadinterp::place_bins(bin_indexer, my_counts, sort_indices, chunk_start,
+                                        chunk_end);
   }
 }
 
@@ -705,8 +701,29 @@ void FINUFFT_PLAN_T<TF>::get_subgrid(BIGINT &offset1, BIGINT &offset2, BIGINT &o
 // so this must be a proper nested class definition of FINUFFT_PLAN_T<TF>.
 
 template<typename TF>
+struct FINUFFT_PLAN_T<TF>::SpreadSubproblem1dDispatcher {
+  const FINUFFT_PLAN_T &plan;
+  BIGINT off1;
+  UBIGINT size1;
+  TF *du;
+  UBIGINT M;
+  const TF *kx;
+  const TF *dd;
+  template<int NS, int NC> int operator()() const {
+    if constexpr (!::finufft::kernel::ValidKernelParams<NS, NC>())
+      return finufft::spreadinterp::report_invalid_kernel_params(NS, NC);
+    else {
+      plan.template spread_subproblem_1d_kernel<NS, NC>(off1, size1, du, M, kx, dd);
+      return 0;
+    }
+  }
+};
+
+template<typename TF>
 template<int DIM>
-struct FINUFFT_PLAN_T<TF>::SpreadSubproblemDispatcher {
+struct FINUFFT_PLAN_T<TF>::SpreadSubproblemNdDispatcher {
+  static_assert(DIM == 2 || DIM == 3, "DIM must be 2 or 3");
+
   const FINUFFT_PLAN_T &plan;
   BIGINT off1, off2, off3;
   UBIGINT size1, size2, size3;
@@ -717,15 +734,12 @@ struct FINUFFT_PLAN_T<TF>::SpreadSubproblemDispatcher {
   const TF *kz;
   const TF *dd;
   template<int NS, int NC> int operator()() const {
-    static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
     if constexpr (!::finufft::kernel::ValidKernelParams<NS, NC>())
       return finufft::spreadinterp::report_invalid_kernel_params(NS, NC);
     else {
-      if constexpr (DIM == 1)
-        plan.template spread_subproblem_1d_kernel<NS, NC>(off1, size1, du, M, kx, dd);
-      else
-        plan.template spread_subproblem_nd_kernel<NS, NC, DIM>(
-            off1, off2, off3, size1, size2, size3, du, M, kx, ky, kz, dd);
+      plan.template spread_subproblem_nd_kernel<NS, NC, DIM>(off1, off2, off3, size1,
+                                                              size2, size3, du, M, kx, ky,
+                                                              kz, dd);
       return 0;
     }
   }
@@ -736,19 +750,43 @@ struct FINUFFT_PLAN_T<TF>::SpreadSubproblemDispatcher {
 //   simd.hpp -> finufft/plan.hpp
 
 template<typename TF>
-template<int DIM>
-void FINUFFT_PLAN_T<TF>::spread_subproblem_dispatch(
-    BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT size1, UBIGINT size2, UBIGINT size3,
-    TF *FINUFFT_RESTRICT du, UBIGINT M, const TF *kx, const TF *ky, const TF *kz,
+void FINUFFT_PLAN_T<TF>::spread_subproblem_dispatch_1d(
+    BIGINT off1, UBIGINT size1, TF *FINUFFT_RESTRICT du, UBIGINT M, const TF *kx,
     const TF *dd) const noexcept
-// Spread M NU points into subgrid du, with compile-time DIM selecting the
-// specialized spread kernel and shared NS/NC dispatch.
+// Spread M NU points into a 1D subgrid du, using shared NS/NC dispatch.
 // Uses plan members spopts.nspread, nc, horner_coeffs for the kernel dispatch.
 // Previous args (opts, horner_coeffs_ptr, nc) are now plan members.
 // Converted to class member, Barbone 2/24/26.
 {
-  static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
-  SpreadSubproblemDispatcher<DIM> dispatcher{*this, off1, off2, off3, size1, size2, size3,
+  SpreadSubproblem1dDispatcher dispatcher{*this, off1, size1, du, M, kx, dd};
+  dispatch_ns_nc(dispatcher);
+}
+
+template<typename TF>
+void FINUFFT_PLAN_T<TF>::spread_subproblem_dispatch_2d(
+    BIGINT off1, BIGINT off2, UBIGINT size1, UBIGINT size2, TF *FINUFFT_RESTRICT du,
+    UBIGINT M, const TF *kx, const TF *ky, const TF *dd) const noexcept
+// Spread M NU points into a 2D subgrid du, using shared NS/NC dispatch.
+// Uses plan members spopts.nspread, nc, horner_coeffs for the kernel dispatch.
+// Previous args (opts, horner_coeffs_ptr, nc) are now plan members.
+// Converted to class member, Barbone 2/24/26.
+{
+  SpreadSubproblemNdDispatcher<2> dispatcher{*this, off1, off2, 0, size1, size2, 1, du,
+                                             M,     kx,   ky,   nullptr, dd};
+  dispatch_ns_nc(dispatcher);
+}
+
+template<typename TF>
+void FINUFFT_PLAN_T<TF>::spread_subproblem_dispatch_3d(
+    BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT size1, UBIGINT size2, UBIGINT size3,
+    TF *FINUFFT_RESTRICT du, UBIGINT M, const TF *kx, const TF *ky, const TF *kz,
+    const TF *dd) const noexcept
+// Spread M NU points into a 3D subgrid du, using shared NS/NC dispatch.
+// Uses plan members spopts.nspread, nc, horner_coeffs for the kernel dispatch.
+// Previous args (opts, horner_coeffs_ptr, nc) are now plan members.
+// Converted to class member, Barbone 2/24/26.
+{
+  SpreadSubproblemNdDispatcher<3> dispatcher{*this, off1, off2, off3, size1, size2, size3,
                                              du,    M,    kx,   ky,   kz,    dd};
   dispatch_ns_nc(dispatcher);
 }

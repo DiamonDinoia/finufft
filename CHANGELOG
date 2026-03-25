@@ -5,7 +5,10 @@ v2.6.0-dev
 
 * Internal CPU cleanup: dimension-specialized spread/interp entry points now
   select from plan `dim`, the shared NS/NC dispatch helper is consolidated,
-  and bin-sort indexing helpers are simplified. No public API changes.
+  and bin-sort indexing helpers are simplified. In guru auto-upsampfac mode,
+  type-1/2 plans now defer and may redo spread/kernel/FFT setup at `setpts()`
+  based on current NU-point density, and type-3 auto `upsampfac` is persisted
+  across `setpts()` reuse. No API signature changes.
   (Barbone)
 * Added `threadsafe_execute` regression test verifying concurrent `execute()`
   calls on the same plan produce correct results. Added sanitizer mode selection

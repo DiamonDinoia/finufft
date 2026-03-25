@@ -59,6 +59,24 @@ int main(void) {
 
   finufft_destroy(plan);
 
+  // Too many nj -> expect FINUFFT_ERR_NUM_NU_PTS_INVALID
+  rc = finufft_makeplan(1, 1, N, 1, 1, 1e-6, &plan, &opts);
+  if (rc) {
+    fprintf(stderr, "makeplan (valid for too-many-nj) failed: rc=%d\n", rc);
+    return 13;
+  }
+
+  int64_t too_many = INT64_C(100000000000001);
+  rc = finufft_setpts(plan, too_many, NULL, NULL, NULL, 0, NULL, NULL, NULL);
+  if (rc != FINUFFT_ERR_NUM_NU_PTS_INVALID) {
+    fprintf(stderr, "setpts too many nj: expected %d got %d\n",
+            FINUFFT_ERR_NUM_NU_PTS_INVALID, rc);
+    finufft_destroy(plan);
+    return 14;
+  }
+
+  finufft_destroy(plan);
+
   // Make a valid type-3 plan, then exercise setpts with negative nk
   rc = finufft_makeplan(3, 1, N, 1, 1, 1e-6, &plan, &opts);
   if (rc) {
@@ -74,6 +92,23 @@ int main(void) {
             FINUFFT_ERR_NUM_NU_PTS_INVALID, rc);
     finufft_destroy(plan);
     return 8;
+  }
+
+  finufft_destroy(plan);
+
+  // Too many nk -> expect FINUFFT_ERR_NUM_NU_PTS_INVALID
+  rc = finufft_makeplan(3, 1, N, 1, 1, 1e-6, &plan, &opts);
+  if (rc) {
+    fprintf(stderr, "makeplan (valid type3 for too-many-nk) failed: rc=%d\n", rc);
+    return 15;
+  }
+
+  rc = finufft_setpts(plan, 1, x_ok, NULL, NULL, too_many, NULL, NULL, NULL);
+  if (rc != FINUFFT_ERR_NUM_NU_PTS_INVALID) {
+    fprintf(stderr, "setpts too many nk: expected %d got %d\n",
+            FINUFFT_ERR_NUM_NU_PTS_INVALID, rc);
+    finufft_destroy(plan);
+    return 16;
   }
 
   finufft_destroy(plan);
