@@ -164,8 +164,8 @@ private:
                        TC *aligned_scratch = nullptr, size_t scratch_size = 0) const;
   void setup_spreadinterp(); // sets m.spopts from current m.tol and opts.upsampfac
   void precompute_horner_coeffs();
-  void refresh_spreadinterp_state(bool refresh_grid);
-  bool maybe_update_auto_upsampfac(double upsampfac, bool refresh_grid);
+  void refresh_spreadinterp_state(bool reinit_fft_grid);
+  bool update_auto_upsampfac_if_changed(double upsampfac, bool reinit_fft_grid);
   void set_nf_type12(BIGINT ms, BIGINT *nf) const;
   void onedim_fseries_kernel(BIGINT nf, std::vector<TF> &fwkerhalf) const;
   void set_nhg_type3(int idim, TF S, TF X);
@@ -177,15 +177,15 @@ private:
   void spread_subproblem_1d_kernel(BIGINT off1, UBIGINT size1, TF *FINUFFT_RESTRICT du,
                                    UBIGINT M, const TF *kx, const TF *dd) const noexcept;
   template<int NS, int NC, int DIM>
-  void spread_subproblem_nd_kernel(BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT size1,
-                                   UBIGINT size2, UBIGINT size3, TF *FINUFFT_RESTRICT du,
-                                   UBIGINT M, const TF *kx, const TF *ky, const TF *kz,
-                                   const TF *dd) const noexcept;
+  void spread_subproblem_multidim_kernel(
+      BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT size1, UBIGINT size2, UBIGINT size3,
+      TF *FINUFFT_RESTRICT du, UBIGINT M, const TF *kx, const TF *ky, const TF *kz,
+      const TF *dd) const noexcept;
 
   // Nested helper types used by the dimension-specialized entry points.
   // Bodies are defined in spread.hpp and interp.hpp.
   struct SpreadSubproblem1dDispatcher;
-  template<int DIM> struct SpreadSubproblemNdDispatcher;
+  template<int DIM> struct SpreadSubproblemMultidimDispatcher;
   template<int DIM> struct InterpSortedDispatcher;
   template<int DIM> struct BinIndexer;
 
@@ -209,7 +209,7 @@ private:
   void spreadcheck() const;
   void indexSort();
   template<typename Dispatcher>
-  decltype(auto) dispatch_ns_nc(Dispatcher &dispatcher) const {
+  decltype(auto) dispatch_kernel_params(Dispatcher &dispatcher) const {
     using namespace finufft::common;
     using NsSeq = make_range<MIN_NSPREAD, MAX_NSPREAD>;
     using NcSeq = make_range<MIN_NC, MAX_NC>;

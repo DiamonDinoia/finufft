@@ -25,7 +25,7 @@ FINUFFT_ALWAYS_INLINE void fill_wrapped_indices(std::array<UBIGINT, ns> &j, BIGI
    for odd line_vectors is via if constexpr. The final horizontal sum reduces
    the SIMD accumulator to scalar out[0] (real) and out[1] (imag). */
 template<typename T, uint8_t ns, class simd_type, uint8_t line_vectors>
-FINUFFT_ALWAYS_INLINE void reduce_line_with_ker1(
+FINUFFT_ALWAYS_INLINE void reduce_line_with_x_kernel(
     T *FINUFFT_RESTRICT out, const T *ker1,
     const std::array<simd_type, line_vectors> &line) {
   using arch_t                    = typename simd_type::arch_type;
@@ -247,7 +247,7 @@ void interp_square(T *FINUFFT_RESTRICT target, const T *du, const T *ker1, const
    Periodic wrapping in the du array is applied, assuming N1,N2>=ns.
    Barnett 6/16/17. No-wrap case sped up for FMA/SIMD by Martin Reinecke 6/19/23.
    M. Barbone July 2024: moved wrapping logic to interp_square_wrap, explicit SIMD.
-   x-kernel SIMD reduction now in reduce_line_with_ker1 (shared with interp_cube).
+   x-kernel SIMD reduction now in reduce_line_with_x_kernel (shared with interp_cube).
 */
 {
   std::array<T, 2> out{0};
@@ -271,7 +271,7 @@ void interp_square(T *FINUFFT_RESTRICT target, const T *du, const T *ker1, const
       }
       return line;
     }();
-    reduce_line_with_ker1<T, ns, simd_type, line_vectors>(out.data(), ker1, line);
+    reduce_line_with_x_kernel<T, ns, simd_type, line_vectors>(out.data(), ker1, line);
   } else {
     // wraps somewhere: use ptr list
     // this is slower than above, but occurs much less often, with fractional
@@ -366,7 +366,7 @@ void interp_cube(T *FINUFFT_RESTRICT target, const T *du, const T *ker1, const T
    Periodic wrapping in the du array is applied, assuming N1,N2,N3>=ns.
    Barnett 6/16/17. No-wrap case sped up for FMA/SIMD by Reinecke 6/19/23.
    Barbone July 2024: moved wrapping logic to interp_cube_wrapped, explicit SIMD.
-   x-kernel SIMD reduction now in reduce_line_with_ker1 (shared with interp_square).
+   x-kernel SIMD reduction now in reduce_line_with_x_kernel (shared with interp_square).
 */
 {
   static constexpr auto padding         = get_padding<T, 2 * ns>();
@@ -395,7 +395,7 @@ void interp_cube(T *FINUFFT_RESTRICT target, const T *du, const T *ker1, const T
       }
       return line;
     }();
-    reduce_line_with_ker1<T, ns, simd_type, line_vectors>(out.data(), ker1, line);
+    reduce_line_with_x_kernel<T, ns, simd_type, line_vectors>(out.data(), ker1, line);
   } else {
     return interp_cube_wrapped<T, ns, simd_type>(target, du, ker1, ker2, ker3, i1, i2, i3,
                                                  N1, N2, N3);
@@ -550,7 +550,7 @@ int FINUFFT_PLAN_T<TF>::interpSorted_dispatch(TF *data_uniform,
                                               TF *data_nonuniform) const {
   static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
   InterpSortedDispatcher<DIM> dispatcher{*this, data_uniform, data_nonuniform};
-  return dispatch_ns_nc(dispatcher);
+  return dispatch_kernel_params(dispatcher);
 }
 
 // ---------- FINUFFT_PLAN_T interpSorted method definition ----------
@@ -562,6 +562,7 @@ int FINUFFT_PLAN_T<TF>::interpSorted(TF *data_uniform, TF *data_nonuniform) cons
 // Previous args (sort_indices, N1, N2, N3, M, kx, ky, kz, opts, horner_coeffs, nc)
 // are now plan members. Converted to class member, Barbone 2/24/26.
 {
-  return dispatch_dim(
-      [&](auto D) { return interpSorted_dispatch<D()>(data_uniform, data_nonuniform); });
+  return dispatch_dim([&](auto DimTag) {
+    return interpSorted_dispatch<DimTag()>(data_uniform, data_nonuniform);
+  });
 }

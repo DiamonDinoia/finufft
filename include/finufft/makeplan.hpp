@@ -192,17 +192,18 @@ template<typename TF> void FINUFFT_PLAN_T<TF>::setup_spreadinterp() {
 }
 
 template<typename TF>
-void FINUFFT_PLAN_T<TF>::refresh_spreadinterp_state(bool refresh_grid) {
+void FINUFFT_PLAN_T<TF>::refresh_spreadinterp_state(bool reinit_fft_grid) {
   setup_spreadinterp();
   precompute_horner_coeffs();
-  if (refresh_grid) init_grid_kerFT_FFT();
+  if (reinit_fft_grid) init_grid_kerFT_FFT();
 }
 
 template<typename TF>
-bool FINUFFT_PLAN_T<TF>::maybe_update_auto_upsampfac(double upsampfac, bool refresh_grid) {
+bool FINUFFT_PLAN_T<TF>::update_auto_upsampfac_if_changed(double upsampfac,
+                                                          bool reinit_fft_grid) {
   if (upsamp_locked || upsampfac == opts.upsampfac) return false;
   opts.upsampfac = upsampfac;
-  refresh_spreadinterp_state(refresh_grid);
+  refresh_spreadinterp_state(reinit_fft_grid);
   return true;
 }
 

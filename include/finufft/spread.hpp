@@ -155,7 +155,7 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_1d_kernel(
 
 template<typename TF>
 template<int NS, int NC, int DIM>
-FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_nd_kernel(
+FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_multidim_kernel(
     const BIGINT off1, const BIGINT off2, const BIGINT off3, const UBIGINT size1,
     const UBIGINT size2, const UBIGINT size3, TF *FINUFFT_RESTRICT du, const UBIGINT M,
     const TF *kx, const TF *ky, const TF *kz, const TF *dd) const noexcept
@@ -171,7 +171,8 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_nd_kernel(
    Converted to class member, Barbone 2/24/26. Merged 2D+3D, Barbone 3/26.
 */
 {
-  static_assert(DIM == 2 || DIM == 3, "spread_subproblem_nd_kernel: DIM must be 2 or 3");
+  static_assert(DIM == 2 || DIM == 3,
+                "spread_subproblem_multidim_kernel: DIM must be 2 or 3");
   using namespace finufft::spreadinterp;
   using finufft::common::MAX_NSPREAD;
   using T                         = TF;
@@ -367,8 +368,10 @@ FINUFFT_ALWAYS_INLINE void count_bins(const BinIndexer &bin_indexer, Counts &cou
 }
 
 template<typename BinIndexer, typename Counts, typename SortIndices>
-FINUFFT_ALWAYS_INLINE void place_bins(const BinIndexer &bin_indexer, Counts &counts,
-                                      SortIndices &sort_indices, UBIGINT begin, UBIGINT end) {
+FINUFFT_ALWAYS_INLINE void scatter_points_to_bins(const BinIndexer &bin_indexer,
+                                                  Counts &counts,
+                                                  SortIndices &sort_indices, UBIGINT begin,
+                                                  UBIGINT end) {
   constexpr std::size_t simd_size = BinIndexer::simd_size;
   const auto simd_mask            = UBIGINT(-static_cast<BIGINT>(simd_size));
   const auto simd_end             = begin + ((end - begin) & simd_mask);
@@ -511,8 +514,8 @@ void FINUFFT_PLAN_T<TF>::bin_sort_singlethread_dim(double bin_size_x, double bin
   // compute the offsets directly in the counts array (Reinecke's trick)
   std::exclusive_scan(counts.begin(), counts.end(), counts.begin(), uint32_t{0});
 
-  ::finufft::spreadinterp::place_bins(bin_indexer, counts, sort_indices, UBIGINT(0),
-                                      bin_indexer.M);
+  ::finufft::spreadinterp::scatter_points_to_bins(bin_indexer, counts, sort_indices,
+                                                  UBIGINT(0), bin_indexer.M);
 }
 
 template<typename TF>
@@ -594,24 +597,24 @@ void FINUFFT_PLAN_T<TF>::bin_sort_multithread_dim(double bin_size_x, double bin_
 
 #pragma omp barrier
 
-    ::finufft::spreadinterp::place_bins(bin_indexer, my_counts, sort_indices, chunk_start,
-                                        chunk_end);
+    ::finufft::spreadinterp::scatter_points_to_bins(bin_indexer, my_counts, sort_indices,
+                                                    chunk_start, chunk_end);
   }
 }
 
 template<typename TF>
 void FINUFFT_PLAN_T<TF>::bin_sort_singlethread(double bin_size_x, double bin_size_y,
                                                double bin_size_z) {
-  dispatch_dim([&](auto D) {
-    bin_sort_singlethread_dim<D()>(bin_size_x, bin_size_y, bin_size_z);
+  dispatch_dim([&](auto DimTag) {
+    bin_sort_singlethread_dim<DimTag()>(bin_size_x, bin_size_y, bin_size_z);
   });
 }
 
 template<typename TF>
 void FINUFFT_PLAN_T<TF>::bin_sort_multithread(double bin_size_x, double bin_size_y,
                                               double bin_size_z, int nthr) {
-  dispatch_dim([&](auto D) {
-    bin_sort_multithread_dim<D()>(bin_size_x, bin_size_y, bin_size_z, nthr);
+  dispatch_dim([&](auto DimTag) {
+    bin_sort_multithread_dim<DimTag()>(bin_size_x, bin_size_y, bin_size_z, nthr);
   });
 }
 
@@ -721,7 +724,7 @@ struct FINUFFT_PLAN_T<TF>::SpreadSubproblem1dDispatcher {
 
 template<typename TF>
 template<int DIM>
-struct FINUFFT_PLAN_T<TF>::SpreadSubproblemNdDispatcher {
+struct FINUFFT_PLAN_T<TF>::SpreadSubproblemMultidimDispatcher {
   static_assert(DIM == 2 || DIM == 3, "DIM must be 2 or 3");
 
   const FINUFFT_PLAN_T &plan;
@@ -737,9 +740,8 @@ struct FINUFFT_PLAN_T<TF>::SpreadSubproblemNdDispatcher {
     if constexpr (!::finufft::kernel::ValidKernelParams<NS, NC>())
       return finufft::spreadinterp::report_invalid_kernel_params(NS, NC);
     else {
-      plan.template spread_subproblem_nd_kernel<NS, NC, DIM>(off1, off2, off3, size1,
-                                                              size2, size3, du, M, kx, ky,
-                                                              kz, dd);
+      plan.template spread_subproblem_multidim_kernel<NS, NC, DIM>(
+          off1, off2, off3, size1, size2, size3, du, M, kx, ky, kz, dd);
       return 0;
     }
   }
@@ -759,7 +761,7 @@ void FINUFFT_PLAN_T<TF>::spread_subproblem_dispatch_1d(
 // Converted to class member, Barbone 2/24/26.
 {
   SpreadSubproblem1dDispatcher dispatcher{*this, off1, size1, du, M, kx, dd};
-  dispatch_ns_nc(dispatcher);
+  dispatch_kernel_params(dispatcher);
 }
 
 template<typename TF>
@@ -771,9 +773,9 @@ void FINUFFT_PLAN_T<TF>::spread_subproblem_dispatch_2d(
 // Previous args (opts, horner_coeffs_ptr, nc) are now plan members.
 // Converted to class member, Barbone 2/24/26.
 {
-  SpreadSubproblemNdDispatcher<2> dispatcher{*this, off1, off2, 0, size1, size2, 1, du,
-                                             M,     kx,   ky,   nullptr, dd};
-  dispatch_ns_nc(dispatcher);
+  SpreadSubproblemMultidimDispatcher<2> dispatcher{
+      *this, off1, off2, 0, size1, size2, 1, du, M, kx, ky, nullptr, dd};
+  dispatch_kernel_params(dispatcher);
 }
 
 template<typename TF>
@@ -786,7 +788,7 @@ void FINUFFT_PLAN_T<TF>::spread_subproblem_dispatch_3d(
 // Previous args (opts, horner_coeffs_ptr, nc) are now plan members.
 // Converted to class member, Barbone 2/24/26.
 {
-  SpreadSubproblemNdDispatcher<3> dispatcher{*this, off1, off2, off3, size1, size2, size3,
-                                             du,    M,    kx,   ky,   kz,    dd};
-  dispatch_ns_nc(dispatcher);
+  SpreadSubproblemMultidimDispatcher<3> dispatcher{
+      *this, off1, off2, off3, size1, size2, size3, du, M, kx, ky, kz, dd};
+  dispatch_kernel_params(dispatcher);
 }

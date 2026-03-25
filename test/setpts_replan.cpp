@@ -22,7 +22,7 @@ struct PlanGuard {
 };
 
 // Check FINUFFT API return codes — throws on failure so scope guards still run.
-const auto check = [](int ier, const char *label) {
+const auto check_finufft_call = [](int ier, const char *label) {
   if (ier != 0) {
     std::fprintf(stderr, "setpts_replan: %s failed: ier=%d\n", label, ier);
     throw std::runtime_error(label);
@@ -67,7 +67,7 @@ void fill_modes_3d(std::vector<CPX> &f, FLT shift) {
   }
 }
 
-int test_type12_auto_replan() {
+int test_type1_auto_replan() {
   constexpr int type     = 1;
   constexpr int dim      = 3;
   constexpr int isign    = +1;
@@ -93,9 +93,9 @@ int test_type12_auto_replan() {
 
   const double density_lo = double(Mlo) / double(N);
   const double density_hi = double(Mhi) / double(N);
-  const double usf_lo     = finufft::heuristics::bestUpsamplingFactor<FLT>(
+  const double upsampfac_lo = finufft::heuristics::bestUpsamplingFactor<FLT>(
       opts.nthreads, density_lo, dim, type, tol);
-  const double usf_hi = finufft::heuristics::bestUpsamplingFactor<FLT>(
+  const double upsampfac_hi = finufft::heuristics::bestUpsamplingFactor<FLT>(
       opts.nthreads, density_hi, dim, type, tol);
 
   std::vector<FLT> xlo(Mlo), ylo(Mlo), zlo(Mlo);
@@ -106,44 +106,46 @@ int test_type12_auto_replan() {
   fill_type1_points(xhi, yhi, zhi, chi, FLT(0.5));
 
   PlanGuard plan, fresh;
-  check(FINUFFT_MAKEPLAN(type, dim, Ns, isign, ntrans, tol, &plan.p, &opts),
-        "makeplan(auto)");
+  check_finufft_call(FINUFFT_MAKEPLAN(type, dim, Ns, isign, ntrans, tol, &plan.p, &opts),
+                     "makeplan(auto)");
 
-  check(FINUFFT_SETPTS(plan.p, Mlo, xlo.data(), ylo.data(), zlo.data(), 0, nullptr,
-                       nullptr, nullptr),
-        "first setpts(auto)");
+  check_finufft_call(FINUFFT_SETPTS(plan.p, Mlo, xlo.data(), ylo.data(), zlo.data(), 0,
+                                    nullptr, nullptr, nullptr),
+                     "first setpts(auto)");
   auto *impl = reinterpret_cast<FINUFFT_PLAN_T<FLT> *>(plan.p);
-  if (!upsamp_matches(impl->opts.upsampfac, usf_lo)) {
-    std::fprintf(stderr, "setpts_replan: expected first auto usf %.3g, got %.3g\n",
-                 usf_lo, impl->opts.upsampfac);
+  if (!upsamp_matches(impl->opts.upsampfac, upsampfac_lo)) {
+    std::fprintf(stderr, "setpts_replan: expected first auto upsampfac %.3g, got %.3g\n",
+                 upsampfac_lo, impl->opts.upsampfac);
     return 1;
   }
 
-  check(FINUFFT_EXECUTE(plan.p, clo.data(), Flo.data()), "first execute(auto)");
+  check_finufft_call(FINUFFT_EXECUTE(plan.p, clo.data(), Flo.data()), "first execute(auto)");
 
-  check(FINUFFT_SETPTS(plan.p, Mhi, xhi.data(), yhi.data(), zhi.data(), 0, nullptr,
-                       nullptr, nullptr),
-        "second setpts(auto)");
-  if (!upsamp_matches(impl->opts.upsampfac, usf_hi)) {
-    std::fprintf(stderr, "setpts_replan: expected second auto usf %.3g, got %.3g\n",
-                 usf_hi, impl->opts.upsampfac);
+  check_finufft_call(FINUFFT_SETPTS(plan.p, Mhi, xhi.data(), yhi.data(), zhi.data(), 0,
+                                    nullptr, nullptr, nullptr),
+                     "second setpts(auto)");
+  if (!upsamp_matches(impl->opts.upsampfac, upsampfac_hi)) {
+    std::fprintf(stderr, "setpts_replan: expected second auto upsampfac %.3g, got %.3g\n",
+                 upsampfac_hi, impl->opts.upsampfac);
     return 1;
   }
 
-  check(FINUFFT_EXECUTE(plan.p, chi.data(), F_reuse.data()), "second execute(auto)");
+  check_finufft_call(FINUFFT_EXECUTE(plan.p, chi.data(), F_reuse.data()),
+                     "second execute(auto)");
 
-  check(FINUFFT_MAKEPLAN(type, dim, Ns, isign, ntrans, tol, &fresh.p, &opts),
-        "fresh makeplan(auto)");
-  check(FINUFFT_SETPTS(fresh.p, Mhi, xhi.data(), yhi.data(), zhi.data(), 0, nullptr,
-                       nullptr, nullptr),
-        "fresh setpts(auto)");
+  check_finufft_call(FINUFFT_MAKEPLAN(type, dim, Ns, isign, ntrans, tol, &fresh.p, &opts),
+                     "fresh makeplan(auto)");
+  check_finufft_call(FINUFFT_SETPTS(fresh.p, Mhi, xhi.data(), yhi.data(), zhi.data(), 0,
+                                    nullptr, nullptr, nullptr),
+                     "fresh setpts(auto)");
   auto *fresh_impl = reinterpret_cast<FINUFFT_PLAN_T<FLT> *>(fresh.p);
-  if (!upsamp_matches(fresh_impl->opts.upsampfac, usf_hi)) {
-    std::fprintf(stderr, "setpts_replan: expected fresh auto usf %.3g, got %.3g\n",
-                 usf_hi, fresh_impl->opts.upsampfac);
+  if (!upsamp_matches(fresh_impl->opts.upsampfac, upsampfac_hi)) {
+    std::fprintf(stderr, "setpts_replan: expected fresh auto upsampfac %.3g, got %.3g\n",
+                 upsampfac_hi, fresh_impl->opts.upsampfac);
     return 1;
   }
-  check(FINUFFT_EXECUTE(fresh.p, chi.data(), F_fresh.data()), "fresh execute(auto)");
+  check_finufft_call(FINUFFT_EXECUTE(fresh.p, chi.data(), F_fresh.data()),
+                     "fresh execute(auto)");
 
   dirft3d1(Mhi, xhi, yhi, zhi, chi, isign, Ns[0], Ns[1], Ns[2], F_ref);
   const FLT reuse_vs_fresh = relerrtwonorm(N, F_fresh.data(), F_reuse.data());
@@ -152,14 +154,14 @@ int test_type12_auto_replan() {
   if (reuse_vs_fresh > allowed_err || reuse_vs_ref > allowed_err) {
     std::fprintf(
         stderr,
-        "setpts_replan: auto type12 mismatch (reuse/fresh=%.3g, reuse/ref=%.3g)\n",
+        "setpts_replan: auto type1 mismatch (reuse/fresh=%.3g, reuse/ref=%.3g)\n",
         reuse_vs_fresh, reuse_vs_ref);
     return 1;
   }
   return 0;
 }
 
-int test_type12_locked() {
+int test_type1_locked_reuse() {
   constexpr int type     = 1;
   constexpr int dim      = 3;
   constexpr int isign    = +1;
@@ -189,41 +191,44 @@ int test_type12_locked() {
   fill_type1_points(xhi, yhi, zhi, chi, FLT(0.9));
 
   PlanGuard plan, fresh;
-  check(FINUFFT_MAKEPLAN(type, dim, Ns, isign, ntrans, tol, &plan.p, &opts),
-        "makeplan(locked)");
+  check_finufft_call(FINUFFT_MAKEPLAN(type, dim, Ns, isign, ntrans, tol, &plan.p, &opts),
+                     "makeplan(locked)");
 
-  check(FINUFFT_SETPTS(plan.p, Mlo, xlo.data(), ylo.data(), zlo.data(), 0, nullptr,
-                       nullptr, nullptr),
-        "first setpts(locked)");
+  check_finufft_call(FINUFFT_SETPTS(plan.p, Mlo, xlo.data(), ylo.data(), zlo.data(), 0,
+                                    nullptr, nullptr, nullptr),
+                     "first setpts(locked)");
   auto *impl = reinterpret_cast<FINUFFT_PLAN_T<FLT> *>(plan.p);
   if (!upsamp_matches(impl->opts.upsampfac, opts.upsampfac)) {
-    std::fprintf(stderr, "setpts_replan: locked usf changed after first setpts\n");
+    std::fprintf(stderr, "setpts_replan: locked upsampfac changed after first setpts\n");
     return 1;
   }
 
-  check(FINUFFT_EXECUTE(plan.p, clo.data(), Flo.data()), "first execute(locked)");
+  check_finufft_call(FINUFFT_EXECUTE(plan.p, clo.data(), Flo.data()),
+                     "first execute(locked)");
 
-  check(FINUFFT_SETPTS(plan.p, Mhi, xhi.data(), yhi.data(), zhi.data(), 0, nullptr,
-                       nullptr, nullptr),
-        "second setpts(locked)");
+  check_finufft_call(FINUFFT_SETPTS(plan.p, Mhi, xhi.data(), yhi.data(), zhi.data(), 0,
+                                    nullptr, nullptr, nullptr),
+                     "second setpts(locked)");
   if (!upsamp_matches(impl->opts.upsampfac, opts.upsampfac)) {
-    std::fprintf(stderr, "setpts_replan: locked usf changed after second setpts\n");
+    std::fprintf(stderr, "setpts_replan: locked upsampfac changed after second setpts\n");
     return 1;
   }
 
-  check(FINUFFT_EXECUTE(plan.p, chi.data(), F_reuse.data()), "second execute(locked)");
+  check_finufft_call(FINUFFT_EXECUTE(plan.p, chi.data(), F_reuse.data()),
+                     "second execute(locked)");
 
-  check(FINUFFT_MAKEPLAN(type, dim, Ns, isign, ntrans, tol, &fresh.p, &opts),
-        "fresh makeplan(locked)");
-  check(FINUFFT_SETPTS(fresh.p, Mhi, xhi.data(), yhi.data(), zhi.data(), 0, nullptr,
-                       nullptr, nullptr),
-        "fresh setpts(locked)");
-  check(FINUFFT_EXECUTE(fresh.p, chi.data(), F_fresh.data()), "fresh execute(locked)");
+  check_finufft_call(FINUFFT_MAKEPLAN(type, dim, Ns, isign, ntrans, tol, &fresh.p, &opts),
+                     "fresh makeplan(locked)");
+  check_finufft_call(FINUFFT_SETPTS(fresh.p, Mhi, xhi.data(), yhi.data(), zhi.data(), 0,
+                                    nullptr, nullptr, nullptr),
+                     "fresh setpts(locked)");
+  check_finufft_call(FINUFFT_EXECUTE(fresh.p, chi.data(), F_fresh.data()),
+                     "fresh execute(locked)");
 
   const FLT reuse_vs_fresh = relerrtwonorm(N, F_fresh.data(), F_reuse.data());
 
   if (reuse_vs_fresh > allowed_err) {
-    std::fprintf(stderr, "setpts_replan: locked type12 mismatch (reuse/fresh=%.3g)\n",
+    std::fprintf(stderr, "setpts_replan: locked type1 mismatch (reuse/fresh=%.3g)\n",
                  reuse_vs_fresh);
     return 1;
   }
@@ -256,9 +261,9 @@ int test_type2_auto_replan() {
 
   const double density_lo = double(Mlo) / double(N);
   const double density_hi = double(Mhi) / double(N);
-  const double usf_lo     = finufft::heuristics::bestUpsamplingFactor<FLT>(
+  const double upsampfac_lo = finufft::heuristics::bestUpsamplingFactor<FLT>(
       opts.nthreads, density_lo, dim, type, tol);
-  const double usf_hi = finufft::heuristics::bestUpsamplingFactor<FLT>(
+  const double upsampfac_hi = finufft::heuristics::bestUpsamplingFactor<FLT>(
       opts.nthreads, density_hi, dim, type, tol);
 
   std::vector<FLT> xlo(Mlo), ylo(Mlo), zlo(Mlo);
@@ -270,44 +275,50 @@ int test_type2_auto_replan() {
   fill_modes_3d(F, FLT(0.3));
 
   PlanGuard plan, fresh;
-  check(FINUFFT_MAKEPLAN(type, dim, Ns, isign, ntrans, tol, &plan.p, &opts),
-        "makeplan(type2 auto)");
+  check_finufft_call(FINUFFT_MAKEPLAN(type, dim, Ns, isign, ntrans, tol, &plan.p, &opts),
+                     "makeplan(type2 auto)");
 
-  check(FINUFFT_SETPTS(plan.p, Mlo, xlo.data(), ylo.data(), zlo.data(), 0, nullptr,
-                       nullptr, nullptr),
-        "first setpts(type2 auto)");
+  check_finufft_call(FINUFFT_SETPTS(plan.p, Mlo, xlo.data(), ylo.data(), zlo.data(), 0,
+                                    nullptr, nullptr, nullptr),
+                     "first setpts(type2 auto)");
   auto *impl = reinterpret_cast<FINUFFT_PLAN_T<FLT> *>(plan.p);
-  if (!upsamp_matches(impl->opts.upsampfac, usf_lo)) {
-    std::fprintf(stderr, "setpts_replan: expected first type2 auto usf %.3g, got %.3g\n",
-                 usf_lo, impl->opts.upsampfac);
+  if (!upsamp_matches(impl->opts.upsampfac, upsampfac_lo)) {
+    std::fprintf(stderr,
+                 "setpts_replan: expected first type2 auto upsampfac %.3g, got %.3g\n",
+                 upsampfac_lo, impl->opts.upsampfac);
     return 1;
   }
 
-  check(FINUFFT_EXECUTE(plan.p, clo.data(), F.data()), "first execute(type2 auto)");
+  check_finufft_call(FINUFFT_EXECUTE(plan.p, clo.data(), F.data()),
+                     "first execute(type2 auto)");
 
-  check(FINUFFT_SETPTS(plan.p, Mhi, xhi.data(), yhi.data(), zhi.data(), 0, nullptr,
-                       nullptr, nullptr),
-        "second setpts(type2 auto)");
-  if (!upsamp_matches(impl->opts.upsampfac, usf_hi)) {
-    std::fprintf(stderr, "setpts_replan: expected second type2 auto usf %.3g, got %.3g\n",
-                 usf_hi, impl->opts.upsampfac);
+  check_finufft_call(FINUFFT_SETPTS(plan.p, Mhi, xhi.data(), yhi.data(), zhi.data(), 0,
+                                    nullptr, nullptr, nullptr),
+                     "second setpts(type2 auto)");
+  if (!upsamp_matches(impl->opts.upsampfac, upsampfac_hi)) {
+    std::fprintf(stderr,
+                 "setpts_replan: expected second type2 auto upsampfac %.3g, got %.3g\n",
+                 upsampfac_hi, impl->opts.upsampfac);
     return 1;
   }
 
-  check(FINUFFT_EXECUTE(plan.p, c_reuse.data(), F.data()), "second execute(type2 auto)");
+  check_finufft_call(FINUFFT_EXECUTE(plan.p, c_reuse.data(), F.data()),
+                     "second execute(type2 auto)");
 
-  check(FINUFFT_MAKEPLAN(type, dim, Ns, isign, ntrans, tol, &fresh.p, &opts),
-        "fresh makeplan(type2 auto)");
-  check(FINUFFT_SETPTS(fresh.p, Mhi, xhi.data(), yhi.data(), zhi.data(), 0, nullptr,
-                       nullptr, nullptr),
-        "fresh setpts(type2 auto)");
+  check_finufft_call(FINUFFT_MAKEPLAN(type, dim, Ns, isign, ntrans, tol, &fresh.p, &opts),
+                     "fresh makeplan(type2 auto)");
+  check_finufft_call(FINUFFT_SETPTS(fresh.p, Mhi, xhi.data(), yhi.data(), zhi.data(), 0,
+                                    nullptr, nullptr, nullptr),
+                     "fresh setpts(type2 auto)");
   auto *fresh_impl = reinterpret_cast<FINUFFT_PLAN_T<FLT> *>(fresh.p);
-  if (!upsamp_matches(fresh_impl->opts.upsampfac, usf_hi)) {
-    std::fprintf(stderr, "setpts_replan: expected fresh type2 auto usf %.3g, got %.3g\n",
-                 usf_hi, fresh_impl->opts.upsampfac);
+  if (!upsamp_matches(fresh_impl->opts.upsampfac, upsampfac_hi)) {
+    std::fprintf(stderr,
+                 "setpts_replan: expected fresh type2 auto upsampfac %.3g, got %.3g\n",
+                 upsampfac_hi, fresh_impl->opts.upsampfac);
     return 1;
   }
-  check(FINUFFT_EXECUTE(fresh.p, c_fresh.data(), F.data()), "fresh execute(type2 auto)");
+  check_finufft_call(FINUFFT_EXECUTE(fresh.p, c_fresh.data(), F.data()),
+                     "fresh execute(type2 auto)");
 
   dirft3d2(Mhi, xhi, yhi, zhi, c_ref, isign, Ns[0], Ns[1], Ns[2], F);
   const FLT reuse_vs_fresh = relerrtwonorm(Mhi, c_fresh.data(), c_reuse.data());
@@ -323,7 +334,7 @@ int test_type2_auto_replan() {
   return 0;
 }
 
-int test_type3_plan_reuse() {
+int test_type3_auto_reuse() {
   constexpr int type              = 3;
   constexpr int dim               = 1;
   constexpr int isign             = +1;
@@ -346,7 +357,7 @@ int test_type3_plan_reuse() {
   opts.nthreads  = 1;
   opts.upsampfac = 0.0;
 
-  const double expected_usf =
+  const double expected_upsampfac =
       finufft::heuristics::bestUpsamplingFactor<FLT>(opts.nthreads, 1.0, dim, type, tol);
 
   std::vector<FLT> x1(M1), x2(M2), s1(NK1), s2(NK2);
@@ -357,37 +368,41 @@ int test_type3_plan_reuse() {
   fill_type3_targets(s2, FLT(0.4));
 
   PlanGuard plan, fresh;
-  check(FINUFFT_MAKEPLAN(type, dim, dummy_modes, isign, ntrans, tol, &plan.p, &opts),
-        "makeplan(type3)");
+  check_finufft_call(FINUFFT_MAKEPLAN(type, dim, dummy_modes, isign, ntrans, tol, &plan.p,
+                                      &opts),
+                     "makeplan(type3)");
 
-  check(FINUFFT_SETPTS(plan.p, M1, x1.data(), nullptr, nullptr, NK1, s1.data(), nullptr,
-                       nullptr),
-        "first setpts(type3)");
+  check_finufft_call(FINUFFT_SETPTS(plan.p, M1, x1.data(), nullptr, nullptr, NK1,
+                                    s1.data(), nullptr, nullptr),
+                     "first setpts(type3)");
   auto *impl = reinterpret_cast<FINUFFT_PLAN_T<FLT> *>(plan.p);
-  if (!upsamp_matches(impl->opts.upsampfac, expected_usf)) {
-    std::fprintf(stderr, "setpts_replan: expected type3 usf %.3g, got %.3g\n",
-                 expected_usf, impl->opts.upsampfac);
+  if (!upsamp_matches(impl->opts.upsampfac, expected_upsampfac)) {
+    std::fprintf(stderr, "setpts_replan: expected type3 upsampfac %.3g, got %.3g\n",
+                 expected_upsampfac, impl->opts.upsampfac);
     return 1;
   }
 
-  check(FINUFFT_EXECUTE(plan.p, c1.data(), F1.data()), "first execute(type3)");
+  check_finufft_call(FINUFFT_EXECUTE(plan.p, c1.data(), F1.data()), "first execute(type3)");
 
-  check(FINUFFT_SETPTS(plan.p, M2, x2.data(), nullptr, nullptr, NK2, s2.data(), nullptr,
-                       nullptr),
-        "second setpts(type3)");
-  if (!upsamp_matches(impl->opts.upsampfac, expected_usf)) {
-    std::fprintf(stderr, "setpts_replan: type3 usf changed after second setpts\n");
+  check_finufft_call(FINUFFT_SETPTS(plan.p, M2, x2.data(), nullptr, nullptr, NK2,
+                                    s2.data(), nullptr, nullptr),
+                     "second setpts(type3)");
+  if (!upsamp_matches(impl->opts.upsampfac, expected_upsampfac)) {
+    std::fprintf(stderr, "setpts_replan: type3 upsampfac changed after second setpts\n");
     return 1;
   }
 
-  check(FINUFFT_EXECUTE(plan.p, c2.data(), F_reuse.data()), "second execute(type3)");
+  check_finufft_call(FINUFFT_EXECUTE(plan.p, c2.data(), F_reuse.data()),
+                     "second execute(type3)");
 
-  check(FINUFFT_MAKEPLAN(type, dim, dummy_modes, isign, ntrans, tol, &fresh.p, &opts),
-        "fresh makeplan(type3)");
-  check(FINUFFT_SETPTS(fresh.p, M2, x2.data(), nullptr, nullptr, NK2, s2.data(), nullptr,
-                       nullptr),
-        "fresh setpts(type3)");
-  check(FINUFFT_EXECUTE(fresh.p, c2.data(), F_fresh.data()), "fresh execute(type3)");
+  check_finufft_call(FINUFFT_MAKEPLAN(type, dim, dummy_modes, isign, ntrans, tol, &fresh.p,
+                                      &opts),
+                     "fresh makeplan(type3)");
+  check_finufft_call(FINUFFT_SETPTS(fresh.p, M2, x2.data(), nullptr, nullptr, NK2,
+                                    s2.data(), nullptr, nullptr),
+                     "fresh setpts(type3)");
+  check_finufft_call(FINUFFT_EXECUTE(fresh.p, c2.data(), F_fresh.data()),
+                     "fresh execute(type3)");
 
   dirft1d3(M2, x2, c2, isign, NK2, s2, F_ref);
   const FLT reuse_vs_fresh = relerrtwonorm(NK2, F_fresh.data(), F_reuse.data());
@@ -395,7 +410,7 @@ int test_type3_plan_reuse() {
 
   if (reuse_vs_fresh > allowed_err || reuse_vs_ref > allowed_err) {
     std::fprintf(stderr,
-                 "setpts_replan: type3 mismatch (reuse/fresh=%.3g, reuse/ref=%.3g)\n",
+                 "setpts_replan: auto type3 mismatch (reuse/fresh=%.3g, reuse/ref=%.3g)\n",
                  reuse_vs_fresh, reuse_vs_ref);
     return 1;
   }
@@ -433,36 +448,43 @@ int test_type3_locked_reuse() {
   fill_type3_targets(s2, FLT(0.6));
 
   PlanGuard plan, fresh;
-  check(FINUFFT_MAKEPLAN(type, dim, dummy_modes, isign, ntrans, tol, &plan.p, &opts),
-        "makeplan(type3 locked)");
+  check_finufft_call(FINUFFT_MAKEPLAN(type, dim, dummy_modes, isign, ntrans, tol, &plan.p,
+                                      &opts),
+                     "makeplan(type3 locked)");
 
-  check(FINUFFT_SETPTS(plan.p, M1, x1.data(), nullptr, nullptr, NK1, s1.data(), nullptr,
-                       nullptr),
-        "first setpts(type3 locked)");
+  check_finufft_call(FINUFFT_SETPTS(plan.p, M1, x1.data(), nullptr, nullptr, NK1,
+                                    s1.data(), nullptr, nullptr),
+                     "first setpts(type3 locked)");
   auto *impl = reinterpret_cast<FINUFFT_PLAN_T<FLT> *>(plan.p);
   if (!upsamp_matches(impl->opts.upsampfac, opts.upsampfac)) {
-    std::fprintf(stderr, "setpts_replan: locked type3 usf changed after first setpts\n");
+    std::fprintf(stderr,
+                 "setpts_replan: locked type3 upsampfac changed after first setpts\n");
     return 1;
   }
 
-  check(FINUFFT_EXECUTE(plan.p, c1.data(), F1.data()), "first execute(type3 locked)");
+  check_finufft_call(FINUFFT_EXECUTE(plan.p, c1.data(), F1.data()),
+                     "first execute(type3 locked)");
 
-  check(FINUFFT_SETPTS(plan.p, M2, x2.data(), nullptr, nullptr, NK2, s2.data(), nullptr,
-                       nullptr),
-        "second setpts(type3 locked)");
+  check_finufft_call(FINUFFT_SETPTS(plan.p, M2, x2.data(), nullptr, nullptr, NK2,
+                                    s2.data(), nullptr, nullptr),
+                     "second setpts(type3 locked)");
   if (!upsamp_matches(impl->opts.upsampfac, opts.upsampfac)) {
-    std::fprintf(stderr, "setpts_replan: locked type3 usf changed after second setpts\n");
+    std::fprintf(stderr,
+                 "setpts_replan: locked type3 upsampfac changed after second setpts\n");
     return 1;
   }
 
-  check(FINUFFT_EXECUTE(plan.p, c2.data(), F_reuse.data()), "second execute(type3 locked)");
+  check_finufft_call(FINUFFT_EXECUTE(plan.p, c2.data(), F_reuse.data()),
+                     "second execute(type3 locked)");
 
-  check(FINUFFT_MAKEPLAN(type, dim, dummy_modes, isign, ntrans, tol, &fresh.p, &opts),
-        "fresh makeplan(type3 locked)");
-  check(FINUFFT_SETPTS(fresh.p, M2, x2.data(), nullptr, nullptr, NK2, s2.data(), nullptr,
-                       nullptr),
-        "fresh setpts(type3 locked)");
-  check(FINUFFT_EXECUTE(fresh.p, c2.data(), F_fresh.data()), "fresh execute(type3 locked)");
+  check_finufft_call(FINUFFT_MAKEPLAN(type, dim, dummy_modes, isign, ntrans, tol, &fresh.p,
+                                      &opts),
+                     "fresh makeplan(type3 locked)");
+  check_finufft_call(FINUFFT_SETPTS(fresh.p, M2, x2.data(), nullptr, nullptr, NK2,
+                                    s2.data(), nullptr, nullptr),
+                     "fresh setpts(type3 locked)");
+  check_finufft_call(FINUFFT_EXECUTE(fresh.p, c2.data(), F_fresh.data()),
+                     "fresh execute(type3 locked)");
 
   dirft1d3(M2, x2, c2, isign, NK2, s2, F_ref);
   const FLT reuse_vs_fresh = relerrtwonorm(NK2, F_fresh.data(), F_reuse.data());
@@ -487,10 +509,10 @@ int main() {
 #endif
 
   try {
-    if (test_type12_auto_replan() != 0) return 1;
-    if (test_type12_locked() != 0) return 1;
+    if (test_type1_auto_replan() != 0) return 1;
+    if (test_type1_locked_reuse() != 0) return 1;
     if (test_type2_auto_replan() != 0) return 1;
-    if (test_type3_plan_reuse() != 0) return 1;
+    if (test_type3_auto_reuse() != 0) return 1;
     if (test_type3_locked_reuse() != 0) return 1;
   } catch (const std::exception &) {
     return 1;

@@ -97,7 +97,7 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
     if (!upsamp_locked) {
       double density   = double(m.nj) / double(N());
       double upsampfac = bestUpsamplingFactor<TF>(opts.nthreads, density, dim, type, m.tol);
-      if (maybe_update_auto_upsampfac(upsampfac, true) && opts.debug)
+      if (update_auto_upsampfac_if_changed(upsampfac, true) && opts.debug)
         printf("[setpts] selected best upsampfac=%.3g (density=%.3g, nj=%lld)\n",
                opts.upsampfac, density, (long long)m.nj);
     }
@@ -120,7 +120,7 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
     // have a concrete upsampfac to work with. This choice is persisted so inner
     // type-2 plans will inherit it.
     double upsampfac = bestUpsamplingFactor<TF>(opts.nthreads, 1.0, dim, type, m.tol);
-    if (maybe_update_auto_upsampfac(upsampfac, false) && opts.debug > 1)
+    if (update_auto_upsampfac_if_changed(upsampfac, false) && opts.debug > 1)
       printf("[setpts t3] selected upsampfac=%.2f (density=1 used; persisted)\n",
              opts.upsampfac);
 
