@@ -90,7 +90,8 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
   };
 
   if (type != 3) { // ------------------ TYPE 1,2 SETPTS -------------------
-                   // (all we can do is check and maybe bin-sort the NU pts)
+                   // validate the NU pts, optionally refresh auto-upsamp
+                   // planning state, then bin-sort them
     // If upsampfac is not locked by user (auto mode), choose or update it now
     // based on the actual density nj/N(). Re-plan if density changed significantly.
     if (!upsamp_locked) {

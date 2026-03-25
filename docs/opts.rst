@@ -176,7 +176,7 @@ the number of requested modes in each dimension, for type 1 and 2 transforms. Fo
 As of v2.5.0, due to on-the-fly polynomial coefficient fitting, the kernel is equally efficient for an arbitrary upsampling factor greater than 1, but the useful range is around 1.2 up to 3.0.
 
 * ``upsampfac=0.0`` : use heuristics to choose a good ``upsampfac`` based on the problem.
- The value chosen is visible in the text output via setting ``debug>=1``. This default setting is recommended for most users; however, if you seek more performance you may want to set if 
+ For the guru interface this choice is deferred until ``setpts()``; in type 1 or 2 plans it is based on the current nonuniform-point density and may trigger internal spread/kernel/FFT re-setup on later ``setpts()`` calls if that density changes enough. The value chosen is visible in the text output via setting ``debug>=1``. This default setting is recommended for most users; however, if you seek more performance you may want to set it explicitly.
 
 * ``upsampfac>1.0`` : fix the upsampling factor, overriding the heuristic choice. A standard setting is 2 (which is good for achieving 9-digit or more accuracy), while a typical "low" setting is 1.25 (this reduces the RAM and FFT costs, and is good for up to 5-digit accuracy, unless the density M/N is high enough that its 50% wider spreading kernel would be counterproductive). Low upsampfac is especially efficient for type 3 transforms. Because the kernel width is limited to 16, only 9-digit accuracy can be reached when using ``upsampfac=1.25``, for instance.
 
