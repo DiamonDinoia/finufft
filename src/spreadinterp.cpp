@@ -9,19 +9,8 @@ using FLT = float;
 using FLT = double;
 #endif
 
-// Suppress re-instantiation of the per-dim symbols defined elsewhere:
-extern template void FINUFFT_PLAN_T<FLT>::spread_subproblem_dispatch<1>(
-    BIGINT, BIGINT, BIGINT, UBIGINT, UBIGINT, UBIGINT, FLT *FINUFFT_RESTRICT, UBIGINT,
-    const FLT *, const FLT *, const FLT *, const FLT *) const noexcept;
-extern template void FINUFFT_PLAN_T<FLT>::spread_subproblem_dispatch<2>(
-    BIGINT, BIGINT, BIGINT, UBIGINT, UBIGINT, UBIGINT, FLT *FINUFFT_RESTRICT, UBIGINT,
-    const FLT *, const FLT *, const FLT *, const FLT *) const noexcept;
-extern template void FINUFFT_PLAN_T<FLT>::spread_subproblem_dispatch<3>(
-    BIGINT, BIGINT, BIGINT, UBIGINT, UBIGINT, UBIGINT, FLT *FINUFFT_RESTRICT, UBIGINT,
-    const FLT *, const FLT *, const FLT *, const FLT *) const noexcept;
-extern template int FINUFFT_PLAN_T<FLT>::interpSorted_dispatch<1>(FLT *, FLT *) const;
-extern template int FINUFFT_PLAN_T<FLT>::interpSorted_dispatch<2>(FLT *, FLT *) const;
-extern template int FINUFFT_PLAN_T<FLT>::interpSorted_dispatch<3>(FLT *, FLT *) const;
+// Suppress re-instantiation of the per-dim symbols defined in spreadinterp_1d/2d/3d.cpp:
+#include <finufft/spreadinterp_extern.hpp>
 
 template int FINUFFT_PLAN_T<FLT>::spreadSorted(FLT *FINUFFT_RESTRICT, const FLT *) const;
 template int FINUFFT_PLAN_T<FLT>::interpSorted(FLT *FINUFFT_RESTRICT,

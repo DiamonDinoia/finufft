@@ -16,8 +16,8 @@
 */
 
 #include <finufft/interp.hpp>
-#include <finufft/spread.hpp>
 #include <finufft/plan.hpp>
+#include <finufft/spread.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -40,7 +40,7 @@ void FINUFFT_PLAN_T<TF>::spreadcheck() const
   // INPUT CHECKING & REPORTING .... cuboid not too small for spreading?
   const UBIGINT N1 = (UBIGINT)m.nfdim[0], N2 = (UBIGINT)m.nfdim[1],
                 N3 = (UBIGINT)m.nfdim[2];
-  UBIGINT minN = UBIGINT(2 * m.spopts.nspread);
+  UBIGINT minN     = UBIGINT(2 * m.spopts.nspread);
   if (N1 < minN || (N2 > 1 && N2 < minN) || (N3 > 1 && N3 < minN)) {
     fprintf(stderr,
             "%s error: one or more non-trivial box dims is less than 2.nspread!\n",
@@ -172,7 +172,7 @@ void FINUFFT_PLAN_T<TF>::indexSort()
   // dir=2 case:
   // don't sort
 
-  timer.start(); // if needed, sort all the NU pts...
+  timer.start();                           // if needed, sort all the NU pts...
   m.didSort    = false;
   auto maxnthr = MY_OMP_GET_MAX_THREADS(); // used if both below opts default
   if (m.spopts.nthreads > 0)
@@ -183,7 +183,7 @@ void FINUFFT_PLAN_T<TF>::indexSort()
     // store a good permutation ordering of all NU pts (dim=1,2 or 3)
     int sort_nthr = m.spopts.sort_threads; // 0, or user max # threads for sort
 #ifndef _OPENMP
-    sort_nthr = 1; // if single-threaded lib, override user
+    sort_nthr = 1;                         // if single-threaded lib, override user
 #endif
     auto grid_N = N1 * N2 * N3;
     if (sort_nthr == 0) // multithreaded auto choice: when N>>M, one thread is better!
@@ -200,7 +200,8 @@ void FINUFFT_PLAN_T<TF>::indexSort()
     for (BIGINT i = 0; i < BIGINT(M); i++) // here omp helps xeon, hinders i7
       m.sortIndices[i] = i;                // the identity permutation
     if (m.spopts.debug)
-      printf("\tnot sorted (sort=%d): \t%.3g s\n", (int)m.spopts.sort, timer.elapsedsec());
+      printf("\tnot sorted (sort=%d): \t%.3g s\n", (int)m.spopts.sort,
+             timer.elapsedsec());
   }
 }
 
@@ -330,13 +331,13 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
   using namespace finufft::spreadinterp;
   using finufft::utils::CNTime;
   // Alias plan members to local names matching the original algorithm.
-  const auto N1                 = (UBIGINT)m.nfdim[0];
-  const auto N2                 = (UBIGINT)m.nfdim[1];
-  const auto N3                 = (UBIGINT)m.nfdim[2];
-  const auto M                  = (UBIGINT)m.nj;
-  const auto *kx                = m.XYZ[0];
-  const auto *ky                = m.XYZ[1];
-  const auto *kz                = m.XYZ[2];
+  const auto N1  = (UBIGINT)m.nfdim[0];
+  const auto N2  = (UBIGINT)m.nfdim[1];
+  const auto N3  = (UBIGINT)m.nfdim[2];
+  const auto M   = (UBIGINT)m.nj;
+  const auto *kx = m.XYZ[0];
+  const auto *ky = m.XYZ[1];
+  const auto *kz = m.XYZ[2];
   CNTime timer{};
   const auto N = N1 * N2 * N3;                         // output array size
   auto nthr    = MY_OMP_GET_MAX_THREADS();             // guess # threads to use to spread
@@ -350,23 +351,13 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
   timer.start();
   std::fill(data_uniform, data_uniform + 2 * N, 0.0); // zero the output array
   if (m.spopts.debug) printf("\tzero output array\t%.3g s\n", timer.elapsedsec());
-  if (M == 0) // no NU pts, we're done
+  if (M == 0)                                         // no NU pts, we're done
     return 0;
 
-  auto spread_single = (nthr == 1) || (M * 100 < N); // low-density heuristic?
-  spread_single      = false; // for now
   timer.start();
-  if (spread_single) {
-    // ------- Basic single-core t1 spreading ------
-    for (UBIGINT j = 0; j < M; j++) {
-      // *** todo, not urgent
-      // ... (question is: will the index wrapping per NU pt slow it down?)
-    }
-    if (m.spopts.debug) printf("\tt1 simple spreading:\t%.3g s\n", timer.elapsedsec());
-  } else {
-    // ------- Fancy multi-core blocked t1 spreading ----
-    // Splits sorted inds (jfm's advanced2), could double RAM.
-    // choose nb (# subprobs) via used nthreads:
+  {
+    // Blocked spreading: splits sorted NU pts into subproblems.
+    // Choose nb (# subprobs) via used nthreads:
     auto nb = std::min((UBIGINT)nthr, M); // simply split one subprob per thr...
     if (nb * (BIGINT)m.spopts.max_subproblem_size < M) {
       // ...or more subprobs to cap size
@@ -396,7 +387,7 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
       std::vector<TF> kx0{}, ky0{}, kz0{}, dd0{}, du0{};
 #pragma omp for schedule(dynamic, 1)                     // each is big
       for (BIGINT isub = 0; isub < BIGINT(nb); isub++) { // Main loop through subproblems
-        const auto M0 = brk[isub + 1] - brk[isub];      // # NU pts in this subproblem
+        const auto M0 = brk[isub + 1] - brk[isub];       // # NU pts in this subproblem
         // copy the location and data vectors for the nonuniform points
         kx0.resize(M0);
         ky0.resize(M0 * (N2 > 1));
@@ -422,35 +413,25 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
         // allocate output data for this subgrid
         du0.resize(2 * padded_size1 * size2 * size3); // complex
         // Spread to subgrid without need for bounds checking or wrapping
-        if (dim == 1)
-          spread_subproblem_dispatch<1>(offset1, offset2, offset3, padded_size1, size2,
-                                        size3, du0.data(), M0, kx0.data(), ky0.data(),
-                                        kz0.data(), dd0.data());
-        else if (dim == 2)
-          spread_subproblem_dispatch<2>(offset1, offset2, offset3, padded_size1, size2,
-                                        size3, du0.data(), M0, kx0.data(), ky0.data(),
-                                        kz0.data(), dd0.data());
-        else if (dim == 3)
-          spread_subproblem_dispatch<3>(offset1, offset2, offset3, padded_size1, size2,
-                                        size3, du0.data(), M0, kx0.data(), ky0.data(),
-                                        kz0.data(), dd0.data());
-        else
-          FINUFFT_UNREACHABLE;
+        dispatch_dim([&](auto D) {
+          spread_subproblem_dispatch<D()>(offset1, offset2, offset3, padded_size1, size2,
+                                          size3, du0.data(), M0, kx0.data(), ky0.data(),
+                                          kz0.data(), dd0.data());
+        });
         // add subgrid to output (always do this); atomic vs critical chosen
         if (nthr > m.spopts.atomic_threshold) {
           add_wrapped_subgrid<true>(offset1, offset2, offset3, padded_size1, size1, size2,
-                                   size3, data_uniform,
-                                   du0.data()); // R Blackwell's atomic version
+                                    size3, data_uniform,
+                                    du0.data()); // R Blackwell's atomic version
         } else {
 #pragma omp critical
-          add_wrapped_subgrid<false>(offset1, offset2, offset3, padded_size1, size1, size2,
-                                    size3, data_uniform, du0.data());
+          add_wrapped_subgrid<false>(offset1, offset2, offset3, padded_size1, size1,
+                                     size2, size3, data_uniform, du0.data());
         }
       } // end main loop over subprobs
     }
     if (m.spopts.debug)
-      printf("\tt1 fancy spread: \t%.3g s (%" PRIu64 " subprobs)\n", timer.elapsedsec(),
-             nb);
-  } // end of choice of which t1 spread type to use
+      printf("\tt1 spread: \t\t%.3g s (%" PRIu64 " subprobs)\n", timer.elapsedsec(), nb);
+  }
   return 0;
 }

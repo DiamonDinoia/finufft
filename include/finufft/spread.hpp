@@ -5,8 +5,7 @@
 #include <cstddef>
 #include <numeric>
 
-namespace finufft::spreadinterp {
-} // namespace finufft::spreadinterp
+namespace finufft::spreadinterp {} // namespace finufft::spreadinterp
 
 // ---------- FINUFFT_PLAN_T spread_subproblem_*_kernel method definitions ----------
 // FINUFFT_PLAN_T is already defined via the transitive include chain:
@@ -72,16 +71,11 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_1d_kernel(
     const auto dd_pt = initialize_complex_register<simd_type>(dd[i * 2], dd[i * 2 + 1]);
     // ceil offset, hence rounding, must match that in get_subgrid...
     const auto i1 = BIGINT(std::ceil(kx[i] - ns2)); // fine grid start index
-    // T(i1) has different semantics and results an extra cast
-    const auto x1 = [i, kx]() constexpr noexcept {
-      auto x1 = std::ceil(kx[i] - ns2) - kx[i]; // x1 in [-w/2,-w/2+1], up to rounding
-      // However if N1*epsmach>O(1) then can cause O(1) errors in x1, hence ppoly
-      // kernel evaluation will fall outside their designed domains, >>1 errors.
-      // This can only happen if the overall error would be O(1) anyway. Clip x1??
-      if (x1 < -ns2) x1 = -ns2;
-      if (x1 > -ns2 + 1) x1 = -ns2 + 1;
-      return x1;
-    }();
+    // Clip x1 to [-ns/2, -ns/2+1] to guard against round-off when N1*eps_mach>O(1).
+    // Without clipping, ppoly kernel evaluation can fall outside designed domains.
+    // This can only happen when overall error is already O(1). Clipping is intentional
+    // and must be consistent with the rounding in get_subgrid to prevent segfaults.
+    const auto x1 = std::clamp(std::ceil(kx[i] - ns2) - kx[i], -ns2, T(-ns2 + 1));
     // Libin improvement: pass ker as a parameter and allocate it outside the loop
     // gcc13 + 10% speedup (relative to const auto ker = evaluate_kernel_vec...etc).
     evaluate_kernel_vector<NS, NC, T, simd_type>(ker.data(), horner_coeffs_ptr, x1);
@@ -160,21 +154,24 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_1d_kernel(
 }
 
 template<typename TF>
-template<int NS, int NC>
-FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_2d_kernel(
-    const BIGINT off1, const BIGINT off2, const UBIGINT size1, const UBIGINT size2,
-    TF *FINUFFT_RESTRICT du, const UBIGINT M, const TF *kx, const TF *ky,
-    const TF *dd) const noexcept
-/* spreader from dd (NU) to du (uniform) in 2D without wrapping.
-   See above docs/notes for spread_subproblem_2d.
-   kx,ky (size M) are NU locations in [off+ns/2,off+size-1-ns/2] in both dims.
-   dd (size M complex) are complex source strengths
-   du (size size1*size2) is complex uniform output array
-   For algoritmic details see spread_subproblem_1d_kernel.
+template<int NS, int NC, int DIM>
+FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_nd_kernel(
+    const BIGINT off1, const BIGINT off2, const BIGINT off3, const UBIGINT size1,
+    const UBIGINT size2, const UBIGINT size3, TF *FINUFFT_RESTRICT du, const UBIGINT M,
+    const TF *kx, const TF *ky, const TF *kz, const TF *dd) const noexcept
+/* Spreader from dd (NU) to du (uniform) in 2D or 3D without wrapping.
+   Templated on DIM (2 or 3) to eliminate branching. For DIM==2, kz/off3/size3 are
+   ignored. kx,ky (size M) are NU locations in [off+ns/2,off+size-1-ns/2].
+   dd (size M complex) are complex source strengths.
+   du is the complex uniform output array (size1*size2 for 2D, size1*size2*size3 for 3D).
+   DIM==1 is NOT handled here: the 1D kernel uses a fundamentally different SIMD strategy
+   (regular_part paired-load with direct ker array, not ker1val_v array-of-vectors) that
+   would regress 1D performance if merged. See spread_subproblem_1d_kernel.
    Previous arg horner_coeffs_ptr is now read from plan member horner_coeffs.data().
-   Converted to class member, Barbone 2/24/26.
+   Converted to class member, Barbone 2/24/26. Merged 2D+3D, Barbone 3/26.
 */
 {
+  static_assert(DIM == 2 || DIM == 3, "spread_subproblem_nd_kernel: DIM must be 2 or 3");
   using namespace finufft::spreadinterp;
   using finufft::common::MAX_NSPREAD;
   using T                         = TF;
@@ -185,10 +182,12 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_2d_kernel(
   static constexpr auto alignment = arch_t::alignment();
   const T *horner_coeffs_ptr      = m.horner_coeffs.data();
   // Kernel values stored in consecutive memory. This allows us to compute
-  // values in all three directions in a single kernel evaluation call.
-  static constexpr auto ns2 = NS * T(0.5);  // half spread width
-  alignas(alignment) std::array<T, 2 * MAX_NSPREAD> kernel_values{0};
-  std::fill(du, du + 2 * size1 * size2, 0); // initialized to 0 due to the padding
+  // values in all directions in a single kernel evaluation call.
+  static constexpr auto ns2 = NS * T(0.5); // half spread width
+  alignas(alignment) std::array<T, DIM * MAX_NSPREAD> kernel_values{0};
+  const auto du_size = size1 * size2 * (DIM > 2 ? size3 : 1);
+  std::fill(du, du + 2 * du_size, 0);
+
   for (uint64_t pt = 0; pt < M; pt++) {
     // loop over NU pts
     const auto dd_pt = initialize_complex_register<simd_type>(dd[pt * 2], dd[pt * 2 + 1]);
@@ -197,12 +196,26 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_2d_kernel(
     const auto i2 = (BIGINT)std::ceil(ky[pt] - ns2);
     const auto x1 = (T)std::ceil(kx[pt] - ns2) - kx[pt];
     const auto x2 = (T)std::ceil(ky[pt] - ns2) - ky[pt];
-    evaluate_kernel_vector<NS, NC, T, simd_type>(kernel_values.data(), horner_coeffs_ptr,
-                                                 x1, x2);
+    [[maybe_unused]] BIGINT i3{};
+    [[maybe_unused]] T x3{};
+    if constexpr (DIM > 2) {
+      i3 = (BIGINT)std::ceil(kz[pt] - ns2);
+      x3 = std::ceil(kz[pt] - ns2) - kz[pt];
+    }
+
+    if constexpr (DIM == 2)
+      evaluate_kernel_vector<NS, NC, T, simd_type>(kernel_values.data(),
+                                                   horner_coeffs_ptr, x1, x2);
+    else
+      evaluate_kernel_vector<NS, NC, T, simd_type>(kernel_values.data(),
+                                                   horner_coeffs_ptr, x1, x2, x3);
     const auto *ker1 = kernel_values.data();
     const auto *ker2 = kernel_values.data() + MAX_NSPREAD;
+    [[maybe_unused]] const auto *ker3 =
+        DIM > 2 ? kernel_values.data() + 2 * MAX_NSPREAD : nullptr;
     // Combine kernel with complex source value to simplify inner loop
     // here 2* is because of complex
+    // kerval_vectors is the number of SIMD iterations needed to compute all the elements
     static constexpr uint8_t kerval_vectors = (2 * NS + padding) / simd_size;
     static_assert(kerval_vectors > 0, "kerval_vectors must be greater than 0");
     // wrapping this in a lambda gives an extra 10% speedup (gcc13)
@@ -212,107 +225,11 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_2d_kernel(
     //        re-use the registers with other data.
     const auto ker1val_v = [ker1, dd_pt]() constexpr noexcept {
       // array of simd_registers that will store the kernel values
-      std::array<simd_type, kerval_vectors> ker1val_v{};
-      // similar to the 1D case, we compute the kernel values in advance
-      // and store them in simd_registers.
       // Compared to the 1D case the difference is that here ker values are stored in
-      // an array of simd_registers.
-      // This is a hint to the compiler to keep the values in registers, instead of
-      // pushing them to the stack.
-      // Same as the 1D case, the loop is structured in a way to half the number of loads
-      // This cause an issue with the last elements, but this is handled in the
-      // `if constexpr`.
-      // For more details please read the 1D case. The difference is that
-      // here the loop is on the number of simd vectors In the 1D case the loop is on the
-      // number of elements in the kernel
-      for (uint8_t i = 0; i < (kerval_vectors & ~1); // NOLINT(*-too-small-loop-variable)
-           i += 2) {
-        const auto ker1_v  = simd_type::load_aligned(ker1 + i * simd_size / 2);
-        const auto ker1low = xsimd::swizzle(ker1_v, zip_low_index<arch_t, T>);
-        const auto ker1hi  = xsimd::swizzle(ker1_v, zip_hi_index<arch_t, T>);
-        // this initializes the entire vector registers with the same value
-        // the ker1val_v[i] looks like this:
-        // +-----------------------+
-        // |y0|y0|y0|y0|y0|y0|y0|y0|
-        // +-----------------------+
-        ker1val_v[i]     = ker1low * dd_pt;
-        ker1val_v[i + 1] = ker1hi * dd_pt; // same as above
-      }
-      if constexpr (kerval_vectors % 2) {
-        const auto ker1_v =
-            simd_type::load_unaligned(ker1 + (kerval_vectors - 1) * simd_size / 2);
-        const auto res = xsimd::swizzle(ker1_v, zip_low_index<arch_t, T>) * dd_pt;
-        ker1val_v[kerval_vectors - 1] = res;
-      }
-      return ker1val_v;
-    }();
-
-    // critical inner loop:
-    for (auto dy = 0; dy < NS; ++dy) {
-      const auto j = size1 * (i2 - off2 + dy) + i1 - off1; // should be in subgrid
-      auto *FINUFFT_RESTRICT trg = du + 2 * j;
-      const simd_type kerval_v(ker2[dy]);
-      for (uint8_t i = 0; i < kerval_vectors; ++i) {
-        const auto trg_v  = simd_type::load_unaligned(trg + i * simd_size);
-        const auto result = xsimd::fma(kerval_v, ker1val_v[i], trg_v);
-        result.store_unaligned(trg + i * simd_size);
-      }
-    }
-  }
-}
-
-template<typename TF>
-template<int NS, int NC>
-FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_3d_kernel(
-    const BIGINT off1, const BIGINT off2, const BIGINT off3, const UBIGINT size1,
-    const UBIGINT size2, const UBIGINT size3, TF *FINUFFT_RESTRICT du, const UBIGINT M,
-    const TF *kx, const TF *ky, const TF *kz, const TF *dd) const noexcept
-// 3D version of spread_subproblem_1d_kernel.
-// Previous arg horner_coeffs_ptr is now read from plan member horner_coeffs.data().
-// Converted to class member, Barbone 2/24/26.
-{
-  using namespace finufft::spreadinterp;
-  using finufft::common::MAX_NSPREAD;
-  using T                         = TF;
-  using simd_type                 = PaddedSIMD<T, 2 * NS>;
-  using arch_t                    = typename simd_type::arch_type;
-  static constexpr auto padding   = get_padding<T, 2 * NS>();
-  static constexpr auto simd_size = simd_type::size;
-  static constexpr auto alignment = arch_t::alignment();
-  const T *horner_coeffs_ptr      = m.horner_coeffs.data();
-
-  static constexpr auto ns2 = NS * T(0.5); // half spread width
-  alignas(alignment) std::array<T, 3 * MAX_NSPREAD> kernel_values{0};
-  std::fill(du, du + 2 * size1 * size2 * size3, 0);
-
-  for (uint64_t pt = 0; pt < M; pt++) {
-    // loop over NU pts
-    const auto dd_pt = initialize_complex_register<simd_type>(dd[pt * 2], dd[pt * 2 + 1]);
-    // ceil offset, hence rounding, must match that in get_subgrid...
-    const auto i1 = (BIGINT)std::ceil(kx[pt] - ns2); // fine grid start indices
-    const auto i2 = (BIGINT)std::ceil(ky[pt] - ns2);
-    const auto i3 = (BIGINT)std::ceil(kz[pt] - ns2);
-    const auto x1 = std::ceil(kx[pt] - ns2) - kx[pt];
-    const auto x2 = std::ceil(ky[pt] - ns2) - ky[pt];
-    const auto x3 = std::ceil(kz[pt] - ns2) - kz[pt];
-
-    evaluate_kernel_vector<NS, NC, T, simd_type>(kernel_values.data(), horner_coeffs_ptr,
-                                                 x1, x2, x3);
-    const auto *ker1 = kernel_values.data();
-    const auto *ker2 = kernel_values.data() + MAX_NSPREAD;
-    const auto *ker3 = kernel_values.data() + 2 * MAX_NSPREAD;
-    // Combine kernel with complex source value to simplify inner loop
-    // here 2* is because of complex
-    // kerval_vectors is the number of SIMD iterations needed to compute all the elements
-    static constexpr uint8_t kerval_vectors = (2 * NS + padding) / simd_size;
-    static_assert(kerval_vectors > 0, "kerval_vectors must be greater than 0");
-    const auto ker1val_v = [ker1, dd_pt]() constexpr noexcept {
+      // an array of simd_registers, hinting the compiler to keep values in registers.
+      // The loop is structured to halve the number of loads (see 1D case for details).
       std::array<simd_type, kerval_vectors> ker1val_v{};
-      // Iterate over kerval_vectors but in case the number of kerval_vectors is odd
-      // we need to handle the last batch separately
-      // to the & ~1 is to ensure that we do not iterate over the last batch if it is odd
-      // as it sets the last bit to 0
-      for (uint8_t i = 0; i < (kerval_vectors & ~1); // NOLINT(*-too-small-loop-variable
+      for (uint8_t i = 0; i < (kerval_vectors & ~1); // NOLINT(*-too-small-loop-variable)
            i += 2) {
         const auto ker1_v  = simd_type::load_aligned(ker1 + i * simd_size / 2);
         const auto ker1low = xsimd::swizzle(ker1_v, zip_low_index<arch_t, T>);
@@ -320,8 +237,6 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_3d_kernel(
         ker1val_v[i]       = ker1low * dd_pt;
         ker1val_v[i + 1]   = ker1hi * dd_pt;
       }
-      // (at compile time) check if the number of kerval_vectors is odd
-      // if it is we need to handle the last batch separately
       if constexpr (kerval_vectors % 2) {
         const auto ker1_v =
             simd_type::load_unaligned(ker1 + (kerval_vectors - 1) * simd_size / 2);
@@ -330,17 +245,28 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_3d_kernel(
       }
       return ker1val_v;
     }();
-    // critical inner loop:
-    for (uint8_t dz{0}; dz < NS; ++dz) {
-      const auto oz = size1 * size2 * (i3 - off3 + dz); // offset due to z
-      for (uint8_t dy{0}; dy < NS; ++dy) {
-        const auto j = oz + size1 * (i2 - off2 + dy) + i1 - off1; // should be in subgrid
-        auto *FINUFFT_RESTRICT trg = du + 2 * j;
-        const simd_type kerval_v(ker2[dy] * ker3[dz]);
-        for (uint8_t i{0}; i < kerval_vectors; ++i) {
-          const auto trg_v  = simd_type::load_unaligned(trg + i * simd_size);
-          const auto result = xsimd::fma(kerval_v, ker1val_v[i], trg_v);
-          result.store_unaligned(trg + i * simd_size);
+
+    // Critical inner loop: for DIM==2 iterate over dy; for DIM==3 nest dz around dy.
+    // The innermost FMA loop over kerval_vectors is shared by both the 2D and 3D paths.
+    auto spread_row = [&](auto *FINUFFT_RESTRICT trg, T outer_ker) {
+      const simd_type kerval_v(outer_ker);
+      for (uint8_t i{0}; i < kerval_vectors; ++i) {
+        const auto trg_v  = simd_type::load_unaligned(trg + i * simd_size);
+        const auto result = xsimd::fma(kerval_v, ker1val_v[i], trg_v);
+        result.store_unaligned(trg + i * simd_size);
+      }
+    };
+    if constexpr (DIM == 2) {
+      for (auto dy = 0; dy < NS; ++dy) {
+        const auto j = size1 * (i2 - off2 + dy) + i1 - off1;
+        spread_row(du + 2 * j, ker2[dy]);
+      }
+    } else {
+      for (uint8_t dz{0}; dz < NS; ++dz) {
+        const auto oz = size1 * size2 * (i3 - off3 + dz);
+        for (uint8_t dy{0}; dy < NS; ++dy) {
+          const auto j = oz + size1 * (i2 - off2 + dy) + i1 - off1;
+          spread_row(du + 2 * j, ker2[dy] * ker3[dz]);
         }
       }
     }
@@ -392,12 +318,12 @@ void FINUFFT_PLAN_T<TF>::add_wrapped_subgrid(
   // this triple loop works in all dims
   for (UBIGINT dz = 0; dz < size3; dz++) {
     // use ptr lists in each axis
-    const auto oz = N1 * N2 * o3[dz]; // offset due to z (0 in <3D)
+    const auto oz = N1 * N2 * o3[dz];                // offset due to z (0 in <3D)
     for (UBIGINT dy = 0; dy < size2; dy++) {
-      const auto oy = N1 * o2[dy] + oz; // off due to y & z (0 in 1D)
+      const auto oy              = N1 * o2[dy] + oz; // off due to y & z (0 in 1D)
       auto *FINUFFT_RESTRICT out = data_uniform + 2 * oy;
       const auto in = du0 + 2 * padded_size1 * (dy + size2 * dz); // ptr to subgrid array
-      auto o = 2 * (offset1 + N1); // 1d offset for output
+      auto o        = 2 * (offset1 + N1);                         // 1d offset for output
       for (UBIGINT j = 0; j < 2 * nlo; j++) {
         // j is really dx/2 (since re,im parts)
         accumulate(out[j + o], in[j]);
@@ -414,11 +340,16 @@ void FINUFFT_PLAN_T<TF>::add_wrapped_subgrid(
   }
 }
 
-// SIMD-vectorized bin sort helpers, templated on dimension to eliminate branching.
-// Declared on FINUFFT_PLAN_T in plan.hpp; defined here with the rest of the spread code.
+/* SIMD-vectorized bin sort helpers, templated on dimension to eliminate branching.
+   Declared on FINUFFT_PLAN_T in plan.hpp; defined here with the rest of the spread code.
+   BinIndexer precomputes binning constants (inverse bin sizes, bin counts, coordinate
+   pointers) from the plan state once at construction. It provides two methods:
+   - compute_bin_indices(offset): SIMD path computing bin indices for simd_size points.
+   - compute_bin_index(idx): scalar fallback for the tail (M not divisible by simd_size).
+   The nbins calculation uses +1 to guard against roundoff near +pi mapping to an
+   out-of-range bin index. Barbone 2/2026. */
 
-template<typename TF>
-template<int DIM> struct FINUFFT_PLAN_T<TF>::BinIndexer {
+template<typename TF> template<int DIM> struct FINUFFT_PLAN_T<TF>::BinIndexer {
   static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
 
   using simd_type                 = xsimd::batch<TF>;
@@ -445,16 +376,17 @@ template<int DIM> struct FINUFFT_PLAN_T<TF>::BinIndexer {
 
   BinIndexer(const FINUFFT_PLAN_T &plan_, double bin_size_x, double bin_size_y,
              double bin_size_z)
-      : kx(plan_.m.XYZ[0]), ky(plan_.m.XYZ[1]), kz(plan_.m.XYZ[2]), M(UBIGINT(plan_.m.nj)),
-        N1(UBIGINT(plan_.m.nfdim[0])), N2(UBIGINT(plan_.m.nfdim[1])),
-        N3(UBIGINT(plan_.m.nfdim[2])),
+      : kx(plan_.m.XYZ[0]), ky(plan_.m.XYZ[1]), kz(plan_.m.XYZ[2]),
+        M(UBIGINT(plan_.m.nj)), N1(UBIGINT(plan_.m.nfdim[0])),
+        N2(UBIGINT(plan_.m.nfdim[1])), N3(UBIGINT(plan_.m.nfdim[2])),
         // +1 allows roundoff near +pi to map to the last bin.
         nbins1(BIGINT(TF(N1) / bin_size_x + 1)),
         nbins2(DIM > 1 ? BIGINT(TF(N2) / bin_size_y + 1) : 1),
-        nbins3(DIM > 2 ? BIGINT(TF(N3) / bin_size_z + 1) : 1), nbins(nbins1 * nbins2 * nbins3),
-        inv_bin_size_x(TF(1.0 / bin_size_x)), inv_bin_size_y(TF(1.0 / bin_size_y)),
-        inv_bin_size_z(TF(1.0 / bin_size_z)), inv_bin_size_x_vec(inv_bin_size_x),
-        inv_bin_size_y_vec(inv_bin_size_y), inv_bin_size_z_vec(inv_bin_size_z) {}
+        nbins3(DIM > 2 ? BIGINT(TF(N3) / bin_size_z + 1) : 1),
+        nbins(nbins1 * nbins2 * nbins3), inv_bin_size_x(TF(1.0 / bin_size_x)),
+        inv_bin_size_y(TF(1.0 / bin_size_y)), inv_bin_size_z(TF(1.0 / bin_size_z)),
+        inv_bin_size_x_vec(inv_bin_size_x), inv_bin_size_y_vec(inv_bin_size_y),
+        inv_bin_size_z_vec(inv_bin_size_z) {}
 
   FINUFFT_ALWAYS_INLINE simd_int_type compute_bin_indices(UBIGINT offset) const {
     const auto i1 = xsimd::to_int(::finufft::spreadinterp::fold_rescale(
@@ -480,11 +412,12 @@ template<int DIM> struct FINUFFT_PLAN_T<TF>::BinIndexer {
     auto bin =
         BIGINT(::finufft::spreadinterp::fold_rescale<TF>(kx[idx], N1) * inv_bin_size_x);
     if constexpr (DIM > 1)
-      bin += nbins1 *
-             BIGINT(::finufft::spreadinterp::fold_rescale<TF>(ky[idx], N2) * inv_bin_size_y);
+      bin += nbins1 * BIGINT(::finufft::spreadinterp::fold_rescale<TF>(ky[idx], N2) *
+                             inv_bin_size_y);
     if constexpr (DIM > 2)
-      bin += nbins1 * nbins2
-             * BIGINT(::finufft::spreadinterp::fold_rescale<TF>(kz[idx], N3) * inv_bin_size_z);
+      bin +=
+          nbins1 * nbins2 *
+          BIGINT(::finufft::spreadinterp::fold_rescale<TF>(kz[idx], N3) * inv_bin_size_z);
     return bin;
   }
 };
@@ -558,7 +491,7 @@ void FINUFFT_PLAN_T<TF>::bin_sort_singlethread_dim(double bin_size_x, double bin
     }
   }
   for (; i < bin_indexer.M; ++i) {
-    const auto bin   = bin_indexer.compute_bin_index(i);
+    const auto bin            = bin_indexer.compute_bin_index(i);
     sort_indices[counts[bin]] = BIGINT(i);
     ++counts[bin];
   }
@@ -590,8 +523,7 @@ void FINUFFT_PLAN_T<TF>::bin_sort_multithread_dim(double bin_size_x, double bin_
   int nt = std::min(bin_indexer.M, UBIGINT(nthr));
   std::vector<UBIGINT> brk(nt + 1);
 
-  for (int t = 0; t <= nt; ++t)
-    brk[t] = (UBIGINT)(0.5 + bin_indexer.M * t / (double)nt);
+  for (int t = 0; t <= nt; ++t) brk[t] = (UBIGINT)(0.5 + bin_indexer.M * t / (double)nt);
 
   std::vector<std::vector<uint32_t>> counts(nt);
   std::vector<uint32_t> bin_offset(bin_indexer.nbins);
@@ -674,35 +606,17 @@ void FINUFFT_PLAN_T<TF>::bin_sort_multithread_dim(double bin_size_x, double bin_
 template<typename TF>
 void FINUFFT_PLAN_T<TF>::bin_sort_singlethread(double bin_size_x, double bin_size_y,
                                                double bin_size_z) {
-  switch (dim) {
-  case 1:
-    bin_sort_singlethread_dim<1>(bin_size_x, bin_size_y, bin_size_z);
-    return;
-  case 2:
-    bin_sort_singlethread_dim<2>(bin_size_x, bin_size_y, bin_size_z);
-    return;
-  case 3:
-    bin_sort_singlethread_dim<3>(bin_size_x, bin_size_y, bin_size_z);
-    return;
-  }
-  FINUFFT_UNREACHABLE;
+  dispatch_dim([&](auto D) {
+    bin_sort_singlethread_dim<D()>(bin_size_x, bin_size_y, bin_size_z);
+  });
 }
 
 template<typename TF>
 void FINUFFT_PLAN_T<TF>::bin_sort_multithread(double bin_size_x, double bin_size_y,
                                               double bin_size_z, int nthr) {
-  switch (dim) {
-  case 1:
-    bin_sort_multithread_dim<1>(bin_size_x, bin_size_y, bin_size_z, nthr);
-    return;
-  case 2:
-    bin_sort_multithread_dim<2>(bin_size_x, bin_size_y, bin_size_z, nthr);
-    return;
-  case 3:
-    bin_sort_multithread_dim<3>(bin_size_x, bin_size_y, bin_size_z, nthr);
-    return;
-  }
-  FINUFFT_UNREACHABLE;
+  dispatch_dim([&](auto D) {
+    bin_sort_multithread_dim<D()>(bin_size_x, bin_size_y, bin_size_z, nthr);
+  });
 }
 
 template<typename TF>
@@ -757,9 +671,9 @@ void FINUFFT_PLAN_T<TF>::get_subgrid(BIGINT &offset1, BIGINT &offset2, BIGINT &o
 {
   using namespace finufft::spreadinterp;
   using finufft::utils::arrayrange;
-  using T       = TF;
-  const int ns  = m.spopts.nspread;
-  T ns2 = (T)ns / 2;
+  using T      = TF;
+  const int ns = m.spopts.nspread;
+  T ns2        = (T)ns / 2;
   T min_kx, max_kx; // 1st (x) dimension: get min/max of nonuniform points
   arrayrange(M, kx, &min_kx, &max_kx);
   offset1      = (BIGINT)std::ceil(min_kx - ns2); // min index touched by kernel
@@ -802,21 +716,16 @@ struct FINUFFT_PLAN_T<TF>::SpreadSubproblemDispatcher {
   const TF *ky;
   const TF *kz;
   const TF *dd;
-  template<int NS, int NC>
-  int operator()() const {
+  template<int NS, int NC> int operator()() const {
     static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
     if constexpr (!::finufft::kernel::ValidKernelParams<NS, NC>())
       return finufft::spreadinterp::report_invalid_kernel_params(NS, NC);
     else {
-      if constexpr (DIM == 1) {
+      if constexpr (DIM == 1)
         plan.template spread_subproblem_1d_kernel<NS, NC>(off1, size1, du, M, kx, dd);
-      } else if constexpr (DIM == 2) {
-        plan.template spread_subproblem_2d_kernel<NS, NC>(off1, off2, size1, size2, du,
-                                                          M, kx, ky, dd);
-      } else {
-        plan.template spread_subproblem_3d_kernel<NS, NC>(off1, off2, off3, size1, size2,
-                                                          size3, du, M, kx, ky, kz, dd);
-      }
+      else
+        plan.template spread_subproblem_nd_kernel<NS, NC, DIM>(
+            off1, off2, off3, size1, size2, size3, du, M, kx, ky, kz, dd);
       return 0;
     }
   }
@@ -840,6 +749,6 @@ void FINUFFT_PLAN_T<TF>::spread_subproblem_dispatch(
 {
   static_assert(DIM >= 1 && DIM <= 3, "DIM must be 1, 2, or 3");
   SpreadSubproblemDispatcher<DIM> dispatcher{*this, off1, off2, off3, size1, size2, size3,
-                                             du,    M,    kx,   ky,   kz,   dd};
+                                             du,    M,    kx,   ky,   kz,    dd};
   dispatch_ns_nc(dispatcher);
 }

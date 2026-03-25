@@ -95,36 +95,36 @@ private:
   // Configuration set once in the constructor stays on the plan itself.
   struct M {
     // --- Spreader configuration (computed by setup_spreadinterp) ---
-    TF tol{};                      // user tolerance, clamped to machine eps by spreader
-    finufft_spread_opts spopts{};  // spreading kernel parameters (nspread, beta, etc.)
-    int nc = 0;     // number of Horner polynomial coefficients (<= MAX_NC)
-    size_t padded_ns = 0;          // SIMD-padded kernel width
+    TF tol{};                     // user tolerance, clamped to machine eps by spreader
+    finufft_spread_opts spopts{}; // spreading kernel parameters (nspread, beta, etc.)
+    int nc           = 0;         // number of Horner polynomial coefficients (<= MAX_NC)
+    size_t padded_ns = 0;         // SIMD-padded kernel width
     alignas(64) std::array<TF, finufft::common::MAX_NSPREAD *
                                    finufft::common::MAX_NC> horner_coeffs{0};
-                                   // piecewise Horner coefficients table (ns x nc layout)
+    // piecewise Horner coefficients table (ns x nc layout)
 
     // --- Fine grid (computed by init_grid_kerFT_FFT or set_nhg_type3) ---
     std::array<BIGINT, 3> nfdim{1, 1, 1};  // upsampled grid dimensions
-    std::array<std::vector<TF>, 3> phiHat;  // FT of spreading kernel on mode grids
+    std::array<std::vector<TF>, 3> phiHat; // FT of spreading kernel on mode grids
 
     // --- NU point data (set by setpts) ---
-    BIGINT nj = 0;                 // number of nonuniform source points
-    BIGINT nk = 0;                 // number of nonuniform target freqs (type 3 only)
+    BIGINT nj = 0; // number of nonuniform source points
+    BIGINT nk = 0; // number of nonuniform target freqs (type 3 only)
     std::array<const TF *, 3> XYZ{nullptr, nullptr, nullptr};
-                                   // pointers to user's NU source coords (no alloc)
-    std::vector<BIGINT> sortIndices;  // bin-sort permutation of NU points
-    bool didSort = false;             // whether bin-sorting was applied
+    // pointers to user's NU source coords (no alloc)
+    std::vector<BIGINT> sortIndices; // bin-sort permutation of NU points
+    bool didSort = false;            // whether bin-sorting was applied
 
     // --- Type 3 workspace (set by setpts for type 3 only) ---
     std::array<const TF *, 3> STU{nullptr, nullptr, nullptr};
-                                   // pointers to user's target NU-point arrays (no alloc)
-    std::vector<TC> prephase;      // pre-phase factors for all input NU pts
-    std::vector<TC> deconv;        // 1/kernel_FT * phase at all output NU pts
-    std::array<std::vector<TF>, 3> XYZp;  // rescaled/centered source NU points (x'_j)
-    std::array<std::vector<TF>, 3> STUp;  // rescaled/centered target freqs (s'_k)
-    type3params t3P;               // type 3 rescaling/centering/phasing params
+    // pointers to user's target NU-point arrays (no alloc)
+    std::vector<TC> prephase;            // pre-phase factors for all input NU pts
+    std::vector<TC> deconv;              // 1/kernel_FT * phase at all output NU pts
+    std::array<std::vector<TF>, 3> XYZp; // rescaled/centered source NU points (x'_j)
+    std::array<std::vector<TF>, 3> STUp; // rescaled/centered target freqs (s'_k)
+    type3params t3P;                     // type 3 rescaling/centering/phasing params
     std::unique_ptr<const FINUFFT_PLAN_T<TF>> innerT2plan;
-                                   // inner type-2 plan used in step 2 of type 3
+    // inner type-2 plan used in step 2 of type 3
 
     // --- FFT plan (created in constructor or init_grid_kerFT_FFT) ---
     std::unique_ptr<Finufft_FFT_plan<TF>, Finufft_FFT_plan_deleter<TF>> fftPlan;
@@ -137,9 +137,9 @@ public:
   int dim;  // overall dimension: 1,2 or 3
 
 private:
-  int ntrans;             // how many transforms to do at once (vector or "many" mode)
-  int batchSize;          // # strength vectors to group together for FFTW, etc
-  int nbatch;             // how many batches done to cover all ntrans vectors
+  int ntrans;                 // how many transforms to do at once (vector or "many" mode)
+  int batchSize;              // # strength vectors to group together for FFTW, etc
+  int nbatch;                 // how many batches done to cover all ntrans vectors
   bool upsamp_locked = false; // true if user specified upsampfac != 0, prevents auto
                               // update
 
@@ -159,7 +159,6 @@ public:
   finufft_opts opts; // this and spopts could be made ptrs
 
 private:
-
   int execute_internal(TC *cj, TC *fk, bool adjoint = false, int ntrans_actual = -1,
                        TC *aligned_scratch = nullptr, size_t scratch_size = 0) const;
   void setup_spreadinterp(); // throws FINUFFT_ERR_EPS_TOO_SMALL if tol unachievable
@@ -174,12 +173,8 @@ private:
   template<int NS, int NC>
   void spread_subproblem_1d_kernel(BIGINT off1, UBIGINT size1, TF *FINUFFT_RESTRICT du,
                                    UBIGINT M, const TF *kx, const TF *dd) const noexcept;
-  template<int NS, int NC>
-  void spread_subproblem_2d_kernel(BIGINT off1, BIGINT off2, UBIGINT size1, UBIGINT size2,
-                                   TF *FINUFFT_RESTRICT du, UBIGINT M, const TF *kx,
-                                   const TF *ky, const TF *dd) const noexcept;
-  template<int NS, int NC>
-  void spread_subproblem_3d_kernel(BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT size1,
+  template<int NS, int NC, int DIM>
+  void spread_subproblem_nd_kernel(BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT size1,
                                    UBIGINT size2, UBIGINT size3, TF *FINUFFT_RESTRICT du,
                                    UBIGINT M, const TF *kx, const TF *ky, const TF *kz,
                                    const TF *dd) const noexcept;
@@ -216,6 +211,12 @@ private:
     using NcSeq = make_range<MIN_NC, MAX_NC>;
     return dispatch(dispatcher, std::make_tuple(DispatchParam<NsSeq>{m.spopts.nspread},
                                                 DispatchParam<NcSeq>{m.nc}));
+  }
+  // Convert runtime dim (1,2,3) to compile-time DIM via a generic callable.
+  template<typename F> decltype(auto) dispatch_dim(F &&f) const {
+    if (dim == 1) return f(std::integral_constant<int, 1>{});
+    if (dim == 2) return f(std::integral_constant<int, 2>{});
+    return f(std::integral_constant<int, 3>{});
   }
   template<int DIM>
   void spread_subproblem_dispatch(BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT size1,
@@ -300,21 +301,21 @@ inline void finufft_default_opts_t(finufft_opts *o)
   o->spread_debug = 0;
   o->showwarn     = 1;
 
-  o->nthreads           = 0;
-  o->fftw               = FINUFFT_FFT_DEFAULT; // FFTW_ESTIMATE for FFTW; -1 for DUCC0
-  o->spread_sort        = 2;
-  o->spread_kerevalmeth = 1;                   // deprecated, retained for ABI
-  o->spread_kerpad      = 1;                   // deprecated, retained for ABI
-  o->upsampfac          = 0.0;
-  o->spread_thread      = 0;
-  o->maxbatchsize       = 0;
-  o->spread_nthr_atomic = -1;
-  o->spread_max_sp_size = 0;
-  o->spread_kerformula  = 0;
+  o->nthreads            = 0;
+  o->fftw                = FINUFFT_FFT_DEFAULT; // FFTW_ESTIMATE for FFTW; -1 for DUCC0
+  o->spread_sort         = 2;
+  o->spread_kerevalmeth  = 1;                   // deprecated, retained for ABI
+  o->spread_kerpad       = 1;                   // deprecated, retained for ABI
+  o->upsampfac           = 0.0;
+  o->spread_thread       = 0;
+  o->maxbatchsize        = 0;
+  o->spread_nthr_atomic  = -1;
+  o->spread_max_sp_size  = 0;
+  o->spread_kerformula   = 0;
   o->allow_eps_too_small = 0;
-  o->fftw_lock_fun      = nullptr;
-  o->fftw_unlock_fun    = nullptr;
-  o->fftw_lock_data     = nullptr;
+  o->fftw_lock_fun       = nullptr;
+  o->fftw_unlock_fun     = nullptr;
+  o->fftw_lock_data      = nullptr;
   // sphinx tag (don't remove): @defopts_end
   FINUFFT_DIAGNOSTIC_POP
 }
