@@ -3,10 +3,15 @@ find_package(Matlab REQUIRED COMPONENTS MEX_COMPILER MX_LIBRARY)
 
 set(FINUFFT_MEX_DEFS R2008OO)
 
-# Make MEX self-contained where we can
+# Make MEX self-contained where we can.
+# Static-linking libstdc++/libgcc avoids conflicts with MATLAB's bundled
+# (older) versions, but causes heap corruption on systems where MATLAB's
+# allocator differs from glibc's (e.g. Debian sid with glibc 2.42+).
+# Disable with -DFINUFFT_MEX_STATIC_LIBCXX=OFF when the system libstdc++
+# is compatible with MATLAB's.
+option(FINUFFT_MEX_STATIC_LIBCXX "Statically link libstdc++/libgcc into MEX files" ON)
 function(make_mex_self_contained tgt)
-    if(UNIX AND NOT APPLE)
-        # Avoid MATLAB's older libstdc++ at runtime on Linux
+    if(UNIX AND NOT APPLE AND FINUFFT_MEX_STATIC_LIBCXX)
         target_link_options(${tgt} PRIVATE -static-libstdc++ -static-libgcc)
     endif()
 endfunction()
