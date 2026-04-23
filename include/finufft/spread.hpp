@@ -223,19 +223,34 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_multidim_kernel(
     //        it might also realize that some variables are not needed anymore and can
     //        re-use the registers with other data.
     const auto ker1val_v = [ker1, dd_pt]() constexpr noexcept {
-      // array of simd_registers that will store the kernel values
+      // array of simd_registers that will store the kernel values.
+      // Similar to the 1D case, we compute the kernel values in advance
+      // and store them in simd_registers.
       // Compared to the 1D case the difference is that here ker values are stored in
-      // an array of simd_registers, hinting the compiler to keep values in registers.
-      // The loop is structured to halve the number of loads (see 1D case for details).
+      // an array of simd_registers. This is a hint to the compiler to keep the values
+      // in registers, instead of pushing them to the stack.
+      // Same as the 1D case, the loop is structured in a way to halve the number of
+      // loads. This causes an issue with the last element when kerval_vectors is odd,
+      // but this is handled in the trailing `if constexpr` below.
+      // For more details please read the 1D case. The difference is that here the loop
+      // is on the number of simd vectors; in the 1D case the loop is on the number of
+      // elements in the kernel.
       std::array<simd_type, kerval_vectors> ker1val_v{};
       for (uint8_t i = 0; i < (kerval_vectors & ~1); // NOLINT(*-too-small-loop-variable)
            i += 2) {
         const auto ker1_v  = simd_type::load_aligned(ker1 + i * simd_size / 2);
         const auto ker1low = xsimd::swizzle(ker1_v, zip_low_index<arch_t, T>);
         const auto ker1hi  = xsimd::swizzle(ker1_v, zip_hi_index<arch_t, T>);
-        ker1val_v[i]       = ker1low * dd_pt;
-        ker1val_v[i + 1]   = ker1hi * dd_pt;
+        // this initializes the entire vector registers with the same value
+        // the ker1val_v[i] looks like this:
+        // +-----------------------+
+        // |y0|y0|y0|y0|y0|y0|y0|y0|
+        // +-----------------------+
+        ker1val_v[i]     = ker1low * dd_pt;
+        ker1val_v[i + 1] = ker1hi * dd_pt; // same as above
       }
+      // (at compile time) check if the number of kerval_vectors is odd;
+      // if it is we need to handle the last batch separately.
       if constexpr (kerval_vectors % 2) {
         const auto ker1_v =
             simd_type::load_unaligned(ker1 + (kerval_vectors - 1) * simd_size / 2);

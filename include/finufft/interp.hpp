@@ -30,6 +30,10 @@ FINUFFT_ALWAYS_INLINE void reduce_line_with_x_kernel(
     const std::array<simd_type, line_vectors> &line) {
   using arch_t                    = typename simd_type::arch_type;
   static constexpr auto simd_size = simd_type::size;
+  // apply x kernel to the (interleaved) line and add together.
+  // Two accumulators (res_low / res_hi) let us process pairs of SIMD vectors per
+  // iteration, halving kernel loads. The & ~1 clears the low bit so we do not
+  // iterate over an odd-sized tail here; that last batch is handled below.
   simd_type res_low{0}, res_hi{0};
   for (uint8_t i{0}; i < (line_vectors & ~1); // NOLINT(*-too-small-loop-variable)
        i += 2) {
@@ -39,6 +43,8 @@ FINUFFT_ALWAYS_INLINE void reduce_line_with_x_kernel(
     res_low            = xsimd::fma(ker1low, line[i], res_low);
     res_hi             = xsimd::fma(ker1hi, line[i + 1], res_hi);
   }
+  // (at compile time) check if the number of line_vectors is odd;
+  // if it is, we need to handle the last batch separately.
   if constexpr (line_vectors % 2) {
     const auto ker1_v =
         simd_type::load_aligned(ker1 + (line_vectors - 1) * simd_size / 2);
@@ -245,12 +251,27 @@ void interp_square(T *FINUFFT_RESTRICT target, const T *du, const T *ker1, const
    target : size 2 array (containing real,imag) of interpolated output
 
    Periodic wrapping in the du array is applied, assuming N1,N2>=ns.
-   Barnett 6/16/17. No-wrap case sped up for FMA/SIMD by Martin Reinecke 6/19/23.
-   M. Barbone July 2024: moved wrapping logic to interp_square_wrap, explicit SIMD.
+   Internally, dx,dy indices into ker array, l indices the 2*ns interleaved
+   line array, j is index in complex du array.
+   Barnett 6/16/17.
+   No-wrap case sped up for FMA/SIMD by Martin Reinecke 6/19/23, with this note:
+   "It reduces the number of arithmetic operations per "iteration" in the
+   innermost loop from 2.5 to 2, and these two can be converted easily to a
+   fused multiply-add instruction (potentially vectorized). Also the strides
+   of all invoved arrays in this loop are now 1, instead of the mixed 1 and 2
+   before. Also the accumulation onto a double[2] is limiting the vectorization
+   pretty badly. I think this is now much more analogous to the way the spread
+   operation is implemented, which has always been much faster when I tested
+   it."
+   M. Barbone July 2024: - moved the wrapping logic to interp_square_wrap
+                         - using explicit SIMD vectorization to overcome the out[2]
+                           array limitation.
+   The code is largely similar to 1D interpolation, please see the explanation there.
    x-kernel SIMD reduction now in reduce_line_with_x_kernel (shared with interp_cube).
 */
 {
   std::array<T, 2> out{0};
+  // no wrapping: avoid ptrs
   static constexpr auto padding         = get_padding<T, 2 * ns>();
   static constexpr auto simd_size       = simd_type::size;
   static constexpr uint8_t line_vectors = (2 * ns + padding) / simd_size;
@@ -259,10 +280,12 @@ void interp_square(T *FINUFFT_RESTRICT target, const T *du, const T *ker1, const
     // no wrapping: SIMD fast path
     const auto line = [du, N1, i1 = UBIGINT(i1), i2 = UBIGINT(i2),
                        ker2]() constexpr noexcept {
+      // new array `line` stores the (interleaved) du values for the current y line.
+      // block for first y line, to avoid explicitly initializing line with zeros:
+      // add remaining const-y lines to the line (expensive inner loop).
       std::array<simd_type, line_vectors> line{0};
-      // co-add y-weighted lines into a single interleaved x-line (expensive inner loop)
       for (uint8_t dy{0}; dy < ns; dy++) {
-        const auto l_ptr = du + 2 * (N1 * (i2 + dy) + i1);
+        const auto l_ptr = du + 2 * (N1 * (i2 + dy) + i1); // (see above)
         const simd_type ker2_v{ker2[dy]};
         for (uint8_t l{0}; l < line_vectors; ++l) {
           const auto du_pt = simd_type::load_unaligned(l * simd_size + l_ptr);
@@ -271,6 +294,7 @@ void interp_square(T *FINUFFT_RESTRICT target, const T *du, const T *ker1, const
       }
       return line;
     }();
+    // This is the same as 1D interpolation; see reduce_line_with_x_kernel.
     reduce_line_with_x_kernel<T, ns, simd_type, line_vectors>(out.data(), ker1, line);
   } else {
     // wraps somewhere: use ptr list
@@ -358,15 +382,26 @@ void interp_cube(T *FINUFFT_RESTRICT target, const T *du, const T *ker1, const T
    Inputs:
    du : input regular grid of size 2*N1*N2*N3 (alternating real,imag)
    ker1, ker2, ker3 : length-ns real arrays of 1d kernel evaluations
-   i1, i2, i3 : start coord indices to read du from (wrapped periodically).
+   i1 : start (left-most) x-coord index to read du from, where the indices
+        of du run from 0 to N1-1, and indices outside that range are wrapped.
+   i2 : start (bottom) y-coord index to read du from.
+   i3 : start (lowest) z-coord index to read du from.
    ns : kernel width (must be <=MAX_NSPREAD)
    Outputs:
    target : size 2 array (containing real,imag) of interpolated output
 
    Periodic wrapping in the du array is applied, assuming N1,N2,N3>=ns.
-   Barnett 6/16/17. No-wrap case sped up for FMA/SIMD by Reinecke 6/19/23.
-   Barbone July 2024: moved wrapping logic to interp_cube_wrapped, explicit SIMD.
-   x-kernel SIMD reduction now in reduce_line_with_x_kernel (shared with interp_square).
+   Internally, dx,dy,dz indices into ker array, l indices the 2*ns interleaved
+   line array, j is index in complex du array.
+   Barnett 6/16/17.
+   No-wrap case sped up for FMA/SIMD by Reinecke 6/19/23
+   (see above note in interp_square).
+   Barbone July 2024: - moved wrapping logic to interp_cube_wrapped
+                      - using explicit SIMD vectorization to overcome the out[2] array
+                        limitation.
+   The code is largely similar to 2D and 1D interpolation; please see the explanation
+   there. x-kernel SIMD reduction now in reduce_line_with_x_kernel (shared with
+   interp_square).
 */
 {
   static constexpr auto padding         = get_padding<T, 2 * ns>();
