@@ -8,7 +8,10 @@ v2.6.0-dev
   and bin-sort indexing helpers are simplified. In guru auto-upsampfac mode,
   type-1/2 plans now defer and may redo spread/kernel/FFT setup at `setpts()`
   based on current NU-point density, and type-3 auto `upsampfac` is persisted
-  across `setpts()` reuse. No API signature changes.
+  across `setpts()` reuse. No API signature changes. Internal symbol rename
+  (no ABI impact on the public C API): `spread_subproblem_Nd` ->
+  `spread_subproblem_dispatch_Nd` and `interpSorted_Nd` ->
+  `interpSorted_dispatch<N>`.
   (Barbone)
 * Added `threadsafe_execute` regression test verifying concurrent `execute()`
   calls on the same plan produce correct results. Added sanitizer mode selection

@@ -96,6 +96,9 @@
        sizes is not too large (it controls the internal fine grid size).
      * The coordinates pointed to by any used arrays x, y, z, s, t, u must
        not be changed between this call and the below execute call!
+     * M must be >= 0 and <= MAX_NU_PTS; for type 3, N has the same bounds.
+       Out-of-range values return FINUFFT_ERR_NUM_NU_PTS_INVALID (see
+       error.rst) and the setpts call does no other work.
  
  
 ::

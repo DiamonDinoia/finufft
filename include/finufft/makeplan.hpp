@@ -9,8 +9,8 @@
 #include <vector>
 
 #include <finufft/plan.hpp>
-#include <finufft/utils.hpp>
 #include <finufft/spreadinterp.hpp>
+#include <finufft/utils.hpp>
 #include <finufft_common/kernel.h>
 #include <finufft_common/utils.h>
 
@@ -27,7 +27,7 @@ void FINUFFT_PLAN_T<TF>::set_nf_type12(BIGINT ms, BIGINT *nf) const
   *nf = BIGINT(std::ceil(opts.upsampfac * double(ms))); // round up to handle small cases
   if (*nf < 2 * m.spopts.nspread) *nf = 2 * m.spopts.nspread; // otherwise spread fails
   if (*nf < MAX_NF) {
-    *nf = next235even(*nf);                               // expensive at huge nf
+    *nf = next235even(*nf);                                   // expensive at huge nf
   } else {
     fprintf(stderr,
             "[%s] nf=%.3g exceeds MAX_NF of %.3g, so exit without attempting "
@@ -77,19 +77,19 @@ void FINUFFT_PLAN_T<TF>::onedim_fseries_kernel(BIGINT nf,
   int q = (int)(2 + 3.0 * J2); // not sure why so large? (NB cannot exceed MAX_NQUAD)
   TF f[MAX_NQUAD];
   double z[2 * MAX_NQUAD], w[2 * MAX_NQUAD];
-  gaussquad(2 * q, z, w); // only half the nodes used, eg on (0,1)
+  gaussquad(2 * q, z, w);       // only half the nodes used, eg on (0,1)
   std::complex<TF> a[MAX_NQUAD];
-  for (int n = 0; n < q; ++n) {            // set up nodes z_n and vals f_n
-    z[n] *= J2;                            // rescale nodes
-                                           // vals & quadr weighs
+  for (int n = 0; n < q; ++n) { // set up nodes z_n and vals f_n
+    z[n] *= J2;                 // rescale nodes
+                                // vals & quadr weighs
     f[n] = J2 * (TF)w[n] * evaluate_kernel_runtime(TF(z[n]));
     // phase winding rates
     a[n] = -std::exp(2 * PI * std::complex<double>(0, 1) * z[n] / double(nf));
   }
   BIGINT nout = nf / 2 + 1; // how many values we're writing to
   int nt      = std::min(nout, (BIGINT)m.spopts.nthreads); // how many chunks
-  std::vector<BIGINT> brk(nt + 1);                       // start indices for each thread
-  for (int t = 0; t <= nt; ++t) // split nout mode indices btw threads
+  std::vector<BIGINT> brk(nt + 1); // start indices for each thread
+  for (int t = 0; t <= nt; ++t)    // split nout mode indices btw threads
     brk[t] = (BIGINT)(0.5 + nout * t / (double)nt);
 #pragma omp parallel num_threads(nt)
   {                                                // each thread gets own chunk to do
@@ -184,26 +184,30 @@ template<typename TF> void FINUFFT_PLAN_T<TF>::setup_spreadinterp() {
 
   // heuristic dir=1 chunking for nthr>>1, typical for intel i7 and skylake...
   m.spopts.max_subproblem_size = (dim == 1) ? 10000 : 100000; // todo: revisit
-  if (opts.spread_max_sp_size > 0)                             // override
+  if (opts.spread_max_sp_size > 0)                            // override
     m.spopts.max_subproblem_size = opts.spread_max_sp_size;
   // nthr above which switch OMP critical->atomic (add_wrapped..). R Blackwell's val:
   m.spopts.atomic_threshold =
       (opts.spread_nthr_atomic >= 0) ? opts.spread_nthr_atomic : 10;
 }
 
-template<typename TF>
-void FINUFFT_PLAN_T<TF>::refresh_spreadinterp_state(bool reinit_fft_grid) {
+template<typename TF> void FINUFFT_PLAN_T<TF>::rebuild_spreader(bool rebuild_fft_grid) {
   setup_spreadinterp();
   precompute_horner_coeffs();
-  if (reinit_fft_grid) init_grid_kerFT_FFT();
+  if (rebuild_fft_grid) init_grid_kerFT_FFT();
 }
 
 template<typename TF>
-bool FINUFFT_PLAN_T<TF>::update_auto_upsampfac_if_changed(double upsampfac,
-                                                          bool reinit_fft_grid) {
-  if (upsamp_locked || upsampfac == opts.upsampfac) return false;
-  opts.upsampfac = upsampfac;
-  refresh_spreadinterp_state(reinit_fft_grid);
+bool FINUFFT_PLAN_T<TF>::retune_upsampfac(double new_ups, bool rebuild_fft_grid) {
+  // Heuristics should always return new_ups > 1; guard so a future regression
+  // can't leave the plan in an uninitialised state (no FFT grid, no Horner).
+  if (!(new_ups > 1.0)) {
+    fprintf(stderr, "%s error: upsampfac=%.3g must be > 1\n", __func__, new_ups);
+    throw finufft::exception(FINUFFT_ERR_UPSAMPFAC_TOO_SMALL);
+  }
+  if (upsamp_locked || new_ups == opts.upsampfac) return false;
+  opts.upsampfac = new_ups;
+  rebuild_spreader(rebuild_fft_grid);
   return true;
 }
 
@@ -439,7 +443,7 @@ FINUFFT_PLAN_T<TF>::FINUFFT_PLAN_T(int type_, int dim_, const BIGINT *n_modes, i
   if (opts.upsampfac != 0.0) {
     upsamp_locked = true; // user explicitly set upsampfac, don't auto-update
     if (opts.debug) printf("\t\tuser locked upsampfac=%g\n", opts.upsampfac);
-    refresh_spreadinterp_state(type == 1 || type == 2);
+    rebuild_spreader(type == 1 || type == 2);
   }
 
   if (type == 3) { // -------------------------- type 3 (no planning) ------------

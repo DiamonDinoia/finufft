@@ -90,9 +90,11 @@ private:
   FINUFFT_PLAN_T(const FINUFFT_PLAN_T &)            = delete;
   FINUFFT_PLAN_T &operator=(const FINUFFT_PLAN_T &) = delete;
 
-  // ---------- Mutable computed state (Rust M-paradigm) ----------
-  // All state that is built up across makeplan/setpts lives here.
-  // Configuration set once in the constructor stays on the plan itself.
+  // ---------- Mutable computed state ----------
+  // All state built up across makeplan/setpts lives in struct `m` below.
+  // Configuration set once in the constructor (type, dim, ntrans, batchSize,
+  // mstu, fftSign, upsamp_locked, opts) stays directly on the plan and is
+  // treated as immutable thereafter.
   struct M {
     // --- Spreader configuration (computed by setup_spreadinterp) ---
     TF tol{};                     // user tolerance, clamped in the constructor if needed
@@ -101,8 +103,10 @@ private:
     size_t padded_ns = 0;         // SIMD-padded kernel width
     alignas(64) std::array<TF, finufft::common::MAX_NSPREAD *
                                    finufft::common::MAX_NC> horner_coeffs{0};
-    // piecewise Horner coefficient table in transposed, SIMD-padded layout:
-    // horner_coeffs[k * padded_ns + j] = kth Horner coeff for panel j
+    // Piecewise Horner coefficient table in transposed, SIMD-padded layout.
+    // horner_coeffs[k * padded_ns + j] is the coefficient of x^k on panel j,
+    // with k in [0, nc) (Horner degree) and j in [0, padded_ns) (kernel-width
+    // lane, zero-padded up from nspread to padded_ns for aligned SIMD loads).
 
     // --- Fine grid (computed by init_grid_kerFT_FFT or set_nhg_type3) ---
     std::array<BIGINT, 3> nfdim{1, 1, 1};  // upsampled grid dimensions
@@ -138,11 +142,13 @@ public:
   int dim;  // overall dimension: 1,2 or 3
 
 private:
-  int ntrans;                 // how many transforms to do at once (vector or "many" mode)
-  int batchSize;              // # strength vectors to group together for FFTW, etc
-  int nbatch;                 // how many batches done to cover all ntrans vectors
-  bool upsamp_locked = false; // true if user specified upsampfac != 0, prevents auto
-                              // update
+  int ntrans;    // how many transforms to do at once (vector or "many" mode)
+  int batchSize; // # strength vectors to group together for FFTW, etc
+  int nbatch;    // how many batches done to cover all ntrans vectors
+  // upsamp_locked: set once in the constructor and never toggled afterward.
+  // True iff the user passed a non-zero opts.upsampfac at makeplan time; in
+  // that case the value is frozen and setpts() will not auto-update it.
+  bool upsamp_locked = false;
 
 public:
   std::array<BIGINT, 3> mstu; // number of modes in x,y,z directions
@@ -164,8 +170,15 @@ private:
                        TC *aligned_scratch = nullptr, size_t scratch_size = 0) const;
   void setup_spreadinterp(); // sets m.spopts from current m.tol and opts.upsampfac
   void precompute_horner_coeffs();
-  void refresh_spreadinterp_state(bool reinit_fft_grid);
-  bool update_auto_upsampfac_if_changed(double upsampfac, bool reinit_fft_grid);
+  // Re-run the spread/kernel setup (and optionally the FFT grid) after a change
+  // to opts.upsampfac. Type-3 callers pass rebuild_fft_grid=false because the
+  // fine grid is rebuilt inside setpts() from per-dim nf after this helper runs.
+  void rebuild_spreader(bool rebuild_fft_grid);
+  // If unlocked and new_ups differs from opts.upsampfac, assign it and
+  // rebuild_spreader(rebuild_fft_grid); otherwise no-op. Precondition:
+  // new_ups > 1 (heuristic guarantee). Returns true iff a rebuild happened,
+  // so callers can gate debug prints on it.
+  bool retune_upsampfac(double new_ups, bool rebuild_fft_grid);
   void set_nf_type12(BIGINT ms, BIGINT *nf) const;
   void onedim_fseries_kernel(BIGINT nf, std::vector<TF> &fwkerhalf) const;
   void set_nhg_type3(int idim, TF S, TF X);
@@ -176,6 +189,9 @@ private:
   template<int NS, int NC>
   void spread_subproblem_1d_kernel(BIGINT off1, UBIGINT size1, TF *FINUFFT_RESTRICT du,
                                    UBIGINT M, const TF *kx, const TF *dd) const noexcept;
+  // 2D/3D only; 1D uses a distinct SIMD scheme (regular_part paired-load with
+  // direct ker array, not the ker1val_v array-of-vectors used here). See
+  // spread_subproblem_1d_kernel.
   template<int NS, int NC, int DIM>
   void spread_subproblem_multidim_kernel(
       BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT size1, UBIGINT size2, UBIGINT size3,
@@ -208,6 +224,11 @@ private:
 
   void spreadcheck() const;
   void indexSort();
+  // Run the shared (NS=nspread, NC=horner degree) compile-time dispatch on a
+  // caller-supplied Dispatcher functor. The return type is whatever the
+  // Dispatcher's operator()<NS,NC>() returns: `int` for the interp variants
+  // (propagates status code) and `void` for spread; decltype(auto) preserves
+  // either without splitting this helper into two overloads.
   template<typename Dispatcher>
   decltype(auto) dispatch_kernel_params(Dispatcher &dispatcher) const {
     using namespace finufft::common;
@@ -217,6 +238,7 @@ private:
                                                 DispatchParam<NcSeq>{m.nc}));
   }
   // Convert runtime dim (1,2,3) to compile-time DIM via a generic callable.
+  // Constructor already validates dim in {1,2,3}, so default is a hard error.
   template<typename F> decltype(auto) dispatch_dim(F &&f) const {
     switch (dim) {
     case 1:
@@ -225,10 +247,8 @@ private:
       return f(std::integral_constant<int, 2>{});
     case 3:
       return f(std::integral_constant<int, 3>{});
-    default:
-      throw finufft::exception(FINUFFT_ERR_DIM_NOTVALID);
     }
-    FINUFFT_UNREACHABLE;
+    throw finufft::exception(FINUFFT_ERR_DIM_NOTVALID);
   }
   void spread_subproblem_dispatch_1d(BIGINT off1, UBIGINT size1, TF *FINUFFT_RESTRICT du,
                                      UBIGINT M, const TF *kx,

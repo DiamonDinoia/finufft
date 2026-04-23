@@ -5,8 +5,6 @@
 #include <cstddef>
 #include <numeric>
 
-namespace finufft::spreadinterp {} // namespace finufft::spreadinterp
-
 // ---------- FINUFFT_PLAN_T spread_subproblem_*_kernel method definitions ----------
 // FINUFFT_PLAN_T is already defined via the transitive include chain:
 //   simd.hpp -> finufft/plan.hpp
@@ -348,7 +346,9 @@ void FINUFFT_PLAN_T<TF>::add_wrapped_subgrid(
    - compute_bin_indices(offset): SIMD path computing bin indices for simd_size points.
    - compute_bin_index(idx): scalar fallback for the tail (M not divisible by simd_size).
    The nbins calculation uses +1 to guard against roundoff near +pi mapping to an
-   out-of-range bin index. Barbone 2/2026. */
+   out-of-range bin index. For DIM==1, nbins2==nbins3==1 and the compile-time
+   `if constexpr` guards avoid touching ky/kz; ditto nbins3 for DIM==2.
+   Callers must pass strictly-positive bin sizes. Barbone 2/2026. */
 
 namespace finufft::spreadinterp {
 
@@ -368,10 +368,9 @@ FINUFFT_ALWAYS_INLINE void count_bins(const BinIndexer &bin_indexer, Counts &cou
 }
 
 template<typename BinIndexer, typename Counts, typename SortIndices>
-FINUFFT_ALWAYS_INLINE void scatter_points_to_bins(const BinIndexer &bin_indexer,
-                                                  Counts &counts,
-                                                  SortIndices &sort_indices, UBIGINT begin,
-                                                  UBIGINT end) {
+FINUFFT_ALWAYS_INLINE void scatter_points_to_bins(
+    const BinIndexer &bin_indexer, Counts &counts, SortIndices &sort_indices,
+    UBIGINT begin, UBIGINT end) {
   constexpr std::size_t simd_size = BinIndexer::simd_size;
   const auto simd_mask            = UBIGINT(-static_cast<BIGINT>(simd_size));
   const auto simd_end             = begin + ((end - begin) & simd_mask);
@@ -418,6 +417,10 @@ template<typename TF> template<int DIM> struct FINUFFT_PLAN_T<TF>::BinIndexer {
   const simd_type inv_bin_size_y_vec;
   const simd_type inv_bin_size_z_vec;
 
+  // bin_size_x must be strictly positive; bin_size_y/z must be strictly
+  // positive when read (DIM>1 and DIM>2 respectively). When unused, the
+  // corresponding inv_bin_size_* field may be +inf (IEEE 754) and is fine
+  // because `if constexpr` guards in the member functions below never read it.
   BinIndexer(const FINUFFT_PLAN_T &plan_, double bin_size_x, double bin_size_y,
              double bin_size_z)
       : kx(plan_.m.XYZ[0]), ky(plan_.m.XYZ[1]), kz(plan_.m.XYZ[2]),
@@ -703,8 +706,7 @@ void FINUFFT_PLAN_T<TF>::get_subgrid(BIGINT &offset1, BIGINT &offset2, BIGINT &o
 // Member function templates are not allowed in local classes (GCC restriction),
 // so this must be a proper nested class definition of FINUFFT_PLAN_T<TF>.
 
-template<typename TF>
-struct FINUFFT_PLAN_T<TF>::SpreadSubproblem1dDispatcher {
+template<typename TF> struct FINUFFT_PLAN_T<TF>::SpreadSubproblem1dDispatcher {
   const FINUFFT_PLAN_T &plan;
   BIGINT off1;
   UBIGINT size1;

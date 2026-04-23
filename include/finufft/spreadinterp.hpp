@@ -412,7 +412,10 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
         }
         // allocate output data for this subgrid
         du0.resize(2 * padded_size1 * size2 * size3); // complex
-        // Spread to subgrid without need for bounds checking or wrapping
+        // Spread to subgrid without need for bounds checking or wrapping.
+        // Kept as a runtime switch (rather than dispatch_dim) because the three
+        // dispatch_Nd overloads have different parameter lists (no ky in 1D, no
+        // kz in 2D), so they can't be uniformly invoked from a generic lambda.
         switch (dim) {
         case 1:
           spread_subproblem_dispatch_1d(offset1, padded_size1, du0.data(), M0, kx0.data(),
