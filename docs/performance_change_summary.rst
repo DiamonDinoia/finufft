@@ -13,3 +13,5 @@ FINFUFFT can use 2 backend libraries for the Fast Fourier Transform: FFTW and DU
 .. include:: performance_ducc.rst
 
 
+
+# CI smoke test for perftest workflow chain - safe to revert.
