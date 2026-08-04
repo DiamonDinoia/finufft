@@ -149,19 +149,26 @@ double best_type3(double tol, int dim, int nthreads, double nj, const double *X,
 
 /* Points per subproblem (spopts.max_subproblem_size) for dir=1 blocked spreading.
 
-  Two competing effects set this, both measured (Barbone 8/2026):
-   - each subproblem pays for a padded subgrid it must zero, write and add back,
-     costing "overhead" cells per NU point. Bigger subproblems amortize this, and
-     at low occupancy it dominates everything (measured up to 40 cells/pt in 3D).
-   - too few subproblems starve the schedule(dynamic,1) loop and inflate the
-     per-thread scratch buffers, so nb must stay a small multiple of nthreads.
-  Cache capacity is NOT a factor: L2/L3 miss counts are flat across this
-  parameter, and the best 3D setting runs a subgrid several times the size of L3.
+  Each subproblem pays for a padded subgrid it must zero, write and add back,
+  costing "overhead" cells per NU point (measured 0.02 - 40 across configs).
+  Bigger subproblems amortize that, so the target scales with overhead.
 
   overhead is estimated from the *measured* bin occupancy of the sort, not from
   the mean density nj/N: clustered inputs (MRI, radio astronomy) pack many points
   into few bins, and their true overhead is up to 60x below what mean density
   predicts, which flips the answer from "large" to "small".
+
+  Not cache capacity. L2/L3 miss counts are flat across this parameter (2D at 48
+  threads: 11.8x cycles between two settings at equal instructions and equal
+  misses), and the best 3D setting runs a subgrid several times the size of L3.
+  A cache-budget objective was measured on four microarchitectures and moved away
+  from the optimum on all of them. What the level below L2 does is untested; in
+  2D the slow settings show an IPC-0.04 serialization signature that is not work,
+  not coherency and not a miss at any measured level, and is still unexplained.
+
+  The optimum is machine-dependent in *direction* (3D uniform wants >=625k on
+  Sapphire Rapids, 10k-20k on Zen2), so the ramp deliberately sits in the flat
+  interior of the response curve rather than at any node's argmin.
 
   Inputs: dim, ns (kernel width), npts (=nj), n_occupied_bins (bins holding >=1
   pt, 0 if unsorted), bin_size[dim] (sort bin edge lengths), nthreads.
@@ -169,19 +176,26 @@ double best_type3(double tol, int dim, int nthreads, double nj, const double *X,
 */
 inline int max_subproblem_size(int dim, int ns, double npts, double n_occupied_bins,
                                const double *bin_size, int nthreads) {
-  // plateau of the balance/scratch-bound regime, and the overhead level at which
-  // amortizing subgrid cells starts to pay for a larger subproblem
+  // floor of the amortization ramp, and the overhead level at which amortizing
+  // subgrid cells starts to pay for a larger subproblem. Fitted on f64 geometry;
+  // known ~3.6% loss at f32 in 3D, where ns is 3-4 rather than 7.
   constexpr double SP_REF = 30000.0, OVERHEAD_REF = 5.0, SP_MAX = 1e6;
   if (dim == 1 || n_occupied_bins <= 0) // no occupancy measure: legacy constants
     return (dim == 1) ? 10000 : 100000;
   double cells = 1.0; // padded subgrid cells belonging to one sort bin
   for (int d = 0; d < dim; ++d) cells *= bin_size[d] + ns;
   const double overhead = cells * n_occupied_bins / npts; // ~subgrid cells per pt
-  double sp = SP_REF * std::max(1.0, overhead / OVERHEAD_REF);
-  // nb >= 4*nthreads: at nb ~ nthreads the schedule(dynamic,1) loop quantizes into
-  // whole rounds and the tail idles (measured 38% loss at nb=13 on 6 threads)
-  sp = std::min(sp, npts / (4.0 * std::max(nthreads, 1)));
-  return (int)std::max(1.0, std::min(sp, SP_MAX));
+  const double sp = std::min(SP_REF * std::max(1.0, overhead / OVERHEAD_REF), SP_MAX);
+  const double nthr = std::max(nthreads, 1);
+  // The caller takes nb = max(min(nthreads, npts), ceil(npts/sp)), so this can only
+  // *raise* the subproblem count - it cannot starve schedule(dynamic,1). What it
+  // can do is land nb just above a multiple of nthreads, where a whole extra
+  // round runs for a handful of stragglers, so round nb to a whole multiple.
+  // k == 1 means "do not cap", which is why no floor constant is needed. The
+  // second term keeps SP_MAX (a per-thread scratch RAM bound) hard after snapping.
+  const double k = std::max(std::max(1.0, std::round(std::ceil(npts / sp) / nthr)),
+                            std::ceil(npts / (SP_MAX * nthr)));
+  return (int)std::max(1.0, std::ceil(npts / (k * nthr)));
 }
 
 } // namespace finufft::heuristics

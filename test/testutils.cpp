@@ -202,6 +202,126 @@ int main(int argc, char *argv[]) {
   }
 #endif
 
+#ifndef SINGLE
+  // Blocked-spreading subproblem size picker (heuristics::max_subproblem_size).
+  // Asserts properties, not fitted values: the constants are node-dependent (the
+  // optimum moves in opposite directions across microarchitectures), the
+  // invariants below are not. Runs once, in the double build.
+  {
+    const double bin2[2] = {16, 4}, bin3[3] = {16, 4, 4};
+    const double npts_list[] = {1e4, 1e5, 1e6, 1e7, 2.24e7, 1e8};
+    const int nthr_list[] = {1, 6, 16, 32, 128};
+    // 1e7 occupied bins is enough overhead to saturate SP_MAX, where snapping nb
+    // to a multiple of nthreads could otherwise push sp back above the cap.
+    const double occ_list[] = {1.0, 1e2, 1e4, 1e6, 1e7};
+
+    for (int dim = 2; dim <= 3; ++dim) {
+      const double *bs = (dim == 2) ? bin2 : bin3;
+      for (double npts : npts_list)
+        for (int nthr : nthr_list)
+          for (double occ : occ_list) {
+            const int sp =
+                max_subproblem_size(dim, 7, npts, std::min(occ, npts), bs, nthr);
+            if (sp < 1 || sp > 1000000) {
+              printf("fail: sp=%d out of range: dim=%d npts=%.0e nthr=%d occ=%.0e\n", sp,
+                     dim, npts, nthr, occ);
+              return 1;
+            }
+            // The caller takes nb = max(nthr, ceil(npts/sp)). A count just above a
+            // multiple of nthr runs a whole extra schedule(dynamic,1) round for a
+            // few stragglers, so the picker must land on a whole multiple (or leave
+            // nb at nthr, where max() already makes the round exact).
+            const long long nb =
+                std::max((long long)nthr, (long long)std::ceil(npts / (double)sp));
+            if (nb > nthr && nb % nthr != 0) {
+              printf("fail: nb=%lld not a multiple of nthr=%d (sp=%d, dim=%d, "
+                     "npts=%.0e, occ=%.0e)\n",
+                     nb, nthr, sp, dim, npts, occ);
+              return 1;
+            }
+          }
+    }
+
+    // Small npts on many threads must not shatter into tiny subproblems: each one
+    // pays for a whole padded subgrid, so nb must stay at nthr here. (Regression:
+    // an earlier unfloored balance cap elected sp=19 for npts=1e4 at 128 threads,
+    // i.e. 527 subproblems, costing up to +40%.)
+    for (double npts : {1e4, 1e5})
+      for (int nthr : {32, 128}) {
+        const int sp = max_subproblem_size(3, 7, npts, npts / 5, bin3, nthr);
+        if (std::ceil(npts / (double)sp) > nthr) {
+          printf("fail: npts=%.0e on %d threads shattered into %.0f subproblems\n", npts,
+                 nthr, std::ceil(npts / (double)sp));
+          return 1;
+        }
+      }
+
+    // Clustering must not elect a larger subproblem than the uniform case: packing
+    // the same points into fewer bins lowers the per-point subgrid overhead, which
+    // is the whole reason this reads measured occupancy instead of mean density.
+    for (int dim = 2; dim <= 3; ++dim) {
+      const double *bs = (dim == 2) ? bin2 : bin3;
+      const double npts = 1e7;
+      const int sp_unif = max_subproblem_size(dim, 7, npts, 1e6, bs, 16);
+      const int sp_clust = max_subproblem_size(dim, 7, npts, 1e4, bs, 16);
+      if (sp_clust > sp_unif) {
+        printf("fail: clustered sp (%d) exceeds uniform (%d) in %dD\n", sp_clust, sp_unif,
+               dim);
+        return 1;
+      }
+    }
+
+    // Fallbacks when there is no occupancy measure (1D, or an unsorted point set).
+    if (max_subproblem_size(1, 7, 1e7, 1e5, bin2, 16) != 10000 ||
+        max_subproblem_size(2, 7, 1e7, 0, bin2, 16) != 100000) {
+      printf("fail: legacy fallback values changed\n");
+      return 1;
+    }
+  }
+#endif
+
+  // The blocked spread path (nb > 1) must agree with the single-subproblem path.
+  // No other test reaches it: ctest's transforms all run nb == 1, so this is the
+  // only coverage of subproblem decomposition. Changing nb changes the add-back
+  // summation order, so compare to tolerance, not bit-equality.
+  {
+    const BIGINT M = 200000, N1 = 256, N2 = 256;
+    const FLT tol = (FLT)(sizeof(FLT) == 4 ? 1e-4 : 1e-9);
+    std::vector<FLT> x(M), y(M);
+    std::vector<CPX> c(M), F_blocked(N1 * N2), F_single(N1 * N2);
+    for (BIGINT j = 0; j < M; ++j) { // deterministic, spread over the box
+      x[j] = (FLT)(M_PI * (2.0 * ((j * 2654435761u) % 1000003) / 1000003.0 - 1.0));
+      y[j] = (FLT)(M_PI * (2.0 * ((j * 40503u) % 999983) / 999983.0 - 1.0));
+      c[j] = CPX((FLT)(1.0 - 2.0 * (j % 3)), (FLT)(0.5 * (j % 5)));
+    }
+    BIGINT Ns[2] = {N1, N2};
+    // 1000 pts/subproblem forces nb = 200; a huge cap leaves nb = nthreads.
+    const int sp_forced[2] = {1000, 1 << 30};
+    std::vector<CPX> *out[2] = {&F_blocked, &F_single};
+    for (int k = 0; k < 2; ++k) {
+      finufft_opts o;
+      FINUFFT_DEFAULT_OPTS(&o);
+      o.spread_max_sp_size = sp_forced[k];
+      FINUFFT_PLAN p;
+      if (FINUFFT_MAKEPLAN(1, 2, Ns, 1, 1, tol, &p, &o)) {
+        printf("fail: makeplan failed in blocked-spread test\n");
+        return 1;
+      }
+      FINUFFT_SETPTS(p, M, x.data(), y.data(), nullptr, 0, nullptr, nullptr, nullptr);
+      FINUFFT_EXECUTE(p, c.data(), out[k]->data());
+      FINUFFT_DESTROY(p);
+    }
+    const auto err = relerrtwonorm(N1 * N2, F_single.data(), F_blocked.data());
+    // nb changes the add-back summation order, so bound on eps rather than tol:
+    // measured 1.1e-14 (f64) and 3.7e-6 (f32), ~30x inside this bound, while a
+    // one-point-per-boundary add-back bug would give 200/2e5 = 1e-3.
+    if (!(err < 1000 * (FLT)std::numeric_limits<FLT>::epsilon())) {
+      printf("fail: blocked (nb=200) vs single-subproblem spread differ: %.3g\n",
+             (double)err);
+      return 1;
+    }
+  }
+
 #ifdef SINGLE
   printf("testutilsf passed.\n");
 #else

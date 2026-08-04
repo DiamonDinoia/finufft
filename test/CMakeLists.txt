@@ -56,14 +56,18 @@ endif()
 # testutils also unit-tests the complexity-based upsampfac picker, so it includes
 # the internal heuristics.hpp and needs xsimd + poet (the dispatcher) on top of
 # finufft_link_test.
-add_executable(testutils testutils.cpp)
-if(FINUFFT_USE_DUCC0)
-    target_compile_definitions(testutils PRIVATE -DFINUFFT_USE_DUCC0)
-endif()
-target_compile_features(testutils PRIVATE cxx_std_17)
-finufft_link_test(testutils)
-target_link_libraries(testutils PRIVATE xsimd poet::poet)
-add_test(NAME run_testutils COMMAND testutils WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+# Both precisions: the blocked-spreading (nb>1) check below is precision-sensitive.
+foreach(T testutils testutilsf)
+    add_executable(${T} testutils.cpp)
+    if(FINUFFT_USE_DUCC0)
+        target_compile_definitions(${T} PRIVATE -DFINUFFT_USE_DUCC0)
+    endif()
+    target_compile_features(${T} PRIVATE cxx_std_17)
+    finufft_link_test(${T})
+    target_link_libraries(${T} PRIVATE xsimd poet::poet)
+    add_test(NAME run_${T} COMMAND ${T} WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+endforeach()
+target_compile_definitions(testutilsf PRIVATE -DSINGLE)
 
 add_executable(threadsafe_execute threadsafe_execute.cpp)
 finufft_link_test(threadsafe_execute)
