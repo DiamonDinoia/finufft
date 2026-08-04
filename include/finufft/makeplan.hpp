@@ -193,7 +193,9 @@ template<typename TF> void FINUFFT_PLAN_T<TF>::setup_spreadinterp() {
            m.spopts.upsampfac, ns, m.spopts.beta);
 
   // heuristic dir=1 chunking for nthr>>1, typical for intel i7 and skylake...
-  m.spopts.max_subproblem_size = (dim == 1) ? 10000 : 100000; // todo: revisit
+  // fallback only: indexSort() recomputes this from measured bin occupancy once the
+  // NU points are known (see heuristics::max_subproblem_size)
+  m.spopts.max_subproblem_size = (dim == 1) ? 10000 : 100000;
   if (opts.spread_max_sp_size > 0)                            // override
     m.spopts.max_subproblem_size = opts.spread_max_sp_size;
   // nthr above which switch OMP critical->atomic (add_wrapped..). R Blackwell's val:

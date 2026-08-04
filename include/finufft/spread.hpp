@@ -459,7 +459,7 @@ template<typename T, int ndims>
 inline void bin_sort_singlethread_impl(std::vector<BIGINT> &ret, UBIGINT M, const T *kx,
                                        const T *ky, const T *kz, UBIGINT N1, UBIGINT N2,
                                        UBIGINT N3, double bin_size_x, double bin_size_y,
-                                       double bin_size_z)
+                                       double bin_size_z, UBIGINT &n_occupied)
 /* Returns permutation of all nonuniform points with good RAM access,
  * ie less cache misses for spreading, in 1D, 2D, or 3D.
  *
@@ -563,6 +563,11 @@ inline void bin_sort_singlethread_impl(std::vector<BIGINT> &ret, UBIGINT M, cons
   }
   for (; i < M; i++) ++counts[compute_bin_scalar(i)];
 
+  // # bins actually hit: cheap clustering measure, consumed by
+  // heuristics::max_subproblem_size(). Must be read before counts becomes offsets.
+  n_occupied = UBIGINT(
+      std::count_if(counts.begin(), counts.end(), [](uint32_t c) { return c > 0; }));
+
   // compute the offsets directly in the counts array (Reinecke's trick)
   std::exclusive_scan(counts.begin(), counts.end(), counts.begin(), uint32_t{0});
 
@@ -588,7 +593,7 @@ template<typename T, int ndims>
 inline void bin_sort_multithread_impl(std::vector<BIGINT> &ret, UBIGINT M, const T *kx,
                                       const T *ky, const T *kz, UBIGINT N1, UBIGINT N2,
                                       UBIGINT N3, double bin_size_x, double bin_size_y,
-                                      double bin_size_z, int nthr)
+                                      double bin_size_z, int nthr, UBIGINT &n_occupied)
 /* Mostly-OpenMP'ed version of bin_sort, SIMD-vectorized per thread.
    Templated on ndims to eliminate branching in inner loops.
    For documentation see: bin_sort_singlethread_impl.
@@ -662,6 +667,7 @@ inline void bin_sort_multithread_impl(std::vector<BIGINT> &ret, UBIGINT M, const
   std::vector<std::vector<uint32_t>> counts(nt);
   std::vector<uint32_t> bin_offset(nbins);
   std::vector<uint32_t> thread_totals(nt);
+  UBIGINT occupied = 0; // # bins hit; see heuristics::max_subproblem_size()
 
 #pragma omp parallel num_threads(nt)
   {
@@ -693,13 +699,17 @@ inline void bin_sort_multithread_impl(std::vector<BIGINT> &ret, UBIGINT M, const
     const BIGINT bin_start = t * bin_chunk;
     const BIGINT bin_end   = std::min(bin_start + bin_chunk, nbins);
     uint32_t running       = 0;
+    UBIGINT my_occupied = 0;
     for (BIGINT b = bin_start; b < bin_end; ++b) {
       uint32_t total = 0;
       for (int tt = 0; tt < nt; ++tt) total += counts[tt][b];
       bin_offset[b] = running;
       running += total;
+      my_occupied += (total > 0);
     }
     thread_totals[t] = running;
+#pragma omp atomic
+    occupied += my_occupied;
 
 #pragma omp barrier
 
@@ -736,6 +746,7 @@ inline void bin_sort_multithread_impl(std::vector<BIGINT> &ret, UBIGINT M, const
       ++my_counts[bin];
     }
   }
+  n_occupied = occupied;
 }
 
 } // anonymous namespace
@@ -748,15 +759,18 @@ void FINUFFT_PLAN_T<TF>::bin_sort_singlethread(double bin_size_x, double bin_siz
   switch (ndims) {
   case 1:
     bin_sort_singlethread_impl<TF, 1>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                      N1, N2, N3, bin_size_x, bin_size_y, bin_size_z);
+                                      N1, N2, N3, bin_size_x, bin_size_y, bin_size_z,
+                                      m.nOccupiedBins);
     break;
   case 2:
     bin_sort_singlethread_impl<TF, 2>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                      N1, N2, N3, bin_size_x, bin_size_y, bin_size_z);
+                                      N1, N2, N3, bin_size_x, bin_size_y, bin_size_z,
+                                      m.nOccupiedBins);
     break;
   default:
     bin_sort_singlethread_impl<TF, 3>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                      N1, N2, N3, bin_size_x, bin_size_y, bin_size_z);
+                                      N1, N2, N3, bin_size_x, bin_size_y, bin_size_z,
+                                      m.nOccupiedBins);
     break;
   }
 }
@@ -769,15 +783,18 @@ void FINUFFT_PLAN_T<TF>::bin_sort_multithread(double bin_size_x, double bin_size
   switch (ndims) {
   case 1:
     bin_sort_multithread_impl<TF, 1>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                     N1, N2, N3, bin_size_x, bin_size_y, bin_size_z, nthr);
+                                     N1, N2, N3, bin_size_x, bin_size_y, bin_size_z, nthr,
+                                     m.nOccupiedBins);
     break;
   case 2:
     bin_sort_multithread_impl<TF, 2>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                     N1, N2, N3, bin_size_x, bin_size_y, bin_size_z, nthr);
+                                     N1, N2, N3, bin_size_x, bin_size_y, bin_size_z, nthr,
+                                     m.nOccupiedBins);
     break;
   default:
     bin_sort_multithread_impl<TF, 3>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                     N1, N2, N3, bin_size_x, bin_size_y, bin_size_z, nthr);
+                                     N1, N2, N3, bin_size_x, bin_size_y, bin_size_z, nthr,
+                                     m.nOccupiedBins);
     break;
   }
 }

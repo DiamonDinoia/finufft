@@ -15,6 +15,7 @@
     in makeplan.hpp.
 */
 
+#include <finufft/heuristics.hpp>
 #include <finufft/interp.hpp>
 #include <finufft/plan.hpp>
 #include <finufft/spread.hpp>
@@ -164,7 +165,8 @@ void FINUFFT_PLAN_T<TF>::indexSort()
   // don't sort
 
   timer.start(); // if needed, sort all the NU pts...
-  m.didSort    = false;
+  m.didSort = false;
+  m.nOccupiedBins = 0; // set by the bin sorts; 0 means "no occupancy measure"
   auto maxnthr = MY_OMP_GET_MAX_THREADS(); // used if both below opts default
   if (m.spopts.nthreads > 0)
     maxnthr = m.spopts.nthreads;           // user nthreads overrides, without limit
@@ -192,6 +194,18 @@ void FINUFFT_PLAN_T<TF>::indexSort()
       m.sortIndices[i] = i;                // the identity permutation
     if (m.spopts.debug)
       printf("\tnot sorted (sort=%d): \t%.3g s\n", (int)m.spopts.sort, timer.elapsedsec());
+  }
+
+  // Blocked-spreading subproblem size, from the occupancy the sort just measured.
+  // Skipped when the user fixed it via opts.spread_max_sp_size (>0).
+  if (opts.spread_max_sp_size <= 0) {
+    const double bin_size[3] = {bin_size_x, bin_size_y, bin_size_z};
+    m.spopts.max_subproblem_size = finufft::heuristics::max_subproblem_size(
+        dim, m.spopts.nspread, (double)M, (double)m.nOccupiedBins, bin_size, maxnthr);
+    if (m.spopts.debug)
+      printf("\toccupancy %.3g pts/bin -> max_subproblem_size=%d\n",
+             m.nOccupiedBins ? (double)M / (double)m.nOccupiedBins : 0.0,
+             m.spopts.max_subproblem_size);
   }
 }
 
