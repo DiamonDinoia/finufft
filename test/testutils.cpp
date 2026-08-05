@@ -281,9 +281,15 @@ int main(int argc, char *argv[]) {
 #endif
 
   // The blocked spread path (nb > 1) must agree with the single-subproblem path.
-  // No other test reaches it: ctest's transforms all run nb == 1, so this is the
-  // only coverage of subproblem decomposition. Changing nb changes the add-back
-  // summation order, so compare to tolerance, not bit-equality.
+  // ctest's other transforms only ever reach nb == min(nthreads, M) with whatever
+  // subproblem size the heuristic elects, so nothing else pins the decomposition
+  // against a nb == 1 reference.
+  //
+  // spreadinterponly, not a full transform: with the FFT in the loop this compares
+  // ducc0's thread-count-dependent rounding (measured 2.4e-11 at 96 threads, and
+  // 1.7e-11 between two identical reruns) rather than the spreader, so no
+  // eps-scaled bound can hold. Spread-only, the two decompositions agree to
+  // ~5e-16 at every thread count from 6 to 96.
   {
     const BIGINT M = 200000, N1 = 256, N2 = 256;
     const FLT tol = (FLT)(sizeof(FLT) == 4 ? 1e-4 : 1e-9);
@@ -295,13 +301,17 @@ int main(int argc, char *argv[]) {
       c[j] = CPX((FLT)(1.0 - 2.0 * (j % 3)), (FLT)(0.5 * (j % 5)));
     }
     BIGINT Ns[2] = {N1, N2};
-    // 1000 pts/subproblem forces nb = 200; a huge cap leaves nb = nthreads.
-    const int sp_forced[2] = {1000, 1 << 30};
+    // arm 0: 1000 pts/subproblem forces nb = 200. arm 1: one thread and no cap is
+    // the nb == 1 reference (nb = max(min(nthreads, M), ceil(M/sp))).
+    const int sp_forced[2] = {1000, 1 << 30}, nthr_forced[2] = {0, 1};
     std::vector<CPX> *out[2] = {&F_blocked, &F_single};
     for (int k = 0; k < 2; ++k) {
       finufft_opts o;
       FINUFFT_DEFAULT_OPTS(&o);
+      o.spreadinterponly = 1;
+      o.upsampfac = 2.0; // only sets the kernel when spreadinterponly
       o.spread_max_sp_size = sp_forced[k];
+      o.nthreads = nthr_forced[k];
       FINUFFT_PLAN p;
       if (FINUFFT_MAKEPLAN(1, 2, Ns, 1, 1, tol, &p, &o)) {
         printf("fail: makeplan failed in blocked-spread test\n");
@@ -312,9 +322,9 @@ int main(int argc, char *argv[]) {
       FINUFFT_DESTROY(p);
     }
     const auto err = relerrtwonorm(N1 * N2, F_single.data(), F_blocked.data());
-    // nb changes the add-back summation order, so bound on eps rather than tol:
-    // measured 1.1e-14 (f64) and 3.7e-6 (f32), ~30x inside this bound, while a
-    // one-point-per-boundary add-back bug would give 200/2e5 = 1e-3.
+    // nb only changes the add-back summation order, so bound on eps, not tol.
+    // Measured 5.1e-16 (f64) / 1.1e-07 (f32), identical at 1, 6 and 22 threads,
+    // while a bug losing one point per subproblem boundary gives 200/2e5 = 1e-3.
     if (!(err < 1000 * (FLT)std::numeric_limits<FLT>::epsilon())) {
       printf("fail: blocked (nb=200) vs single-subproblem spread differ: %.3g\n",
              (double)err);

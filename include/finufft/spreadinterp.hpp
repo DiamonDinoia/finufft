@@ -167,11 +167,10 @@ void FINUFFT_PLAN_T<TF>::indexSort()
   timer.start(); // if needed, sort all the NU pts...
   m.didSort = false;
   m.nOccupiedBins = 0; // set by the bin sorts; 0 means "no occupancy measure"
-  auto maxnthr = MY_OMP_GET_MAX_THREADS(); // used if both below opts default
-  if (m.spopts.nthreads > 0)
-    maxnthr = m.spopts.nthreads;           // user nthreads overrides, without limit
-  if (m.spopts.sort_threads > 0)
-    maxnthr = m.spopts.sort_threads;       // high-priority override, also no limit
+  // spopts.nthreads is the plan's resolved thread count (makeplan guarantees >0);
+  // sort_threads, if set, overrides it for the sort only.
+  const int maxnthr =
+      m.spopts.sort_threads > 0 ? m.spopts.sort_threads : m.spopts.nthreads;
   if (m.spopts.sort == 1 || (m.spopts.sort == 2 && better_to_sort)) {
     // store a good permutation ordering of all NU pts (dim=1,2 or 3)
     int sort_nthr = m.spopts.sort_threads; // 0, or user max # threads for sort
@@ -200,8 +199,11 @@ void FINUFFT_PLAN_T<TF>::indexSort()
   // Skipped when the user fixed it via opts.spread_max_sp_size (>0).
   if (opts.spread_max_sp_size <= 0) {
     const double bin_size[3] = {bin_size_x, bin_size_y, bin_size_z};
+    // Snap against the count that runs the subproblem loop, which is the plan's
+    // nthreads, not maxnthr: maxnthr carries the sort-only override.
     m.spopts.max_subproblem_size = finufft::heuristics::max_subproblem_size(
-        dim, m.spopts.nspread, (double)M, (double)m.nOccupiedBins, bin_size, maxnthr);
+        dim, m.spopts.nspread, (double)M, (double)m.nOccupiedBins, bin_size,
+        m.spopts.nthreads);
     if (m.spopts.debug)
       printf("\toccupancy %.3g pts/bin -> max_subproblem_size=%d\n",
              m.nOccupiedBins ? (double)M / (double)m.nOccupiedBins : 0.0,

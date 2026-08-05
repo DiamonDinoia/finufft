@@ -9,7 +9,7 @@
 #include <limits>
 #include <type_traits>
 
-#include <finufft/simd.hpp>            // finufft::spreadinterp::get_padding<TF>
+#include <finufft/simd.hpp>            // get_padding<TF>, get_padded_simd_width<TF>
 #include <finufft_common/constants.h>   // PI, MAX_CHECK_SIGMA, MIN/MAX_AUTO_UPSAMPFAC
 #include <finufft_common/kernel.h>      // ns formulas, feasibility, fine_grid_len
 #include <finufft_common/spread_opts.h> // finufft_spread_opts
@@ -178,7 +178,8 @@ inline int max_subproblem_size(int dim, int ns, double npts, double n_occupied_b
                                const double *bin_size, int nthreads) {
   // floor of the amortization ramp, and the overhead level at which amortizing
   // subgrid cells starts to pay for a larger subproblem. Fitted on f64 geometry;
-  // known ~3.6% loss at f32 in 3D, where ns is 3-4 rather than 7.
+  // at f32 (ns 3-4 rather than 7) the measured effect is roughly neutral, +0.02%
+  // to +4% geomean depending on the node, so these are not f32-calibrated.
   constexpr double SP_REF = 30000.0, OVERHEAD_REF = 5.0, SP_MAX = 1e6;
   if (dim == 1 || n_occupied_bins <= 0) // no occupancy measure: legacy constants
     return (dim == 1) ? 10000 : 100000;
