@@ -203,7 +203,7 @@ int main(int argc, char *argv[]) {
 #endif
 
 #ifndef SINGLE
-  // Blocked-spreading subproblem size picker (heuristics::max_subproblem_size).
+  // Blocked-spreading decomposition picker (heuristics::n_subproblems).
   // Asserts properties, not fitted values: the constants are node-dependent (the
   // optimum moves in opposite directions across microarchitectures), the
   // invariants below are not. Runs once, in the double build.
@@ -211,8 +211,8 @@ int main(int argc, char *argv[]) {
     const double bin2[2] = {16, 4}, bin3[3] = {16, 4, 4};
     const double npts_list[] = {1e4, 1e5, 1e6, 1e7, 2.24e7, 1e8};
     const int nthr_list[] = {1, 6, 16, 32, 128};
-    // 1e7 occupied bins is enough overhead to saturate SP_MAX, where snapping nb
-    // to a multiple of nthreads could otherwise push sp back above the cap.
+    // 1e7 occupied bins is enough overhead to saturate the SP_MAX scratch-RAM cap,
+    // where snapping nb down to a multiple of nthreads could otherwise breach it.
     const double occ_list[] = {1.0, 1e2, 1e4, 1e6, 1e7};
 
     for (int dim = 2; dim <= 3; ++dim) {
@@ -220,23 +220,15 @@ int main(int argc, char *argv[]) {
       for (double npts : npts_list)
         for (int nthr : nthr_list)
           for (double occ : occ_list) {
-            const int sp =
-                max_subproblem_size(dim, 7, npts, std::min(occ, npts), bs, nthr);
-            if (sp < 1 || sp > 1000000) {
-              printf("fail: sp=%d out of range: dim=%d npts=%.0e nthr=%d occ=%.0e\n", sp,
-                     dim, npts, nthr, occ);
-              return 1;
-            }
-            // The caller takes nb = max(nthr, ceil(npts/sp)). A count just above a
-            // multiple of nthr runs a whole extra schedule(dynamic,1) round for a
-            // few stragglers, so the picker must land on a whole multiple (or leave
-            // nb at nthr, where max() already makes the round exact).
-            const long long nb =
-                std::max((long long)nthr, (long long)std::ceil(npts / (double)sp));
-            if (nb > nthr && nb % nthr != 0) {
-              printf("fail: nb=%lld not a multiple of nthr=%d (sp=%d, dim=%d, "
-                     "npts=%.0e, occ=%.0e)\n",
-                     nb, nthr, sp, dim, npts, occ);
+            const int nb = n_subproblems(dim, 7, npts, std::min(occ, npts), bs, nthr);
+            const double sp = npts / nb;
+            // nb below nthreads starves schedule(dynamic,1); a count just above a
+            // multiple of nthreads runs a whole extra round for a few stragglers;
+            // and sp above SP_MAX blows the per-thread scratch budget.
+            if (nb < nthr || nb % nthr != 0 || sp > 1000000) {
+              printf("fail: nb=%d (%.3g pts each) for nthr=%d dim=%d npts=%.0e "
+                     "occ=%.0e\n",
+                     nb, sp, nthr, dim, npts, occ);
               return 1;
             }
           }
@@ -244,37 +236,32 @@ int main(int argc, char *argv[]) {
 
     // Small npts on many threads must not shatter into tiny subproblems: each one
     // pays for a whole padded subgrid, so nb must stay at nthr here. (Regression:
-    // an earlier unfloored balance cap elected sp=19 for npts=1e4 at 128 threads,
-    // i.e. 527 subproblems, costing up to +40%.)
+    // an earlier unfloored balance cap elected 527 subproblems for npts=1e4 at 128
+    // threads, costing up to +40%.)
     for (double npts : {1e4, 1e5})
-      for (int nthr : {32, 128}) {
-        const int sp = max_subproblem_size(3, 7, npts, npts / 5, bin3, nthr);
-        if (std::ceil(npts / (double)sp) > nthr) {
-          printf("fail: npts=%.0e on %d threads shattered into %.0f subproblems\n", npts,
-                 nthr, std::ceil(npts / (double)sp));
+      for (int nthr : {32, 128})
+        if (n_subproblems(3, 7, npts, npts / 5, bin3, nthr) != nthr) {
+          printf("fail: npts=%.0e on %d threads shattered into %d subproblems\n", npts,
+                 nthr, n_subproblems(3, 7, npts, npts / 5, bin3, nthr));
           return 1;
         }
-      }
 
     // Clustering must not elect a larger subproblem than the uniform case: packing
     // the same points into fewer bins lowers the per-point subgrid overhead, which
     // is the whole reason this reads measured occupancy instead of mean density.
     for (int dim = 2; dim <= 3; ++dim) {
       const double *bs = (dim == 2) ? bin2 : bin3;
-      const double npts = 1e7;
-      const int sp_unif = max_subproblem_size(dim, 7, npts, 1e6, bs, 16);
-      const int sp_clust = max_subproblem_size(dim, 7, npts, 1e4, bs, 16);
-      if (sp_clust > sp_unif) {
-        printf("fail: clustered sp (%d) exceeds uniform (%d) in %dD\n", sp_clust, sp_unif,
-               dim);
+      if (n_subproblems(dim, 7, 1e7, 1e4, bs, 16) <
+          n_subproblems(dim, 7, 1e7, 1e6, bs, 16)) {
+        printf("fail: clustered elects fewer subproblems than uniform in %dD\n", dim);
         return 1;
       }
     }
 
-    // Fallbacks when there is no occupancy measure (1D, or an unsorted point set).
-    if (max_subproblem_size(1, 7, 1e7, 1e5, bin2, 16) != 10000 ||
-        max_subproblem_size(2, 7, 1e7, 0, bin2, 16) != 100000) {
-      printf("fail: legacy fallback values changed\n");
+    // No occupancy measure (1D, or an unsorted point set): defer to the caller's cap.
+    if (n_subproblems(1, 7, 1e7, 1e5, bin2, 16) ||
+        n_subproblems(2, 7, 1e7, 0, bin2, 16)) {
+      printf("fail: expected 0 (defer to spopts.max_subproblem_size)\n");
       return 1;
     }
   }

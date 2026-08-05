@@ -147,11 +147,12 @@ double best_type3(double tol, int dim, int nthreads, double nj, const double *X,
   return minimize<TF>(tol, dim, /*type=*/3, /*maxN=*/1.0, cost).sigma;
 }
 
-/* Points per subproblem (spopts.max_subproblem_size) for dir=1 blocked spreading.
+/* Number of subproblems (nb) for dir=1 blocked spreading, or 0 to leave the
+  decomposition to spopts.max_subproblem_size.
 
   Each subproblem pays for a padded subgrid it must zero, write and add back,
   costing "overhead" cells per NU point (measured 0.02 - 40 across configs).
-  Bigger subproblems amortize that, so the target scales with overhead.
+  Bigger subproblems amortize that, so the target size scales with overhead.
 
   overhead is estimated from the *measured* bin occupancy of the sort, not from
   the mean density nj/N: clustered inputs (MRI, radio astronomy) pack many points
@@ -168,35 +169,42 @@ double best_type3(double tol, int dim, int nthreads, double nj, const double *X,
 
   The optimum is machine-dependent in *direction* (3D uniform wants >=625k on
   Sapphire Rapids, 10k-20k on Zen2), so the ramp deliberately sits in the flat
-  interior of the response curve rather than at any node's argmin.
+  interior of the response curve rather than at any node's argmin. Three retunes
+  measured on one node and contradicted on another, so all three are declined:
+  a smaller 2D SP_REF (Zen4 wants 200-1000; a 7-point 2D sweep on Meteor Lake is
+  within 5% of its argmin at 30000 and +19% to +75% at 200-1000); an nthreads
+  term (Zen4 has 3D falling and 2D flat from 6 to 96 threads, Meteor Lake has 3D
+  flat and 2D rising from 6 to 22); and a grid-volume term for the sparse regime
+  N >> npts (a clustered sparse cell regresses 18.5% on Zen4, and the same cell
+  on Meteor Lake is flat to 13% with its argmin at the *smallest* sp tested, so
+  the correction has the wrong sign here).
 
   Inputs: dim, ns (kernel width), npts (=nj), n_occupied_bins (bins holding >=1
   pt, 0 if unsorted), bin_size[dim] (sort bin edge lengths), nthreads.
-  Returns points per subproblem (>=1).
+  Returns nb >= 1, or 0 when there is no occupancy measure to work from.
 */
-inline int max_subproblem_size(int dim, int ns, double npts, double n_occupied_bins,
-                               const double *bin_size, int nthreads) {
-  // floor of the amortization ramp, and the overhead level at which amortizing
-  // subgrid cells starts to pay for a larger subproblem. Fitted on f64 geometry;
-  // at f32 (ns 3-4 rather than 7) the measured effect is roughly neutral, +0.02%
-  // to +4% geomean depending on the node, so these are not f32-calibrated.
+inline int n_subproblems(int dim, int ns, double npts, double n_occupied_bins,
+                         const double *bin_size, int nthreads) {
+  // target subproblem size, and the overhead level at which amortizing subgrid
+  // cells starts to pay for a larger subproblem. SP_MAX bounds per-thread scratch
+  // RAM. Fitted on f64 geometry; at f32 (ns 3-4 rather than 7) the measured effect
+  // is roughly neutral, +0.02% to +4% geomean depending on the node, so these are
+  // not f32-calibrated.
   constexpr double SP_REF = 30000.0, OVERHEAD_REF = 5.0, SP_MAX = 1e6;
-  if (dim == 1 || n_occupied_bins <= 0) // no occupancy measure: legacy constants
-    return (dim == 1) ? 10000 : 100000;
+  if (dim == 1 || n_occupied_bins <= 0) return 0; // caller keeps its own cap
   double cells = 1.0; // padded subgrid cells belonging to one sort bin
   for (int d = 0; d < dim; ++d) cells *= bin_size[d] + ns;
   const double overhead = cells * n_occupied_bins / npts; // ~subgrid cells per pt
-  const double sp = std::min(SP_REF * std::max(1.0, overhead / OVERHEAD_REF), SP_MAX);
+  const double sp = SP_REF * std::max(1.0, overhead / OVERHEAD_REF);
   const double nthr = std::max(nthreads, 1);
-  // The caller takes nb = max(min(nthreads, npts), ceil(npts/sp)), so this can only
-  // *raise* the subproblem count - it cannot starve schedule(dynamic,1). What it
-  // can do is land nb just above a multiple of nthreads, where a whole extra
-  // round runs for a handful of stragglers, so round nb to a whole multiple.
-  // k == 1 means "do not cap", which is why no floor constant is needed. The
-  // second term keeps SP_MAX (a per-thread scratch RAM bound) hard after snapping.
+  // nb below nthreads would starve schedule(dynamic,1), and nb just above a
+  // multiple of nthreads runs a whole extra round for a handful of stragglers, so
+  // elect a whole multiple k*nthreads. k == 1 means "one round", which is why no
+  // floor on the subproblem size is needed; the second term keeps SP_MAX hard
+  // after snapping, which is why sp itself needs no upper clamp.
   const double k = std::max(std::max(1.0, std::round(std::ceil(npts / sp) / nthr)),
                             std::ceil(npts / (SP_MAX * nthr)));
-  return (int)std::max(1.0, std::ceil(npts / (k * nthr)));
+  return (int)std::min(k * nthr, std::max(npts, 1.0));
 }
 
 } // namespace finufft::heuristics

@@ -167,17 +167,18 @@ void FINUFFT_PLAN_T<TF>::indexSort()
   timer.start(); // if needed, sort all the NU pts...
   m.didSort = false;
   m.nOccupiedBins = 0; // set by the bin sorts; 0 means "no occupancy measure"
+  m.nSubproblems = 0; // 0 means "fall back to spopts.max_subproblem_size"
   // spopts.nthreads is the plan's resolved thread count (makeplan guarantees >0);
   // sort_threads, if set, overrides it for the sort only.
   const int maxnthr =
       m.spopts.sort_threads > 0 ? m.spopts.sort_threads : m.spopts.nthreads;
+  const auto grid_N = N1 * N2 * N3; // fine-grid volume
   if (m.spopts.sort == 1 || (m.spopts.sort == 2 && better_to_sort)) {
     // store a good permutation ordering of all NU pts (dim=1,2 or 3)
     int sort_nthr = m.spopts.sort_threads; // 0, or user max # threads for sort
 #ifndef _OPENMP
     sort_nthr = 1; // if single-threaded lib, override user
 #endif
-    auto grid_N = N1 * N2 * N3;
     if (sort_nthr == 0) // multithreaded auto choice: when N>>M, one thread is better!
       sort_nthr = (10 * M > grid_N) ? maxnthr : 1; // heuristic
     if (sort_nthr == 1)
@@ -195,19 +196,19 @@ void FINUFFT_PLAN_T<TF>::indexSort()
       printf("\tnot sorted (sort=%d): \t%.3g s\n", (int)m.spopts.sort, timer.elapsedsec());
   }
 
-  // Blocked-spreading subproblem size, from the occupancy the sort just measured.
-  // Skipped when the user fixed it via opts.spread_max_sp_size (>0).
+  // Blocked-spreading decomposition, from the occupancy the sort just measured.
+  // Skipped when the user fixed the size via opts.spread_max_sp_size (>0).
   if (opts.spread_max_sp_size <= 0) {
     const double bin_size[3] = {bin_size_x, bin_size_y, bin_size_z};
-    // Snap against the count that runs the subproblem loop, which is the plan's
-    // nthreads, not maxnthr: maxnthr carries the sort-only override.
-    m.spopts.max_subproblem_size = finufft::heuristics::max_subproblem_size(
-        dim, m.spopts.nspread, (double)M, (double)m.nOccupiedBins, bin_size,
-        m.spopts.nthreads);
-    if (m.spopts.debug)
-      printf("\toccupancy %.3g pts/bin -> max_subproblem_size=%d\n",
-             m.nOccupiedBins ? (double)M / (double)m.nOccupiedBins : 0.0,
-             m.spopts.max_subproblem_size);
+    // The count that runs the subproblem loop is the plan's nthreads, not maxnthr
+    // (which carries the sort-only override).
+    m.nSubproblems = finufft::heuristics::n_subproblems(dim, m.spopts.nspread, (double)M,
+                                                        (double)m.nOccupiedBins, bin_size,
+                                                        m.spopts.nthreads);
+    if (m.spopts.debug && m.nSubproblems)
+      printf("\toccupancy %.3g pts/bin -> nb=%d (%.3g pts/subproblem)\n",
+             m.nOccupiedBins ? (double)M / (double)m.nOccupiedBins : 0.0, m.nSubproblems,
+             (double)M / (double)m.nSubproblems);
   }
 }
 
@@ -383,15 +384,14 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
   } else {
     // ------- Fancy multi-core blocked t1 spreading ----
     // Splits sorted inds (jfm's advanced2), could double RAM.
-    // choose nb (# subprobs) via used nthreads:
-    // one subprob per thread, but the batch loop is folded in below, so nthr/batchSize
-    // of them already keeps all threads busy; fewer, bigger subprobs mean fewer padded
-    // subgrids to zero and add back
-    auto nb = std::min((UBIGINT)((nthr + batchSize - 1) / batchSize), M);
-    if (nb * (BIGINT)m.spopts.max_subproblem_size < M) {
-      // ...or more subprobs to cap size
-      nb = 1 + (M - 1) / m.spopts.max_subproblem_size; // int div does
-      // ceil(M/m.spopts.max_subproblem_size)
+    // nb (# subprobs per vector): the occupancy heuristic elects it outright in
+    // indexSort, as a subproblem size, so that election does not follow batchSize.
+    // Without an occupancy measure, one subprob per thread over the folded batch loop.
+    auto nb = std::min(
+        (UBIGINT)(m.nSubproblems ? m.nSubproblems : (nthr + batchSize - 1) / batchSize),
+        M);
+    if (!m.nSubproblems && nb * (BIGINT)m.spopts.max_subproblem_size < M) {
+      nb = 1 + (M - 1) / m.spopts.max_subproblem_size; // ceil(M/max_subproblem_size)
       if (m.spopts.debug)
         printf("\tcapping subproblem sizes to max of %d\n", m.spopts.max_subproblem_size);
     }

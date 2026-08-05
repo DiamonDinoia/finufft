@@ -129,8 +129,9 @@ private:
     std::vector<BIGINT> sortIndices;  // bin-sort permutation of NU points
     bool didSort = false;             // whether bin-sorting was applied
     UBIGINT nOccupiedBins = 0; // # sort bins holding >=1 NU pt (0 if not sorted);
-                               // measures clustering, see
-                               // heuristics::max_subproblem_size()
+                               // measures clustering, see heuristics::n_subproblems()
+    int nSubproblems = 0; // dir=1 blocked-spread decomposition chosen from that
+                          // occupancy; 0 means "use spopts.max_subproblem_size"
 
     // --- Type 3 workspace (set by setpts for type 3 only) ---
     std::array<const TF *, 3> STU{nullptr, nullptr, nullptr};
