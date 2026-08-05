@@ -169,22 +169,21 @@ double best_type3(double tol, int dim, int nthreads, double nj, const double *X,
 
   The optimum is machine-dependent in *direction* (3D uniform wants >=625k on
   Sapphire Rapids, 10k-20k on Zen2), so the ramp deliberately sits in the flat
-  interior of the response curve rather than at any node's argmin. Three retunes
-  measured on one node and contradicted on another, so all three are declined:
-  a smaller 2D SP_REF (Zen4 wants 200-1000; a 7-point 2D sweep on Meteor Lake is
-  within 5% of its argmin at 30000 and +19% to +75% at 200-1000); an nthreads
-  term (Zen4 has 3D falling and 2D flat from 6 to 96 threads, Meteor Lake has 3D
-  flat and 2D rising from 6 to 22); and a grid-volume term for the sparse regime
-  N >> npts (a clustered sparse cell regresses 18.5% on Zen4, and the same cell
-  on Meteor Lake is flat to 13% with its argmin at the *smallest* sp tested, so
-  the correction has the wrong sign here).
+  interior of the response curve rather than at any node's argmin. Three further
+  retunes were each measured on one node and contradicted in *sign* on another, so
+  all three are declined: a smaller 2D SP_REF (Zen4 wants 200-1000, which costs
+  +19% to +75% on Meteor Lake, itself within 5.5% of its 2D argmin at 30000); an
+  nthreads term (the two nodes disagree on which way the optimum moves in each
+  dim); and a grid-volume term for the sparse regime N >> npts (the clustered
+  sparse cell that regresses on Zen4 has its Meteor Lake argmin at the *smallest*
+  sp measured, so the correction has the wrong sign here).
 
   Inputs: dim, ns (kernel width), npts (=nj), n_occupied_bins (bins holding >=1
   pt, 0 if unsorted), bin_size[dim] (sort bin edge lengths), nthreads.
   Returns nb >= 1, or 0 when there is no occupancy measure to work from.
 */
-inline int n_subproblems(int dim, int ns, double npts, double n_occupied_bins,
-                         const double *bin_size, int nthreads) {
+inline BIGINT n_subproblems(int dim, int ns, double npts, double n_occupied_bins,
+                            const double *bin_size, int nthreads) {
   // target subproblem size, and the overhead level at which amortizing subgrid
   // cells starts to pay for a larger subproblem. SP_MAX bounds per-thread scratch
   // RAM. Fitted on f64 geometry; at f32 (ns 3-4 rather than 7) the measured effect
@@ -201,10 +200,12 @@ inline int n_subproblems(int dim, int ns, double npts, double n_occupied_bins,
   // multiple of nthreads runs a whole extra round for a handful of stragglers, so
   // elect a whole multiple k*nthreads. k == 1 means "one round", which is why no
   // floor on the subproblem size is needed; the second term keeps SP_MAX hard
-  // after snapping, which is why sp itself needs no upper clamp.
+  // after snapping, which is why sp itself needs no upper clamp. Snapping is
+  // meaningless under opts.spread_thread=2, where the spread runs nested inside an
+  // outer parallel region and nthreads over-counts the loop that consumes nb.
   const double k = std::max(std::max(1.0, std::round(std::ceil(npts / sp) / nthr)),
                             std::ceil(npts / (SP_MAX * nthr)));
-  return (int)std::min(k * nthr, std::max(npts, 1.0));
+  return (BIGINT)(k * nthr); // caller clips to npts when it has fewer points than that
 }
 
 } // namespace finufft::heuristics

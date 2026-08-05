@@ -206,9 +206,9 @@ void FINUFFT_PLAN_T<TF>::indexSort()
                                                         (double)m.nOccupiedBins, bin_size,
                                                         m.spopts.nthreads);
     if (m.spopts.debug && m.nSubproblems)
-      printf("\toccupancy %.3g pts/bin -> nb=%d (%.3g pts/subproblem)\n",
-             m.nOccupiedBins ? (double)M / (double)m.nOccupiedBins : 0.0, m.nSubproblems,
-             (double)M / (double)m.nSubproblems);
+      printf("\toccupancy %.3g pts/bin -> nb=%lld (%.3g pts/subproblem)\n",
+             m.nOccupiedBins ? (double)M / (double)m.nOccupiedBins : 0.0,
+             (long long)m.nSubproblems, (double)M / (double)m.nSubproblems);
   }
 }
 

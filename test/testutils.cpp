@@ -209,7 +209,9 @@ int main(int argc, char *argv[]) {
   // invariants below are not. Runs once, in the double build.
   {
     const double bin2[2] = {16, 4}, bin3[3] = {16, 4, 4};
-    const double npts_list[] = {1e4, 1e5, 1e6, 1e7, 2.24e7, 1e8};
+    // 10 points on 128 threads covers npts < nthreads, where the elected count
+    // exceeds the point count and only the caller's clip to M keeps it sane.
+    const double npts_list[] = {10, 1e4, 1e5, 1e6, 1e7, 2.24e7, 1e8};
     const int nthr_list[] = {1, 6, 16, 32, 128};
     // 1e7 occupied bins is enough overhead to saturate the SP_MAX scratch-RAM cap,
     // where snapping nb down to a multiple of nthreads could otherwise breach it.
@@ -220,15 +222,15 @@ int main(int argc, char *argv[]) {
       for (double npts : npts_list)
         for (int nthr : nthr_list)
           for (double occ : occ_list) {
-            const int nb = n_subproblems(dim, 7, npts, std::min(occ, npts), bs, nthr);
-            const double sp = npts / nb;
+            const BIGINT nb = n_subproblems(dim, 7, npts, std::min(occ, npts), bs, nthr);
+            const double sp = npts / (double)nb;
             // nb below nthreads starves schedule(dynamic,1); a count just above a
             // multiple of nthreads runs a whole extra round for a few stragglers;
             // and sp above SP_MAX blows the per-thread scratch budget.
             if (nb < nthr || nb % nthr != 0 || sp > 1000000) {
-              printf("fail: nb=%d (%.3g pts each) for nthr=%d dim=%d npts=%.0e "
+              printf("fail: nb=%lld (%.3g pts each) for nthr=%d dim=%d npts=%.0e "
                      "occ=%.0e\n",
-                     nb, sp, nthr, dim, npts, occ);
+                     (long long)nb, sp, nthr, dim, npts, occ);
               return 1;
             }
           }
@@ -241,8 +243,8 @@ int main(int argc, char *argv[]) {
     for (double npts : {1e4, 1e5})
       for (int nthr : {32, 128})
         if (n_subproblems(3, 7, npts, npts / 5, bin3, nthr) != nthr) {
-          printf("fail: npts=%.0e on %d threads shattered into %d subproblems\n", npts,
-                 nthr, n_subproblems(3, 7, npts, npts / 5, bin3, nthr));
+          printf("fail: npts=%.0e on %d threads shattered into %lld subproblems\n", npts,
+                 nthr, (long long)n_subproblems(3, 7, npts, npts / 5, bin3, nthr));
           return 1;
         }
 
