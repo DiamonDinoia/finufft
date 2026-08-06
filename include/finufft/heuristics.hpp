@@ -209,9 +209,7 @@ inline BIGINT n_subproblems(int dim, int ns, double npts, double n_occupied_bins
   // multiple of nthreads runs a whole extra round for a handful of stragglers, so
   // elect a whole multiple k*nthreads. k == 1 means "one round", which is why no
   // floor on the subproblem size is needed; the second term keeps SP_MAX hard
-  // after snapping, which is why sp itself needs no upper clamp. Snapping is
-  // meaningless under opts.spread_thread=2, where the spread runs nested inside an
-  // outer parallel region and nthreads over-counts the loop that consumes nb.
+  // after snapping, which is why sp itself needs no upper clamp.
   const double k = std::max(std::max(1.0, std::round(std::ceil(npts / sp) / nthr)),
                             std::ceil(npts / (SP_MAX * nthr)));
   return (BIGINT)(k * nthr); // caller clips to npts when it has fewer points than that

@@ -200,8 +200,8 @@ void FINUFFT_PLAN_T<TF>::indexSort()
   // Skipped when the user fixed the size via opts.spread_max_sp_size (>0).
   if (opts.spread_max_sp_size <= 0) {
     const double bin_size[3] = {bin_size_x, bin_size_y, bin_size_z};
-    // The count that runs the subproblem loop is the plan's nthreads, not maxnthr
-    // (which carries the sort-only override).
+    // Snap against the count that runs the subproblem loop, which is the plan's
+    // nthreads, not maxnthr: maxnthr carries the sort-only override.
     m.nSubproblems = finufft::heuristics::n_subproblems(dim, m.spopts.nspread, (double)M,
                                                         (double)m.nOccupiedBins, bin_size,
                                                         m.spopts.nthreads);
@@ -494,8 +494,9 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
     }
     for (auto &l : locks) MY_OMP_DESTROY_LOCK(&l);
     if (m.spopts.debug)
-      printf("\tt1 fancy spread: \t%.3g s (%" PRIu64 " subprobs x %d elems)\n",
-             timer.elapsedsec(), nb, batchSize);
+      printf("\tt1 fancy spread: \t%.3g s (%" PRIu64 " subprobs x %d elems, %.3g pts "
+             "each)\n",
+             timer.elapsedsec(), nb, batchSize, (double)M / (double)nb);
   } // end of choice of which t1 spread type to use
   return 0;
 }
