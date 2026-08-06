@@ -219,24 +219,31 @@ int main(int argc, char *argv[]) {
     // 1e7 occupied bins is enough overhead to saturate the SP_MAX scratch-RAM cap,
     // where snapping nb down to a multiple of nthreads could otherwise breach it.
     const double occ_list[] = {1.0, 1e2, 1e4, 1e6, 1e7};
+    // ns is the only geometry input (cells = prod(bin_size[d] + ns)), so sweep the
+    // whole supported width range rather than one value: 3-4 is f32 (which is why
+    // this block need not run in the SINGLE build - the picker takes no FLT), 7 is
+    // f64 at default tol, 16 the maximum.
+    const int ns_list[] = {3, 4, 7, 16};
 
     for (int dim = 2; dim <= 3; ++dim) {
       const double *bs = (dim == 2) ? bin2 : bin3;
-      for (double npts : npts_list)
-        for (int nthr : nthr_list)
-          for (double occ : occ_list) {
-            const BIGINT nb = n_subproblems(dim, 7, npts, std::min(occ, npts), bs, nthr);
-            const double sp = npts / (double)nb;
-            // nb below nthreads starves schedule(dynamic,1); a count just above a
-            // multiple of nthreads runs a whole extra round for a few stragglers;
-            // and sp above SP_MAX blows the per-thread scratch budget.
-            if (nb < nthr || nb % nthr != 0 || sp > 1000000) {
-              std::cout << "fail: nb=" << nb << " (" << sp
-                        << " pts each) for nthr=" << nthr << " dim=" << dim
-                        << " npts=" << npts << " occ=" << occ << "\n";
-              return 1;
+      for (int ns : ns_list)
+        for (double npts : npts_list)
+          for (int nthr : nthr_list)
+            for (double occ : occ_list) {
+              const BIGINT nb =
+                  n_subproblems(dim, ns, npts, std::min(occ, npts), bs, nthr);
+              const double sp = npts / (double)nb;
+              // nb below nthreads starves schedule(dynamic,1); a count just above a
+              // multiple of nthreads runs a whole extra round for a few stragglers;
+              // and sp above SP_MAX blows the per-thread scratch budget.
+              if (nb < nthr || nb % nthr != 0 || sp > 1000000) {
+                std::cout << "fail: nb=" << nb << " (" << sp
+                          << " pts each) for nthr=" << nthr << " dim=" << dim
+                          << " ns=" << ns << " npts=" << npts << " occ=" << occ << "\n";
+                return 1;
+              }
             }
-          }
     }
 
     // Small npts on many threads must not shatter into tiny subproblems: each one
@@ -318,17 +325,21 @@ int main(int argc, char *argv[]) {
   // 1.7e-11 between two identical reruns) rather than the spreader, so no
   // eps-scaled bound can hold. Spread-only, the two decompositions agree to
   // ~5e-16 at every thread count from 6 to 96.
-  {
-    const BIGINT M = 200000, N1 = 256, N2 = 256;
+  // 3D as well as 2D: add_wrapped_subgrid has a third axis to fold, and a padded
+  // subgrid can wrap the grid in one dim while fitting in another.
+  for (int dim = 2; dim <= 3; ++dim) {
+    const BIGINT M = 200000, Nd = (dim == 2) ? 256 : 64;
+    const BIGINT Ntot = (dim == 2) ? Nd * Nd : Nd * Nd * Nd;
     const FLT tol = (FLT)(sizeof(FLT) == 4 ? 1e-4 : 1e-9);
-    std::vector<FLT> x(M), y(M);
-    std::vector<CPX> c(M), F_blocked(N1 * N2), F_single(N1 * N2);
+    std::vector<FLT> x(M), y(M), z(M);
+    std::vector<CPX> c(M), F_blocked(Ntot), F_single(Ntot);
     for (BIGINT j = 0; j < M; ++j) { // deterministic, spread over the box
       x[j] = (FLT)(M_PI * (2.0 * ((j * 2654435761u) % 1000003) / 1000003.0 - 1.0));
       y[j] = (FLT)(M_PI * (2.0 * ((j * 40503u) % 999983) / 999983.0 - 1.0));
+      z[j] = (FLT)(M_PI * (2.0 * ((j * 2246822519u) % 999979) / 999979.0 - 1.0));
       c[j] = CPX((FLT)(1.0 - 2.0 * (j % 3)), (FLT)(0.5 * (j % 5)));
     }
-    BIGINT Ns[2] = {N1, N2};
+    BIGINT Ns[3] = {Nd, Nd, Nd};
     // arm 0: 1000 pts/subproblem forces nb = 200. arm 1: one thread and no cap is
     // the nb == 1 reference (nb = max(min(nthreads, M), ceil(M/sp))).
     const int sp_forced[2] = {1000, 1 << 30}, nthr_forced[2] = {0, 1};
@@ -341,20 +352,21 @@ int main(int argc, char *argv[]) {
       o.spread_max_sp_size = sp_forced[k];
       o.nthreads = nthr_forced[k];
       FINUFFT_PLAN p;
-      if (FINUFFT_MAKEPLAN(1, 2, Ns, 1, 1, tol, &p, &o)) {
+      if (FINUFFT_MAKEPLAN(1, dim, Ns, 1, 1, tol, &p, &o)) {
         printf("fail: makeplan failed in blocked-spread test\n");
         return 1;
       }
-      FINUFFT_SETPTS(p, M, x.data(), y.data(), nullptr, 0, nullptr, nullptr, nullptr);
+      FINUFFT_SETPTS(p, M, x.data(), y.data(), dim == 3 ? z.data() : nullptr, 0, nullptr,
+                     nullptr, nullptr);
       FINUFFT_EXECUTE(p, c.data(), out[k]->data());
       FINUFFT_DESTROY(p);
     }
-    const auto err = relerrtwonorm(N1 * N2, F_single.data(), F_blocked.data());
+    const auto err = relerrtwonorm(Ntot, F_single.data(), F_blocked.data());
     // nb only changes the add-back summation order, so bound on eps, not tol.
     // Measured 5.1e-16 (f64) / 1.1e-07 (f32), identical at 1, 6 and 22 threads,
     // while a bug losing one point per subproblem boundary gives 200/2e5 = 1e-3.
     if (!(err < 1000 * (FLT)std::numeric_limits<FLT>::epsilon())) {
-      printf("fail: blocked (nb=200) vs single-subproblem spread differ: %.3g\n",
+      printf("fail: %dD blocked (nb=200) vs single-subproblem spread differ: %.3g\n", dim,
              (double)err);
       return 1;
     }
