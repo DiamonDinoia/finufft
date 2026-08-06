@@ -202,9 +202,9 @@ void FINUFFT_PLAN_T<TF>::indexSort()
     const double bin_size[3] = {bin_size_x, bin_size_y, bin_size_z};
     // Snap against the count that runs the subproblem loop, which is the plan's
     // nthreads, not maxnthr: maxnthr carries the sort-only override.
-    m.nSubproblems = finufft::heuristics::n_subproblems(dim, m.spopts.nspread, (double)M,
-                                                        (double)m.nOccupiedBins, bin_size,
-                                                        m.spopts.nthreads);
+    m.nSubproblems = finufft::heuristics::n_subproblems(
+        dim, m.spopts.nspread, (double)M, (double)m.nOccupiedBins, bin_size,
+        m.spopts.nthreads, (double)m.spopts.max_subproblem_size);
     if (m.spopts.debug && m.nSubproblems)
       printf("\toccupancy %.3g pts/bin -> nb=%lld (%.3g pts/subproblem)\n",
              m.nOccupiedBins ? (double)M / (double)m.nOccupiedBins : 0.0,

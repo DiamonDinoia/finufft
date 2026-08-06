@@ -198,17 +198,17 @@ double best_type3(double tol, int dim, int nthreads, double nj, const double *X,
   against a 1.008 identity control over 26 changed cells.
 
   Inputs: dim, ns (kernel width), npts (=nj), n_occupied_bins (bins holding >=1
-  pt, 0 if unsorted), bin_size[dim] (sort bin edge lengths), nthreads.
+  pt, 0 if unsorted), bin_size[dim] (sort bin edge lengths), nthreads, and sp_cap =
+  the caller's own spopts.max_subproblem_size, which this may only undercut, never
+  exceed (see the one-sided contract below).
   Returns nb >= 1, or 0 when there is no occupancy measure to work from.
 */
 inline BIGINT n_subproblems(int dim, int ns, double npts, double n_occupied_bins,
-                            const double *bin_size, int nthreads) {
-  // target subproblem size, and the overhead level at which amortizing subgrid
-  // cells starts to pay for a larger subproblem. SP_MAX bounds per-thread scratch
-  // RAM. Fitted on f64 geometry; at f32 (ns 3-4 rather than 7) the measured effect
-  // is roughly neutral, +0.02% to +4% geomean depending on the node, so these are
-  // not f32-calibrated.
-  constexpr double SP_REF = 30000.0, OVERHEAD_REF = 5.0, SP_MAX = 1e6;
+                            const double *bin_size, int nthreads, double sp_cap) {
+  // target subproblem size, and the overhead level at which amortizing subgrid cells
+  // starts to pay for a larger subproblem. sp_cap (the caller's legacy constant) is
+  // what bounds per-thread scratch RAM, so no separate cap is needed here.
+  constexpr double SP_REF = 30000.0, OVERHEAD_REF = 5.0;
   if (dim == 1 || n_occupied_bins <= 0) return 0; // caller keeps its own cap
   double cells = 1.0; // padded subgrid cells belonging to one sort bin
   for (int d = 0; d < dim; ++d) cells *= bin_size[d] + ns;
@@ -232,16 +232,27 @@ inline BIGINT n_subproblems(int dim, int ns, double npts, double n_occupied_bins
   // from 0.94x master into 1.05x in both precisions. SPAN_MAX is the loosest value that
   // still corrects it, so the 3D cell whose argmin genuinely is 1e5 keeps its election.
   constexpr double SPAN_MAX = 5000.0;
-  const double sp =
-      std::max(std::min(SP_REF * std::max(r, std::sqrt(r)), SPAN_MAX * occ), occ);
+  // One-sided against the caller's constant: this may elect *more* subproblems than
+  // spopts.max_subproblem_size would, never fewer. Electing fewer is what every
+  // measured regression against master did, and the cap outranks the one-bin floor
+  // above because that floor is where two of them came from - at 2.3e5 pts/bin it
+  // asks for 2.2e5 points per subproblem where the argmin is 3e4, wrong by 7.7x.
+  // Costs one measured win (3D sparse clustered in f32 elects 1.25e5 and beats the
+  // cap by 5.6%); buys back 12.3% and 10.3% on the two cells the floor and the ramp
+  // respectively overshot, which are losses against master rather than missed gains.
+  const double ramp = std::min(SP_REF * std::max(r, std::sqrt(r)), SPAN_MAX * occ);
+  const double sp = std::min(std::max(ramp, occ), sp_cap);
   const double nthr = std::max(nthreads, 1);
   // nb below nthreads would starve schedule(dynamic,1), and nb just above a
   // multiple of nthreads runs a whole extra round for a handful of stragglers, so
   // elect a whole multiple k*nthreads. k == 1 means "one round", which is why no
-  // floor on the subproblem size is needed; the second term keeps SP_MAX hard
-  // after snapping, which is why sp itself needs no upper clamp.
-  const double k = std::max(std::max(1.0, std::round(std::ceil(npts / sp) / nthr)),
-                            std::ceil(npts / (SP_MAX * nthr)));
+  // floor on the subproblem size is needed. Rounding (not ceiling) k is what keeps
+  // sp_cap a target rather than a hard bound, and that is deliberate: enforcing it
+  // hard doubles nb whenever the cap falls just under a reachable npts/(k*nthreads),
+  // which measures 6.8% worse than overshooting it (3D sparse mildly clustered wants
+  // 1.25e5 and the next reachable size down is 6.25e4). Rounding bounds the overshoot
+  // at one factor of two, so sp < 2*sp_cap always.
+  const double k = std::max(1.0, std::round(std::ceil(npts / sp) / nthr));
   return (BIGINT)(k * nthr); // caller clips to npts when it has fewer points than that
 }
 
