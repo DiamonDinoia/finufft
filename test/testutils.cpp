@@ -18,10 +18,13 @@
 
 // This switches FLT macro from double to float if SINGLE is defined, etc...
 
-#include "finufft/utils.hpp"
-#include "utils/norms.hpp"
+#include <iostream>
+
 #include <finufft/heuristics.hpp> // complexity-based upsampfac (sigma) picker
 #include <finufft/test_defs.hpp>
+#include <finufft/utils.hpp>
+
+#include "utils/norms.hpp"
 
 namespace finufft::common {
 double cyl_bessel_i_custom(double nu, double x) noexcept;
@@ -228,9 +231,9 @@ int main(int argc, char *argv[]) {
             // multiple of nthreads runs a whole extra round for a few stragglers;
             // and sp above SP_MAX blows the per-thread scratch budget.
             if (nb < nthr || nb % nthr != 0 || sp > 1000000) {
-              printf("fail: nb=%lld (%.3g pts each) for nthr=%d dim=%d npts=%.0e "
-                     "occ=%.0e\n",
-                     (long long)nb, sp, nthr, dim, npts, occ);
+              std::cout << "fail: nb=" << nb << " (" << sp
+                        << " pts each) for nthr=" << nthr << " dim=" << dim
+                        << " npts=" << npts << " occ=" << occ << "\n";
               return 1;
             }
           }
@@ -243,8 +246,10 @@ int main(int argc, char *argv[]) {
     for (double npts : {1e4, 1e5})
       for (int nthr : {32, 128})
         if (n_subproblems(3, 7, npts, npts / 5, bin3, nthr) != nthr) {
-          printf("fail: npts=%.0e on %d threads shattered into %lld subproblems\n", npts,
-                 nthr, (long long)n_subproblems(3, 7, npts, npts / 5, bin3, nthr));
+          std::cout << "fail: npts=" << npts << " on " << nthr
+                    << " threads shattered into "
+                    << n_subproblems(3, 7, npts, npts / 5, bin3, nthr)
+                    << " subproblems\n";
           return 1;
         }
 
@@ -259,6 +264,40 @@ int main(int argc, char *argv[]) {
         return 1;
       }
     }
+
+    // Concentrated points (occupancy far above one subgrid's worth) take the sqrt
+    // branch of the ramp, where sp falls below SP_REF. The tests above never reach
+    // it: at 5 pts/bin the overhead ratio stays above 1 and the ramp is the identity.
+    // Measured: 3D at ~5e3 pts/bin wants ~1e4 pts/subproblem, 3x below SP_REF.
+    for (int dim = 2; dim <= 3; ++dim) {
+      const double *bs = (dim == 2) ? bin2 : bin3;
+      const auto conc = n_subproblems(dim, 7, 1e7, 1e7 / 5000, bs, 22);
+      const auto unif = n_subproblems(dim, 7, 1e7, 1e7 / 30, bs, 22);
+      if (conc <= unif) {
+        std::cout << "fail: " << dim << "D concentrated elects " << conc
+                  << " subproblems, not more than uniform's " << unif << "\n";
+        return 1;
+      }
+    }
+
+    // ...but the ramp must stop at one bin's worth of points. Below that a
+    // subproblem covers no less of the grid than the bin it sits in, so splitting
+    // further is pure redundancy - and unbounded splitting is the small-npts
+    // shattering defect again, arriving from the concentrated side.
+    // Two floors outrank this one and are exempted: nb == nthreads (fewer
+    // subproblems than threads starves the schedule outright) and SP_MAX, which
+    // caps per-thread scratch however few bins the points occupy.
+    for (double npts : {1e6, 1e8})
+      for (double occ : {10.0, 1e3}) { // pathological: all mass in a few bins
+        const auto nb = n_subproblems(3, 7, npts, occ, bin3, 22);
+        const auto want = std::min(npts / occ, 1000000.0); // one bin, capped by SP_MAX
+        if (nb > 22 && npts / (double)nb < want / 2) {
+          std::cout << "fail: occupancy " << npts / occ << " pts/bin split into "
+                    << npts / (double)nb << " pts/subproblem, below one bin (" << want
+                    << ")\n";
+          return 1;
+        }
+      }
 
     // No occupancy measure (1D, or an unsorted point set): defer to the caller's cap.
     if (n_subproblems(1, 7, 1e7, 1e5, bin2, 16) ||

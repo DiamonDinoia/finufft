@@ -194,7 +194,16 @@ inline BIGINT n_subproblems(int dim, int ns, double npts, double n_occupied_bins
   double cells = 1.0; // padded subgrid cells belonging to one sort bin
   for (int d = 0; d < dim; ++d) cells *= bin_size[d] + ns;
   const double overhead = cells * n_occupied_bins / npts; // ~subgrid cells per pt
-  const double sp = SP_REF * std::max(1.0, overhead / OVERHEAD_REF);
+  // Above OVERHEAD_REF, amortize: bigger subproblems spread the subgrid cost over
+  // more points. Below it the points are concentrated, so their subgrids are small
+  // and splitting is cheap - keep ramping down, but as a square root, since the
+  // linear ramp overshoots the measured optimum by ~3x. sqrt(r) <= r for r >= 1, so
+  // this is a bit-identical no-op outside the concentrated regime.
+  // Never split below one sort bin's worth of points: such a subproblem has a
+  // bounding box no smaller than that bin's, so it adds redundant subgrid work and
+  // buys no locality. This bounds the ramp where measurement stops (r >= 0.1).
+  const double r = overhead / OVERHEAD_REF;
+  const double sp = std::max(SP_REF * std::max(r, std::sqrt(r)), npts / n_occupied_bins);
   const double nthr = std::max(nthreads, 1);
   // nb below nthreads would starve schedule(dynamic,1), and nb just above a
   // multiple of nthreads runs a whole extra round for a handful of stragglers, so
