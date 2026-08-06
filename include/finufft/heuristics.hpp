@@ -176,7 +176,26 @@ double best_type3(double tol, int dim, int nthreads, double nj, const double *X,
   nthreads term (the two nodes disagree on which way the optimum moves in each
   dim); and a grid-volume term for the sparse regime N >> npts (the clustered
   sparse cell that regresses on Zen4 has its Meteor Lake argmin at the *smallest*
-  sp measured, so the correction has the wrong sign here).
+  sp measured, so the correction has the wrong sign here). The sparse regime is
+  instead handled by SPAN_MAX below, which bounds the ramp rather than re-scaling it.
+
+  Also declined, measured: OVERHEAD_REF at 2 rather than 5. It does fix the two 2D
+  cells that ramp down when their argmin is above SP_REF, but the same pivot destroys
+  the concentrated-input win it exists to produce (sparse clustered cells fall from
+  1.40x and 1.27x master to 0.88x and 0.86x), for a 4.7% worse geomean overall.
+
+  Known residual losses on Meteor Lake, both at a floor rather than at the ramp, and
+  both needing a discriminator that would have to be non-monotonic in occupancy (one
+  wants a smaller sp at 136 pts/bin than another does at 25 pts/bin), so no single
+  bound corrects them: 3D dense clustered, where the "never split below one bin"
+  floor elects 2.2e5 against an argmin of 3e4, landing 17.6% above it where master
+  lands 4.6% above; and 3D sparse clustered, where the ramp elects 1.2e5 against an
+  argmin of 1e4, landing 59.6% above it where master lands 44.8% above.
+
+  Validated in both precisions on this node. f32 is not a degenerate path: halving ns
+  shrinks the overhead estimate, so f32 elects consistently more subproblems (2D
+  uniform 752 -> 944), and the measured gain is larger than f64's, +12.7% geomean
+  against a 1.008 identity control over 26 changed cells.
 
   Inputs: dim, ns (kernel width), npts (=nj), n_occupied_bins (bins holding >=1
   pt, 0 if unsorted), bin_size[dim] (sort bin edge lengths), nthreads.
@@ -203,7 +222,18 @@ inline BIGINT n_subproblems(int dim, int ns, double npts, double n_occupied_bins
   // bounding box no smaller than that bin's, so it adds redundant subgrid work and
   // buys no locality. This bounds the ramp where measurement stops (r >= 0.1).
   const double r = overhead / OVERHEAD_REF;
-  const double sp = std::max(SP_REF * std::max(r, std::sqrt(r)), npts / n_occupied_bins);
+  const double occ = npts / n_occupied_bins; // points in one sort bin
+  // The up-ramp saturates: amortizing the padded subgrid only pays while the halo is a
+  // real fraction of the subgrid, and a subproblem takes consecutive points in bin
+  // order, so once it spans SPAN_MAX bins the halo is already negligible and growing
+  // further only costs locality. Measured on the sparse regime N >> npts, where the
+  // unbounded ramp asked for 12x the argmin (2D, npts=2e6, N=2e7, mildly clustered:
+  // elected 1.25e5 against an argmin of 1e4, costing 13-22%); the bound turns that cell
+  // from 0.94x master into 1.05x in both precisions. SPAN_MAX is the loosest value that
+  // still corrects it, so the 3D cell whose argmin genuinely is 1e5 keeps its election.
+  constexpr double SPAN_MAX = 5000.0;
+  const double sp =
+      std::max(std::min(SP_REF * std::max(r, std::sqrt(r)), SPAN_MAX * occ), occ);
   const double nthr = std::max(nthreads, 1);
   // nb below nthreads would starve schedule(dynamic,1), and nb just above a
   // multiple of nthreads runs a whole extra round for a handful of stragglers, so

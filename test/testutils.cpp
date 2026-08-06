@@ -306,6 +306,28 @@ int main(int argc, char *argv[]) {
         }
       }
 
+    // The up-ramp saturates: a subproblem takes consecutive points in bin order, so
+    // past SPAN_MAX bins its padded halo is already negligible and growing further
+    // only costs locality. Without the bound the sparse regime N >> npts elects ~12x
+    // the measured argmin. The nb == nthreads floor outranks this and is exempted;
+    // the factor 2 is the slack snapping to a multiple of nthreads can add back.
+    for (int dim = 2; dim <= 3; ++dim) {
+      const double *bs = (dim == 2) ? bin2 : bin3;
+      for (int ns : ns_list)
+        for (double npts : {1e6, 1e8})
+          for (double per_bin : {7.0, 25.0, 136.0}) { // sparse: few points per bin
+            const auto nb = n_subproblems(dim, ns, npts, npts / per_bin, bs, 16);
+            const double sp = npts / (double)nb;
+            if (nb > 16 && sp > 2 * 5000.0 * per_bin) {
+              std::cout << "fail: " << dim << "D ns=" << ns << " npts=" << npts << " at "
+                        << per_bin << " pts/bin elected " << sp
+                        << " pts/subproblem, over the " << 5000.0 * per_bin
+                        << " span bound\n";
+              return 1;
+            }
+          }
+    }
+
     // No occupancy measure (1D, or an unsorted point set): defer to the caller's cap.
     if (n_subproblems(1, 7, 1e7, 1e5, bin2, 16) ||
         n_subproblems(2, 7, 1e7, 0, bin2, 16)) {
