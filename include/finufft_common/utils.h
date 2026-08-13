@@ -6,6 +6,7 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "constants.h"
 #include "defines.h"
@@ -67,6 +68,36 @@ FINUFFT_ALWAYS_INLINE void arraywidcen(int64_t n, const T *a, T *w, T *c)
     *w += std::abs(*c);
     *c = 0.0;
   }
+}
+
+template<typename T>
+FINUFFT_ALWAYS_INLINE bool arraywidcen(int64_t n, const T *a,
+                                       const std::vector<T> &cached, T *w, T *c)
+// Same as arraywidcen, but also reports exact value equality against cached,
+// fused into the same pass. Returns false if cached has the wrong length or any
+// value differs; callers use it to skip recomputing the type-3 trig factors.
+{
+  if (n == 0) {
+    arraywidcen(n, a, w, c); // sets w,c to non-finite (documented n==0 behavior)
+    return cached.empty();   // "same" only if previously also had n==0
+  }
+  T lo = INFINITY;
+  T hi = -INFINITY;
+  const bool cmp = cached.size() == static_cast<std::size_t>(n);
+  bool all_equal = cmp;
+  for (int64_t m = 0; m < n; ++m) {
+    const T x = a[m];
+    if (x < lo) lo = x;
+    if (x > hi) hi = x;
+    if (cmp) all_equal &= (x == cached[static_cast<std::size_t>(m)]);
+  }
+  *w = (hi - lo) / 2;
+  *c = (hi + lo) / 2;
+  if (std::abs(*c) < finufft::common::ARRAYWIDCEN_GROWFRAC * (*w)) {
+    *w += std::abs(*c);
+    *c = 0.0;
+  }
+  return all_equal;
 }
 
 } // namespace finufft::utils
