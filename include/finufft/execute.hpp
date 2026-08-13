@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <vector>
 
+#include <finufft/memory.hpp>
 #include <finufft/plan.hpp>
 #include <finufft/simd.hpp>
 #include <finufft/spreadinterp.hpp>
@@ -368,11 +369,22 @@ int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntran
     if (opts.debug)
       printf("[%s] start%s ntrans=%d (%d batches, bsize=%d)...\n", "execute",
              adjoint ? " adjoint" : "", ntrans_actual, nbatch, batchSize);
-    // allocate temporary buffers
+    // Use caller-provided scratch, or fall back to a thread-local reclaimable
+    // buffer so concurrent execute() calls on the same plan do not share state.
     bool scratch_provided = scratch_size >= size_t(nf() * batchSize);
-    std::vector<TC, xsimd::aligned_allocator<TC, 64>> fwBatch_(
-        scratch_provided ? 0 : nf() * batchSize);
-    TC *fwBatch = scratch_provided ? aligned_scratch : fwBatch_.data();
+    static thread_local finufft::ReclaimableMemory tls_fwBatchBuf;
+    TC *fwBatch = aligned_scratch;
+    const size_t fwBatchBytes = size_t(nf()) * batchSize * sizeof(TC);
+    if (!scratch_provided) {
+      if (!tls_fwBatchBuf.allocate(fwBatchBytes))
+        throw finufft::exception(FINUFFT_ERR_ALLOC);
+      fwBatch = static_cast<TC *>(tls_fwBatchBuf.data());
+    }
+    if (opts.debug > 1)
+      printf("[%s] scratch: %s (%.3g MB)\n", "execute",
+             scratch_provided ? "caller-provided aligned buffer"
+                              : "thread-local reclaimable buffer",
+             fwBatchBytes / 1e6);
     for (int b = 0; b * batchSize < ntrans_actual; b++) { // .....loop b over batches
 
       // current batch is either batchSize, or possibly truncated if last one
@@ -416,6 +428,11 @@ int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntran
       }
     } // ........end b loop
 
+    // Mark thread-local pages as reclaimable so the OS can reclaim physical
+    // memory between execute calls if under pressure. Pages stay resident
+    // otherwise, and virtual addresses remain stable for reuse.
+    if (!scratch_provided) tls_fwBatchBuf.mark_reclaimable();
+
     if (opts.debug) { // report total times in their natural order...
       if ((type == 1) != adjoint) {
         printf("[%s] done. tot spread:\t\t%.3g s\n", "execute", t_sprint);
@@ -447,27 +464,35 @@ int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntran
     std::vector<TC, xsimd::aligned_allocator<TC, 64>> buf1, buf2, buf3;
     TC *CpBatch, *fwBatch, *fwBatch_inner;
     if (!adjoint) { // we can combine CpBatch and fwBatch_inner!
-      buf1.resize(
-          std::max(m.nj * batchSize, m.innerT2plan->nf() * m.innerT2plan->batchSize));
+      buf1.resize(std::max(m.nj * batchSize, m.t3cache.innerT2plan->nf() *
+                                                 m.t3cache.innerT2plan->batchSize));
       CpBatch = fwBatch_inner = buf1.data();
       buf2.resize(nf() * batchSize);
       fwBatch = buf2.data();
     } else { // we may be able to combine CpBatch and fwBatch!
       // This only works if the inner plan performs our calls (that we do once
       // per batch) without doing any of its own batching ...
-      if (m.innerT2plan->batchSize >= batchSize) {
+      if (m.t3cache.innerT2plan->batchSize >= batchSize) {
         buf1.resize(std::max(m.nk * batchSize, nf() * batchSize));
         CpBatch = fwBatch = buf1.data();
-        buf2.resize(m.innerT2plan->nf() * m.innerT2plan->batchSize);
+        buf2.resize(m.t3cache.innerT2plan->nf() * m.t3cache.innerT2plan->batchSize);
         fwBatch_inner = buf2.data();
       } else {
         buf1.resize(m.nk * batchSize);
         CpBatch = buf1.data();
         buf2.resize(nf() * batchSize);
         fwBatch = buf2.data();
-        buf3.resize(m.innerT2plan->nf() * m.innerT2plan->batchSize);
+        buf3.resize(m.t3cache.innerT2plan->nf() * m.t3cache.innerT2plan->batchSize);
         fwBatch_inner = buf3.data();
       }
+    }
+    if (opts.debug > 1) {
+      const char *layout = !adjoint
+                               ? "CpBatch shares storage with inner fwBatch"
+                               : (m.t3cache.innerT2plan->batchSize >= batchSize
+                                      ? "CpBatch shares storage with fwBatch"
+                                      : "CpBatch, fwBatch, inner fwBatch all separate");
+      printf("[%s t3] workspace: %s\n", "execute", layout);
     }
 
     for (int b = 0; b * batchSize < ntrans_actual; b++) { // .....loop b over batches
@@ -485,7 +510,7 @@ int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntran
         timer.restart();
 #pragma omp parallel for num_threads(opts.nthreads) // or batchSize?
         for (BIGINT j = 0; j < m.nj; ++j) {
-          auto phase = m.prephase[j];
+          auto phase = m.t3cache.prephase[j];
           for (int i = 0; i < thisBatchSize; i++)
             CpBatch[i * m.nj + j] = phase * cjb[i * m.nj + j];
         }
@@ -501,15 +526,16 @@ int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntran
         timer.restart();
         /* (alarming that FFT not shrunk, but safe, because t2's fwBatch array
        still the same size, as Andrea explained; just wastes a few flops) */
-        m.innerT2plan->execute_internal(fkb, fwBatch, adjoint, thisBatchSize,
-                                        fwBatch_inner,
-                                        m.innerT2plan->nf() * m.innerT2plan->batchSize);
+        m.t3cache.innerT2plan->execute_internal(
+            fkb, fwBatch, adjoint, thisBatchSize, fwBatch_inner,
+            m.t3cache.innerT2plan->nf() * m.t3cache.innerT2plan->batchSize);
         t_inner += timer.elapsedsec();
         // STEP 3: apply deconvolve (precomputed 1/phiHat(targ_k), phasing too)...
         timer.restart();
 #pragma omp parallel for num_threads(opts.nthreads)
         for (BIGINT k = 0; k < m.nk; ++k)
-          for (int i = 0; i < thisBatchSize; i++) fkb[i * m.nk + k] *= m.deconv[k];
+          for (int i = 0; i < thisBatchSize; i++)
+            fkb[i * m.nk + k] *= m.t3cache.deconv[k];
         t_deconv += timer.elapsedsec();
       } else { // adjoint mode
         // STEP 0: apply deconvolve (precomputed 1/phiHat(targ_k), conjugate phasing
@@ -518,13 +544,13 @@ int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntran
 #pragma omp parallel for num_threads(opts.nthreads)
         for (BIGINT k = 0; k < m.nk; ++k)
           for (int i = 0; i < thisBatchSize; i++)
-            CpBatch[i * m.nk + k] = fkb[i * m.nk + k] * conj(m.deconv[k]);
+            CpBatch[i * m.nk + k] = fkb[i * m.nk + k] * conj(m.t3cache.deconv[k]);
         t_deconv += timer.elapsedsec();
         // STEP 1: adjoint type 2 (i.e. type 1) NUFFT from CpBatch to fwBatch...
         timer.restart();
-        m.innerT2plan->execute_internal(CpBatch, fwBatch, adjoint, thisBatchSize,
-                                        fwBatch_inner,
-                                        m.innerT2plan->nf() * m.innerT2plan->batchSize);
+        m.t3cache.innerT2plan->execute_internal(
+            CpBatch, fwBatch, adjoint, thisBatchSize, fwBatch_inner,
+            m.t3cache.innerT2plan->nf() * m.t3cache.innerT2plan->batchSize);
         t_inner += timer.elapsedsec();
         // STEP 2: interpolate fwBatch into user output array ...
         timer.restart();
@@ -535,7 +561,7 @@ int FINUFFT_PLAN_T<TF>::execute_internal(TC *cj, TC *fk, bool adjoint, int ntran
         timer.restart();
 #pragma omp parallel for num_threads(opts.nthreads) // or batchSize?
         for (BIGINT j = 0; j < m.nj; ++j) {
-          auto phase = conj(m.prephase[j]);
+          auto phase = conj(m.t3cache.prephase[j]);
           for (int i = 0; i < thisBatchSize; i++) cjb[i * m.nj + j] *= phase;
         }
         t_phase += timer.elapsedsec();

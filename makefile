@@ -365,13 +365,12 @@ test/%f: test/%.cpp $(DYNLIB)
 # C test for error-path handling in the C interface.
 test/error_handling: test/error_handling.c $(DYNLIB)
 	$(CC) $(CFLAGS) ${LDFLAGS} $< $(ABSDYNLIB) $(LIBSFFT) $(CLINK) -o $@
-# low-level tests that are cleaner if depend on only specific objects...
-# testutils also unit-tests the upsampfac picker (finufft/heuristics.hpp), which pulls
-# in kernel.o/pswf.o symbols; $(SOBJS) is exactly the precision-independent object set.
-test/testutils: test/testutils.cpp $(SOBJS)
-	$(CXX) $(CXXFLAGS) ${LDFLAGS} test/testutils.cpp $(SOBJS) $(LIBS) -o test/testutils
-test/testutilsf: test/testutils.cpp $(SOBJS)
-	$(CXX) $(CXXFLAGS) ${LDFLAGS} -DSINGLE test/testutils.cpp $(SOBJS) $(LIBS) -o test/testutilsf
+# testutils unit-tests internal helpers (visibility-hidden in the .so), so it links the
+# common objects like CMake's finufft_common, plus the .so for the C API.
+test/testutils: test/testutils.cpp $(SOBJS) $(DYNLIB)
+	$(CXX) $(CXXFLAGS) ${LDFLAGS} test/testutils.cpp $(SOBJS) $(ABSDYNLIB) $(LIBS) -o test/testutils
+test/testutilsf: test/testutils.cpp $(SOBJS) $(DYNLIB)
+	$(CXX) $(CXXFLAGS) ${LDFLAGS} -DSINGLE test/testutils.cpp $(SOBJS) $(ABSDYNLIB) $(LIBS) -o test/testutilsf
 
 # make sure all double-prec test executables ready for testing
 CPPTESTS := $(basename $(wildcard test/*.cpp))
