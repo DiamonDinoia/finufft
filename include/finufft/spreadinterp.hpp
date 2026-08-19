@@ -25,9 +25,6 @@
 #include <cstdio>
 #include <inttypes.h>
 #include <vector>
-#ifdef __linux__
-#include <unistd.h> // sysconf: cache sizes for the spread tile edge
-#endif
 
 // ---------- FINUFFT_PLAN_T method definitions ----------
 
@@ -120,6 +117,16 @@ FINUFFT_PLAN_T<TF>::Kernel_onedim_FT::Kernel_onedim_FT(const FINUFFT_PLAN_T &pla
   prefac = TF(pf);
 }
 
+// Subproblems one thread draws, so a thread that takes a long one still ends within
+// 1/K of the ideal makespan.
+constexpr UBIGINT spread_tau_shares = 4;
+
+// Points whose strengths fill a quarter of one core's L2: the budget the tile sizer
+// aims at and the cap a single subproblem may hold.
+inline UBIGINT spread_max_pts() noexcept {
+  return UBIGINT(finufft::utils::getL2CacheSize()) / (4 * 16);
+}
+
 // Doublings of the fine cell that make up one spread tile edge, or -1 to leave
 // spreading on the legacy point-count chunks. One core's L2 sets the tile size:
 // the tile's strengths want a quarter of it, measured over 2D and 3D at 1e6..5e7
@@ -129,12 +136,8 @@ FINUFFT_PLAN_T<TF>::Kernel_onedim_FT::Kernel_onedim_FT(const FINUFFT_PLAN_T &pla
 // point set does not earn it and keeps the legacy chunks, which also subsumes
 // the M*1000<N low-density rescue.
 inline int spread_tile_shift(int cell, int ndims, int nspread, double density) noexcept {
-  long l2 = 2 << 20; // 2 MiB where the query below is unavailable
-#ifdef __linux__
-  if (const long v = sysconf(_SC_LEVEL2_CACHE_SIZE); v > 0) l2 = v;
-#endif
-  const double max_pts   = double(l2) / (4 * 16); // strengths: a quarter of L2
-  const double max_cells = double(l2) / 16;       // subgrid: all of L2
+  const double max_pts = double(spread_max_pts()); // strengths: a quarter of L2
+  const double max_cells = double(finufft::utils::getL2CacheSize()) / 16; // all of L2
   const auto pow_d       = [=](double x) {
     double v = 1;
     for (int d = 0; d < ndims; ++d) v *= x;
@@ -429,14 +432,26 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
     if (!m.tileOffsets.empty()) {
       // One subproblem per non-empty cache tile, read straight off the tile
       // offsets, of which there is one more than there are tiles and so always
-      // at least two. A subproblem may hold at most tau points, twice what an
-      // average tile holds, so a dense cluster in one tile cannot become
-      // several tiles' worth of work while the other threads idle. The
-      // max_subproblem_size option still bounds the RAM one thread needs.
-      const auto &to    = m.tileOffsets;
-      const UBIGINT tau = std::max(
-          std::min(2 * M / (to.size() - 1), UBIGINT(m.spopts.max_subproblem_size)),
-          UBIGINT(1));
+      // at least two. A tile holding more than tau points is split into equal
+      // chunks instead. Two cache ceilings set tau: twice what an average tile
+      // holds, so one dense tile cannot become several tiles' worth of work while
+      // the other threads idle, and the strengths one core's L2 holds, since a
+      // chunk over that budget stops streaming whatever the tile sizer assumed
+      // about the density.
+      const auto &to = m.tileOffsets;
+      const UBIGINT nthr_eff = (nthr + batchSize - 1) / batchSize;
+      UBIGINT tau = std::min(2 * M / (to.size() - 1), spread_max_pts());
+      // The threads want K subproblems each, so that a thread drawing a long one still
+      // ends within 1/K of the ideal makespan (one vector of the batch per thread
+      // already fills the machine, so the count divides by the threads sharing a
+      // vector). Cap tau only when the filled tiles cannot supply that many: a cap near
+      // the occupancy a tile typically has would cut half the tiles in two for nothing.
+      const UBIGINT want = spread_tau_shares * nthr_eff;
+      UBIGINT filled = 0;
+      for (size_t t = 1; t < to.size(); ++t)
+        filled += UBIGINT(to[t]) > UBIGINT(to[t - 1]);
+      if (filled < want) tau = std::min(tau, 1 + (M - 1) / want);
+      tau = std::max(tau, UBIGINT(1));
       brk.push_back(0);
       for (size_t t = 1; t < to.size(); ++t) {
         const UBIGINT lo = brk.back(), hi = UBIGINT(to[t]);

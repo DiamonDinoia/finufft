@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstddef>
 #include <finufft_common/common.h>
 
 namespace finufft::utils {
@@ -25,6 +26,10 @@ private:
 #ifdef _OPENMP
 FINUFFT_NEVER_INLINE unsigned getOptimalThreadCount();
 #endif
+
+// Bytes of L2 cache on one core, queried once and cached. Falls back to 2 MiB on a
+// platform that does not report it.
+FINUFFT_NEVER_INLINE std::size_t getL2CacheSize() noexcept;
 
 } // namespace finufft::utils
 

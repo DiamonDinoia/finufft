@@ -29,6 +29,7 @@
 #endif
 #include <fstream>
 #include <sched.h>
+#include <unistd.h>
 #endif
 
 namespace finufft::utils {
@@ -58,6 +59,86 @@ double CNTime::elapsedsec() const
                             .count();
   const double nowsec = double(now) * 1e-6;
   return nowsec - initial;
+}
+
+// ------------------------------ cache geometry -----------------------------
+
+namespace { // helpers local to this TU
+
+// Bytes of L2 cache on one core, 0 where the platform does not report it. The answer is
+// whatever the OS reports for the cache at level 2, which on a design that shares one L2
+// across a core cluster is the cluster's, not one core's share of it.
+
+#if defined(_WIN32)
+
+std::size_t queryL2CacheSize() {
+  DWORD bufferSize = 0;
+  if (GetLogicalProcessorInformation(nullptr, &bufferSize) == FALSE &&
+      GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
+    std::vector<SYSTEM_LOGICAL_PROCESSOR_INFORMATION> procInfo(
+        bufferSize / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION));
+    if (GetLogicalProcessorInformation(procInfo.data(), &bufferSize) != FALSE)
+      for (const auto &info : procInfo)
+        if (info.Relationship == RelationCache && info.Cache.Level == 2)
+          return std::size_t(info.Cache.Size);
+  }
+  return 0;
+}
+
+#elif defined(__APPLE__)
+
+std::size_t queryL2CacheSize() {
+  std::int64_t bytes = 0;
+  std::size_t size = sizeof(bytes);
+  if (sysctlbyname("hw.l2cachesize", &bytes, &size, nullptr, 0) != 0) return 0;
+  return bytes > 0 ? std::size_t(bytes) : 0;
+}
+
+#elif defined(__linux__)
+
+std::size_t queryL2CacheSize() {
+  // sysconf reads cpuid, so it answers on x86 only; every other Linux target
+  // reports the same geometry through the sysfs cache topology.
+  if (const long bytes = sysconf(_SC_LEVEL2_CACHE_SIZE); bytes > 0)
+    return std::size_t(bytes);
+  for (int index = 0; index < 16; ++index) {
+    char path[80];
+    snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu0/cache/index%d/level",
+             index);
+    std::ifstream levelfile(path);
+    int level;
+    if (!(levelfile >> level)) break; // ran past the last cache of this cpu
+    if (level != 2) continue;
+    snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu0/cache/index%d/size", index);
+    std::ifstream sizefile(path);
+    std::size_t size;
+    char unit = 0; // sysfs prints the size as e.g. "1024K" or "2M"
+    if (!(sizefile >> size)) return 0;
+    sizefile >> unit;
+    return size * (unit == 'M' ? (1U << 20) : unit == 'K' ? (1U << 10) : 1U);
+  }
+  return 0;
+}
+
+#else
+
+std::size_t queryL2CacheSize() { return 0; }
+
+#endif
+} // anonymous namespace
+
+std::size_t getL2CacheSize() noexcept {
+  static const std::size_t cached_l2 = []() -> std::size_t {
+    try {
+      if (const auto bytes = queryL2CacheSize()) return bytes;
+    } catch (const std::exception &e) {
+      std::cerr << "Error determining L2 cache size: " << e.what() << ". Using 2 MiB."
+                << std::endl;
+    }
+    return std::size_t(2) << 20;
+  }();
+
+  return cached_l2;
 }
 
 #ifdef _OPENMP
