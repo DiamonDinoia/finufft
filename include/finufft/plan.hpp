@@ -127,6 +127,8 @@ private:
     std::array<const TF *, 3> XYZ{nullptr, nullptr, nullptr};
                                    // pointers to user's NU source coords (no alloc)
     std::vector<BIGINT> sortIndices;  // bin-sort permutation of NU points
+    std::vector<BIGINT> tileOffsets; // start of each cache tile's span in the
+                                     // sorted list; empty unless tile-binned
     bool didSort = false;             // whether bin-sorting was applied
 
     // --- Type 3 workspace (set by setpts for type 3 only) ---
@@ -212,9 +214,12 @@ private:
   struct InterpSorted2dCaller;
   struct InterpSorted3dCaller;
 
-  void bin_sort_singlethread(double bin_size_x, double bin_size_y, double bin_size_z);
+  void bin_sort_singlethread(double bin_size_x, double bin_size_y, double bin_size_z,
+                             int tile_shift = 0,
+                             std::vector<BIGINT> *tile_start_out = nullptr);
   void bin_sort_multithread(double bin_size_x, double bin_size_y, double bin_size_z,
-                            int nthr);
+                            int nthr, int tile_shift = 0,
+                            std::vector<BIGINT> *tile_start_out = nullptr);
   template<bool thread_safe>
   void add_wrapped_subgrid(BIGINT offset1, BIGINT offset2, BIGINT offset3,
                            UBIGINT padded_size1, UBIGINT size1, UBIGINT size2,

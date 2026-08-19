@@ -453,13 +453,52 @@ void FINUFFT_PLAN_T<TF>::add_wrapped_subgrid(
 // Called by the FINUFFT_PLAN_T methods below via runtime ndims dispatch.
 namespace {
 
+// Two-level count-sort key: the high part is the index of the cache tile, the
+// low part is the index of the fine cell inside that tile. A run of `stride`
+// consecutive bins is therefore one cuboid tile of the fine grid, which is what
+// lets spreadSorted take tiles straight off the tile offsets as its
+// subproblems. shift==0 leaves the key as the plain row-major cell index, which
+// is what the untiled path passes; that path also keeps the legacy bin sizes, so
+// it sorts exactly as before.
+template<int ndims> struct tile_key {
+  BIGINT shift, mask;   // cells per tile edge, a power of two, minus one
+  BIGINT tshift;        // shift*ndims: bits the tile index moves up by
+  BIGINT nt1, nt2;      // tiles along x and y
+  BIGINT stride;        // fine cells per tile
+  BIGINT ntiles, nbins; // nbins == ntiles*stride
+
+  tile_key(int shift_, BIGINT nb1, BIGINT nb2, BIGINT nb3)
+      : shift(shift_), mask((BIGINT(1) << shift_) - 1), tshift(shift * ndims) {
+    const auto up = [&](BIGINT nb) { return (nb + mask) >> shift; };
+    nt1           = up(nb1);
+    nt2           = ndims > 1 ? up(nb2) : 1;
+    stride        = BIGINT(1) << tshift;
+    ntiles        = nt1 * nt2 * (ndims > 2 ? up(nb3) : 1);
+    nbins         = ntiles * stride;
+  }
+  // c1,c2,c3 are fine-cell indices, batches or scalars alike; unused dims pass 0
+  template<typename I> I operator()(I c1, I c2, I c3) const {
+    I tile = c1 >> shift, cell = c1 & mask;
+    if constexpr (ndims > 1) {
+      tile = tile + I(nt1) * (c2 >> shift);
+      cell = cell | ((c2 & mask) << shift);
+    }
+    if constexpr (ndims > 2) {
+      tile = tile + I(nt1 * nt2) * (c3 >> shift);
+      cell = cell | ((c3 & mask) << (2 * shift));
+    }
+    return (tile << tshift) | cell;
+  }
+};
+
 // FIXME: bin_sort_singlethread_impl can be changed to take XYZ directly
 // instead of separate kx, ky, kz and N1, N2, N3, bin_size_x/y/z arguments.
 template<typename T, int ndims>
 inline void bin_sort_singlethread_impl(std::vector<BIGINT> &ret, UBIGINT M, const T *kx,
                                        const T *ky, const T *kz, UBIGINT N1, UBIGINT N2,
                                        UBIGINT N3, double bin_size_x, double bin_size_y,
-                                       double bin_size_z)
+                                       double bin_size_z, int tile_shift,
+                                       std::vector<BIGINT> *tile_start_out)
 /* Returns permutation of all nonuniform points with good RAM access,
  * ie less cache misses for spreading, in 1D, 2D, or 3D.
  *
@@ -511,10 +550,10 @@ inline void bin_sort_singlethread_impl(std::vector<BIGINT> &ret, UBIGINT M, cons
   // here the +1 is needed to allow round-off error causing i1=N1/bin_size_x,
   // for kx near +pi, ie foldrescale gives N1 (exact arith would be 0 to N1-1).
   // Note that round-off near kx=-pi stably rounds negative to i1=0.
-  const auto nbins1             = BIGINT(T(N1) / bin_size_x + 1);
-  const auto nbins2             = ndims > 1 ? BIGINT(T(N2) / bin_size_y + 1) : 1;
-  const auto nbins3             = ndims > 2 ? BIGINT(T(N3) / bin_size_z + 1) : 1;
-  const auto nbins              = nbins1 * nbins2 * nbins3;
+  const tile_key<ndims> tk(tile_shift, BIGINT(T(N1) / bin_size_x + 1),
+                           ndims > 1 ? BIGINT(T(N2) / bin_size_y + 1) : 1,
+                           ndims > 2 ? BIGINT(T(N3) / bin_size_z + 1) : 1);
+  const auto nbins              = tk.nbins;
   const auto inv_bin_size_x     = T(1.0 / bin_size_x);
   const auto inv_bin_size_y     = T(1.0 / bin_size_y);
   const auto inv_bin_size_z     = T(1.0 / bin_size_z);
@@ -526,28 +565,24 @@ inline void bin_sort_singlethread_impl(std::vector<BIGINT> &ret, UBIGINT M, cons
   auto compute_bins = [&](UBIGINT offset) {
     const auto i1 = xsimd::to_int(
         fold_rescale(simd_type::load_unaligned(kx + offset), N1) * inv_bin_size_x_vec);
-    auto bin = i1;
-    if constexpr (ndims > 1) {
-      const auto i2 = xsimd::to_int(
+    auto i2 = decltype(i1)(0), i3 = decltype(i1)(0);
+    if constexpr (ndims > 1)
+      i2 = xsimd::to_int(
           fold_rescale(simd_type::load_unaligned(ky + offset), N2) * inv_bin_size_y_vec);
-      bin = i1 + nbins1 * i2;
-    }
-    if constexpr (ndims > 2) {
-      const auto i3 = xsimd::to_int(
+    if constexpr (ndims > 2)
+      i3 = xsimd::to_int(
           fold_rescale(simd_type::load_unaligned(kz + offset), N3) * inv_bin_size_z_vec);
-      bin = bin + nbins1 * nbins2 * i3;
-    }
-    return bin;
+    return tk(i1, i2, i3);
   };
 
   // lambda to compute scalar bin index for a single point
   auto compute_bin_scalar = [&](UBIGINT idx) {
-    auto bin = BIGINT(fold_rescale<T>(kx[idx], N1) * inv_bin_size_x);
-    if constexpr (ndims > 1)
-      bin += nbins1 * BIGINT(fold_rescale<T>(ky[idx], N2) * inv_bin_size_y);
-    if constexpr (ndims > 2)
-      bin += nbins1 * nbins2 * BIGINT(fold_rescale<T>(kz[idx], N3) * inv_bin_size_z);
-    return bin;
+    const auto c1 = BIGINT(fold_rescale<T>(kx[idx], N1) * inv_bin_size_x);
+    const auto c2 =
+        ndims > 1 ? BIGINT(fold_rescale<T>(ky[idx], N2) * inv_bin_size_y) : BIGINT(0);
+    const auto c3 =
+        ndims > 2 ? BIGINT(fold_rescale<T>(kz[idx], N3) * inv_bin_size_z) : BIGINT(0);
+    return tk(c1, c2, c3);
   };
 
   // uint32_t counts halves cache footprint vs BIGINT (int64_t)
@@ -580,6 +615,14 @@ inline void bin_sort_singlethread_impl(std::vector<BIGINT> &ret, UBIGINT M, cons
     ret[counts[bin]] = BIGINT(i);
     ++counts[bin];
   }
+  // after placement counts[b] is the end of bin b, so the last bin of tile t-1
+  // ends exactly where tile t starts
+  if (tile_start_out) {
+    tile_start_out->resize(tk.ntiles + 1);
+    (*tile_start_out)[0] = 0;
+    for (BIGINT t = 1; t <= tk.ntiles; ++t)
+      (*tile_start_out)[t] = BIGINT(counts[t * tk.stride - 1]);
+  }
 }
 
 // FIXME: same as bin_sort_singlethread_impl — can take XYZ/nfdim/bin_size arrays
@@ -588,7 +631,8 @@ template<typename T, int ndims>
 inline void bin_sort_multithread_impl(std::vector<BIGINT> &ret, UBIGINT M, const T *kx,
                                       const T *ky, const T *kz, UBIGINT N1, UBIGINT N2,
                                       UBIGINT N3, double bin_size_x, double bin_size_y,
-                                      double bin_size_z, int nthr)
+                                      double bin_size_z, int nthr, int tile_shift,
+                                      std::vector<BIGINT> *tile_start_out)
 /* Mostly-OpenMP'ed version of bin_sort, SIMD-vectorized per thread.
    Templated on ndims to eliminate branching in inner loops.
    For documentation see: bin_sort_singlethread_impl.
@@ -614,10 +658,10 @@ inline void bin_sort_multithread_impl(std::vector<BIGINT> &ret, UBIGINT M, const
     return arr;
   };
 
-  const auto nbins1             = BIGINT(T(N1) / bin_size_x + 1);
-  const auto nbins2             = ndims > 1 ? BIGINT(T(N2) / bin_size_y + 1) : 1;
-  const auto nbins3             = ndims > 2 ? BIGINT(T(N3) / bin_size_z + 1) : 1;
-  const auto nbins              = nbins1 * nbins2 * nbins3;
+  const tile_key<ndims> tk(tile_shift, BIGINT(T(N1) / bin_size_x + 1),
+                           ndims > 1 ? BIGINT(T(N2) / bin_size_y + 1) : 1,
+                           ndims > 2 ? BIGINT(T(N3) / bin_size_z + 1) : 1);
+  const auto nbins              = tk.nbins;
   const auto inv_bin_size_x_vec = simd_type(1.0 / bin_size_x);
   const auto inv_bin_size_y_vec = simd_type(1.0 / bin_size_y);
   const auto inv_bin_size_z_vec = simd_type(1.0 / bin_size_z);
@@ -629,28 +673,24 @@ inline void bin_sort_multithread_impl(std::vector<BIGINT> &ret, UBIGINT M, const
   auto compute_bins = [&](UBIGINT offset) {
     const auto i1 = xsimd::to_int(
         fold_rescale(simd_type::load_unaligned(kx + offset), N1) * inv_bin_size_x_vec);
-    auto bin = i1;
-    if constexpr (ndims > 1) {
-      const auto i2 = xsimd::to_int(
+    auto i2 = decltype(i1)(0), i3 = decltype(i1)(0);
+    if constexpr (ndims > 1)
+      i2 = xsimd::to_int(
           fold_rescale(simd_type::load_unaligned(ky + offset), N2) * inv_bin_size_y_vec);
-      bin = i1 + nbins1 * i2;
-    }
-    if constexpr (ndims > 2) {
-      const auto i3 = xsimd::to_int(
+    if constexpr (ndims > 2)
+      i3 = xsimd::to_int(
           fold_rescale(simd_type::load_unaligned(kz + offset), N3) * inv_bin_size_z_vec);
-      bin = bin + nbins1 * nbins2 * i3;
-    }
-    return bin;
+    return tk(i1, i2, i3);
   };
 
   // lambda to compute scalar bin index for a single point
   auto compute_bin_scalar = [&](UBIGINT idx) {
-    auto bin = BIGINT(fold_rescale<T>(kx[idx], N1) * inv_bin_size_x);
-    if constexpr (ndims > 1)
-      bin += nbins1 * BIGINT(fold_rescale<T>(ky[idx], N2) * inv_bin_size_y);
-    if constexpr (ndims > 2)
-      bin += nbins1 * nbins2 * BIGINT(fold_rescale<T>(kz[idx], N3) * inv_bin_size_z);
-    return bin;
+    const auto c1 = BIGINT(fold_rescale<T>(kx[idx], N1) * inv_bin_size_x);
+    const auto c2 =
+        ndims > 1 ? BIGINT(fold_rescale<T>(ky[idx], N2) * inv_bin_size_y) : BIGINT(0);
+    const auto c3 =
+        ndims > 2 ? BIGINT(fold_rescale<T>(kz[idx], N3) * inv_bin_size_z) : BIGINT(0);
+    return tk(c1, c2, c3);
   };
 
   if (nthr == 0) fprintf(stderr, "[%s] nthr (%d) must be positive!\n", __func__, nthr);
@@ -721,6 +761,18 @@ inline void bin_sort_multithread_impl(std::vector<BIGINT> &ret, UBIGINT M, const
 
 #pragma omp barrier
 
+    // thread 0's slot of a bin holds that bin's start in the sorted output, and
+    // this reads the slots before the placement pass advances them
+    if (tile_start_out) {
+#pragma omp single
+      {
+        tile_start_out->resize(tk.ntiles + 1);
+        for (BIGINT t = 0; t < tk.ntiles; ++t)
+          (*tile_start_out)[t] = BIGINT(counts[0][t * tk.stride]);
+        (*tile_start_out)[tk.ntiles] = BIGINT(M);
+      }
+    }
+
     // placement pass: SIMD bin compute, scalar placement
     for (i = chunk_start; i < chunk_simd; i += simd_size) {
       const auto bin       = compute_bins(i);
@@ -742,42 +794,51 @@ inline void bin_sort_multithread_impl(std::vector<BIGINT> &ret, UBIGINT M, const
 
 template<typename TF>
 void FINUFFT_PLAN_T<TF>::bin_sort_singlethread(double bin_size_x, double bin_size_y,
-                                               double bin_size_z) {
+                                               double bin_size_z, int tile_shift,
+                                               std::vector<BIGINT> *tile_start_out) {
   const UBIGINT N1 = m.nfdim[0], N2 = m.nfdim[1], N3 = m.nfdim[2];
   const int ndims = finufft::spreadinterp::ndims_from_Ns(N1, N2, N3);
   switch (ndims) {
   case 1:
     bin_sort_singlethread_impl<TF, 1>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                      N1, N2, N3, bin_size_x, bin_size_y, bin_size_z);
+                                      N1, N2, N3, bin_size_x, bin_size_y, bin_size_z,
+                                      tile_shift, tile_start_out);
     break;
   case 2:
     bin_sort_singlethread_impl<TF, 2>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                      N1, N2, N3, bin_size_x, bin_size_y, bin_size_z);
+                                      N1, N2, N3, bin_size_x, bin_size_y, bin_size_z,
+                                      tile_shift, tile_start_out);
     break;
   default:
     bin_sort_singlethread_impl<TF, 3>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                      N1, N2, N3, bin_size_x, bin_size_y, bin_size_z);
+                                      N1, N2, N3, bin_size_x, bin_size_y, bin_size_z,
+                                      tile_shift, tile_start_out);
     break;
   }
 }
 
 template<typename TF>
 void FINUFFT_PLAN_T<TF>::bin_sort_multithread(double bin_size_x, double bin_size_y,
-                                              double bin_size_z, int nthr) {
+                                              double bin_size_z, int nthr,
+                                              int tile_shift,
+                                              std::vector<BIGINT> *tile_start_out) {
   const UBIGINT N1 = m.nfdim[0], N2 = m.nfdim[1], N3 = m.nfdim[2];
   const int ndims = finufft::spreadinterp::ndims_from_Ns(N1, N2, N3);
   switch (ndims) {
   case 1:
     bin_sort_multithread_impl<TF, 1>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                     N1, N2, N3, bin_size_x, bin_size_y, bin_size_z, nthr);
+                                     N1, N2, N3, bin_size_x, bin_size_y, bin_size_z, nthr,
+                                     tile_shift, tile_start_out);
     break;
   case 2:
     bin_sort_multithread_impl<TF, 2>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                     N1, N2, N3, bin_size_x, bin_size_y, bin_size_z, nthr);
+                                     N1, N2, N3, bin_size_x, bin_size_y, bin_size_z, nthr,
+                                     tile_shift, tile_start_out);
     break;
   default:
     bin_sort_multithread_impl<TF, 3>(m.sortIndices, m.nj, m.XYZ[0], m.XYZ[1], m.XYZ[2],
-                                     N1, N2, N3, bin_size_x, bin_size_y, bin_size_z, nthr);
+                                     N1, N2, N3, bin_size_x, bin_size_y, bin_size_z, nthr,
+                                     tile_shift, tile_start_out);
     break;
   }
 }

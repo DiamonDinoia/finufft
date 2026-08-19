@@ -25,6 +25,9 @@
 #include <cstdio>
 #include <inttypes.h>
 #include <vector>
+#ifdef __linux__
+#include <unistd.h> // sysconf: cache sizes for the spread tile edge
+#endif
 
 // ---------- FINUFFT_PLAN_T method definitions ----------
 
@@ -117,6 +120,35 @@ FINUFFT_PLAN_T<TF>::Kernel_onedim_FT::Kernel_onedim_FT(const FINUFFT_PLAN_T &pla
   prefac = TF(pf);
 }
 
+// Doublings of the fine cell that make up one spread tile edge, or -1 to leave
+// spreading on the legacy point-count chunks. One core's L2 sets the tile size:
+// the tile's strengths want a quarter of it, measured over 2D and 3D at 1e6..5e7
+// points, and its padded subgrid wants no more than all of it. A tile must also
+// earn its padding, since zeroing that subgrid and adding it back into the fine
+// grid costs (edge+nspread)^ndims of traffic whatever the tile holds; a sparse
+// point set does not earn it and keeps the legacy chunks, which also subsumes
+// the M*1000<N low-density rescue.
+inline int spread_tile_shift(int cell, int ndims, int nspread, double density) noexcept {
+  long l2 = 2 << 20; // 2 MiB where the query below is unavailable
+#ifdef __linux__
+  if (const long v = sysconf(_SC_LEVEL2_CACHE_SIZE); v > 0) l2 = v;
+#endif
+  const double max_pts   = double(l2) / (4 * 16); // strengths: a quarter of L2
+  const double max_cells = double(l2) / 16;       // subgrid: all of L2
+  const auto pow_d       = [=](double x) {
+    double v = 1;
+    for (int d = 0; d < ndims; ++d) v *= x;
+    return v;
+  };
+  const auto edge = [=](int shift) { return double(cell << shift); };
+  int shift       = 0;
+  while (pow_d(edge(shift + 1)) <= max_cells &&
+         density * pow_d(edge(shift + 1)) <= max_pts)
+    ++shift;
+  const double kernel = density * pow_d(edge(shift)) * pow_d(nspread);
+  return kernel > 20 * pow_d(edge(shift) + nspread) ? shift : -1;
+}
+
 template<typename TF>
 void FINUFFT_PLAN_T<TF>::indexSort()
 /* Decides whether or not to sort the NU pts (influenced by spopts.sort),
@@ -157,6 +189,12 @@ void FINUFFT_PLAN_T<TF>::indexSort()
 
   // heuristic binning box size for U grid... affects performance:
   double bin_size_x = 16, bin_size_y = 4, bin_size_z = 4;
+  // Spreading instead bins into cubic cache tiles and takes each tile as one
+  // subproblem, so the subgrids are cache-sized cuboids rather than the
+  // x-saturated slabs that chunking the sorted list by point count produces.
+  // Interpolation reads the fine grid directly and keeps the fine bins.
+
+  const int ndims = ndims_from_Ns(N1, N2, N3);
 
   int better_to_sort =
       !(dim == 1 && (m.spopts.spread_direction == 2 || (M > 1000 * N1))); // 1D small-N or
@@ -165,6 +203,7 @@ void FINUFFT_PLAN_T<TF>::indexSort()
 
   timer.start(); // if needed, sort all the NU pts...
   m.didSort    = false;
+  m.tileOffsets.clear();
   auto maxnthr = MY_OMP_GET_MAX_THREADS(); // used if both below opts default
   if (m.spopts.nthreads > 0)
     maxnthr = m.spopts.nthreads;           // user nthreads overrides, without limit
@@ -179,10 +218,25 @@ void FINUFFT_PLAN_T<TF>::indexSort()
     auto grid_N = N1 * N2 * N3;
     if (sort_nthr == 0) // multithreaded auto choice: when N>>M, one thread is better!
       sort_nthr = (10 * M > grid_N) ? maxnthr : 1; // heuristic
+    // tile the fine grid into cubic cells of 4 grid points per edge, grouped
+    // 2^tile_shift cells per tile edge; tile_shift<0 keeps the legacy bins
+    const int cell = 4;
+    const int tile_shift =
+        m.spopts.spread_direction == 1 && ndims > 1
+            ? spread_tile_shift(cell, ndims, m.spopts.nspread, double(M) / double(grid_N))
+            : -1;
+    const int shift = std::max(tile_shift, 0);
+    std::vector<BIGINT> *offs = nullptr;
+    if (tile_shift >= 0) {
+      bin_size_x = bin_size_y = bin_size_z = cell;
+      offs       = &m.tileOffsets;
+      if (m.spopts.debug)
+        printf("\tspread tiles of %d grid pts per edge\n", cell << tile_shift);
+    }
     if (sort_nthr == 1)
-      bin_sort_singlethread(bin_size_x, bin_size_y, bin_size_z);
+      bin_sort_singlethread(bin_size_x, bin_size_y, bin_size_z, shift, offs);
     else // sort_nthr>1, user fixes # threads (>=2)
-      bin_sort_multithread(bin_size_x, bin_size_y, bin_size_z, sort_nthr);
+      bin_sort_multithread(bin_size_x, bin_size_y, bin_size_z, sort_nthr, shift, offs);
     if (m.spopts.debug)
       printf("\tsorted (%d threads):\t%.3g s\n", sort_nthr, timer.elapsedsec());
     m.didSort = true;
@@ -371,26 +425,52 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
     // one subprob per thread, but the batch loop is folded in below, so nthr/batchSize
     // of them already keeps all threads busy; fewer, bigger subprobs mean fewer padded
     // subgrids to zero and add back
-    auto nb = std::min((UBIGINT)((nthr + batchSize - 1) / batchSize), M);
-    if (nb * (BIGINT)m.spopts.max_subproblem_size < M) {
-      // ...or more subprobs to cap size
-      nb = 1 + (M - 1) / m.spopts.max_subproblem_size; // int div does
-      // ceil(M/m.spopts.max_subproblem_size)
+    std::vector<UBIGINT> brk; // NU index breakpoints defining the subproblems
+    if (!m.tileOffsets.empty()) {
+      // One subproblem per non-empty cache tile, read straight off the tile
+      // offsets, of which there is one more than there are tiles and so always
+      // at least two. A subproblem may hold at most tau points, twice what an
+      // average tile holds, so a dense cluster in one tile cannot become
+      // several tiles' worth of work while the other threads idle. The
+      // max_subproblem_size option still bounds the RAM one thread needs.
+      const auto &to    = m.tileOffsets;
+      const UBIGINT tau = std::max(
+          std::min(2 * M / (to.size() - 1), UBIGINT(m.spopts.max_subproblem_size)),
+          UBIGINT(1));
+      brk.push_back(0);
+      for (size_t t = 1; t < to.size(); ++t) {
+        const UBIGINT lo = brk.back(), hi = UBIGINT(to[t]);
+        if (hi <= lo) continue; // empty tile
+        const UBIGINT chunks = 1 + (hi - lo - 1) / tau;
+        for (UBIGINT c = 1; c < chunks; ++c) brk.push_back(lo + (hi - lo) * c / chunks);
+        brk.push_back(hi);
+      }
       if (m.spopts.debug)
-        printf("\tcapping subproblem sizes to max of %d\n", m.spopts.max_subproblem_size);
+        printf("\tcache tiles: %lld subprobs from %lld tiles (cap %lld pts)\n",
+               (long long)(brk.size() - 1), (long long)(to.size() - 1), (long long)tau);
+    } else {
+      auto nb = std::min((UBIGINT)((nthr + batchSize - 1) / batchSize), M);
+      if (nb * (BIGINT)m.spopts.max_subproblem_size < M) {
+        // ...or more subprobs to cap size
+        nb = 1 + (M - 1) / m.spopts.max_subproblem_size; // int div does
+        // ceil(M/m.spopts.max_subproblem_size)
+        if (m.spopts.debug)
+          printf("\tcapping subproblem sizes to max of %d\n",
+                 m.spopts.max_subproblem_size);
+      }
+      if (M * 1000 < N) {
+        // low-density heuristic: one thread per NU pt!
+        nb = M;
+        if (m.spopts.debug) printf("\tusing low-density speed rescue nb=M...\n");
+      }
+      if (!did_sort && nthr == 1) {
+        nb = 1;
+        if (m.spopts.debug) printf("\tunsorted nthr=1: forcing single subproblem...\n");
+      }
+      brk.resize(nb + 1);
+      for (UBIGINT p = 0; p <= nb; ++p) brk[p] = (M * p + nb - 1) / nb;
     }
-    if (M * 1000 < N) {
-      // low-density heuristic: one thread per NU pt!
-      nb = M;
-      if (m.spopts.debug) printf("\tusing low-density speed rescue nb=M...\n");
-    }
-    if (!did_sort && nthr == 1) {
-      nb = 1;
-      if (m.spopts.debug) printf("\tunsorted nthr=1: forcing single subproblem...\n");
-    }
-
-    std::vector<UBIGINT> brk(nb + 1); // NU index breakpoints defining nb subproblems
-    for (UBIGINT p = 0; p <= nb; ++p) brk[p] = (M * p + nb - 1) / nb;
+    const UBIGINT nb = brk.size() - 1;
 
     // nb and brk come only from plan state, so every vector in the batch splits into the
     // same subprobs and the (vector, subprob) space is rectangular: collapse it, and all
