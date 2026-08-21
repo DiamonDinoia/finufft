@@ -11,6 +11,7 @@ set(TESTS
     spreadinterp1d_test
     adjointness
     tolsweep
+    type3_replan
 )
 
 foreach(TEST ${TESTS})
@@ -155,6 +156,8 @@ function(add_tests_with_prec PREC REQ_TOL CHECK_TOL SUFFIX)
     set_tests_properties(run_tolsweep_${PREC} PROPERTIES TIMEOUT 3000)
 
     add_test(NAME run_adjointness_${PREC} COMMAND adjointness${SUFFIX} WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+    add_test(NAME run_type3_replan_${PREC} COMMAND type3_replan${SUFFIX} WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 endfunction()
 
 # use above function to actually add the tests, with certain requested and check
