@@ -160,13 +160,17 @@ private:
         std::array<BIGINT, 3> nfdim{0, 0, 0};
         std::array<TF, 3> S{0, 0, 0};
         std::array<TF, 3> D{0, 0, 0};
+        // STUp = h * gam * (s_k - D); h = 2pi/nf is implied by nfdim, gam is not.
+        std::array<TF, 3> gam{0, 0, 0};
+        int nspread{}; // invPhiHat is the FT of the ns-wide kernel
       };
       TargetKey tkey;
       bool target_valid = false;
 
       bool targets_match(const TargetKey &k) const {
         return target_valid && tkey.nk == k.nk && tkey.nfdim == k.nfdim &&
-               tkey.S == k.S && tkey.D == k.D;
+               tkey.S == k.S && tkey.D == k.D && tkey.gam == k.gam &&
+               tkey.nspread == k.nspread;
       }
 
       // --- Source cache key ---

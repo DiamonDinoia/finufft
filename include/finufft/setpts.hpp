@@ -233,7 +233,8 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
       target_coords_same = target_coords_same && target_same[idim];
       source_coords_same = source_coords_same && source_same[idim];
     }
-    typename M::Type3Cache::TargetKey cur_tkey{nk, m.nfdim, S, m.t3P.D};
+    typename M::Type3Cache::TargetKey cur_tkey{
+        nk, m.nfdim, S, m.t3P.D, m.t3P.gam, m.spopts.nspread};
     typename M::Type3Cache::SourceKey cur_skey{nj, m.t3P.C, m.t3P.gam, m.t3P.D};
 
     bool tgt_hit = target_coords_same && tc.targets_match(cur_tkey);
