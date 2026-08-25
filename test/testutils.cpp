@@ -233,8 +233,8 @@ int main(int argc, char *argv[]) {
         for (double npts : npts_list)
           for (int nthr : nthr_list)
             for (double occ : occ_list) {
-              const BIGINT nb =
-                  n_subproblems(dim, ns, npts, std::min(occ, npts), bs, nthr, SP_CAP);
+              const BIGINT nb = n_subproblems(dim, ns, npts, std::min(occ, npts), bs, 1.0,
+                                              nthr, SP_CAP);
               const double sp = npts / (double)nb;
               // nb below nthreads starves schedule(dynamic,1); a count just above a
               // multiple of nthreads runs a whole extra round for a few stragglers;
@@ -254,10 +254,10 @@ int main(int argc, char *argv[]) {
     // threads, costing up to +40%.)
     for (double npts : {1e4, 1e5})
       for (int nthr : {32, 128})
-        if (n_subproblems(3, 7, npts, npts / 5, bin3, nthr, SP_CAP) != nthr) {
+        if (n_subproblems(3, 7, npts, npts / 5, bin3, 1.0, nthr, SP_CAP) != nthr) {
           std::cout << "fail: npts=" << npts << " on " << nthr
                     << " threads shattered into "
-                    << n_subproblems(3, 7, npts, npts / 5, bin3, nthr, SP_CAP)
+                    << n_subproblems(3, 7, npts, npts / 5, bin3, 1.0, nthr, SP_CAP)
                     << " subproblems\n";
           return 1;
         }
@@ -267,8 +267,8 @@ int main(int argc, char *argv[]) {
     // is the whole reason this reads measured occupancy instead of mean density.
     for (int dim = 2; dim <= 3; ++dim) {
       const double *bs = (dim == 2) ? bin2 : bin3;
-      if (n_subproblems(dim, 7, 1e7, 1e4, bs, 16, SP_CAP) <
-          n_subproblems(dim, 7, 1e7, 1e6, bs, 16, SP_CAP)) {
+      if (n_subproblems(dim, 7, 1e7, 1e4, bs, 1.0, 16, SP_CAP) <
+          n_subproblems(dim, 7, 1e7, 1e6, bs, 1.0, 16, SP_CAP)) {
         printf("fail: clustered elects fewer subproblems than uniform in %dD\n", dim);
         return 1;
       }
@@ -280,8 +280,8 @@ int main(int argc, char *argv[]) {
     // Measured: 3D at ~5e3 pts/bin wants ~1e4 pts/subproblem, 3x below SP_REF.
     for (int dim = 2; dim <= 3; ++dim) {
       const double *bs = (dim == 2) ? bin2 : bin3;
-      const auto conc = n_subproblems(dim, 7, 1e7, 1e7 / 5000, bs, 22, SP_CAP);
-      const auto unif = n_subproblems(dim, 7, 1e7, 1e7 / 30, bs, 22, SP_CAP);
+      const auto conc = n_subproblems(dim, 7, 1e7, 1e7 / 5000, bs, 1.0, 22, SP_CAP);
+      const auto unif = n_subproblems(dim, 7, 1e7, 1e7 / 30, bs, 1.0, 22, SP_CAP);
       if (conc <= unif) {
         std::cout << "fail: " << dim << "D concentrated elects " << conc
                   << " subproblems, not more than uniform's " << unif << "\n";
@@ -298,7 +298,7 @@ int main(int argc, char *argv[]) {
     // caps per-thread scratch however few bins the points occupy.
     for (double npts : {1e6, 1e8})
       for (double occ : {10.0, 1e3}) { // pathological: all mass in a few bins
-        const auto nb = n_subproblems(3, 7, npts, occ, bin3, 22, SP_CAP);
+        const auto nb = n_subproblems(3, 7, npts, occ, bin3, 1.0, 22, SP_CAP);
         const auto want = std::min(npts / occ, SP_CAP); // one bin, capped by sp_cap
         if (nb > 22 && npts / (double)nb < want / 2) {
           std::cout << "fail: occupancy " << npts / occ << " pts/bin split into "
@@ -318,7 +318,8 @@ int main(int argc, char *argv[]) {
       for (int ns : ns_list)
         for (double npts : {1e6, 1e8})
           for (double per_bin : {7.0, 25.0, 136.0}) { // sparse: few points per bin
-            const auto nb = n_subproblems(dim, ns, npts, npts / per_bin, bs, 16, SP_CAP);
+            const auto nb =
+                n_subproblems(dim, ns, npts, npts / per_bin, bs, 1.0, 16, SP_CAP);
             const double sp = npts / (double)nb;
             if (nb > 16 && sp > 2 * 5000.0 * per_bin) {
               std::cout << "fail: " << dim << "D ns=" << ns << " npts=" << npts << " at "
@@ -330,9 +331,24 @@ int main(int argc, char *argv[]) {
           }
     }
 
+    // Up-ramp sparse regime with a deep slow-dim plane (4624 = 34x136, the 3D
+    // 542^3 grid's 34x136 bin plane): the ~5000-bin span bound would elect 15k,
+    // but a 2*ns-deep slab needs ~48.5k, and the measured real type-1 argmin sits
+    // at 30k-60k. The depth bound elects it; snapping to nthr leaves it inside
+    // [depth/3, depth].
+    {
+      const double nb = n_subproblems(3, 7, 2e6, 2e6 / 3.0, bin3, 4624.0, 16, SP_CAP);
+      const double depth = 4624.0 * 3.0 * (2.0 * 7 / 4.0);
+      if (nb <= 16 || 2e6 / nb < depth / 3 || 2e6 / nb > depth) {
+        std::cout << "fail: sparse 3D depth bound elected " << 2e6 / nb
+                  << " pts/subproblem, want ~" << depth << "\n";
+        return 1;
+      }
+    }
+
     // No occupancy measure (1D, or an unsorted point set): defer to the caller's cap.
-    if (n_subproblems(1, 7, 1e7, 1e5, bin2, 16, SP_CAP) ||
-        n_subproblems(2, 7, 1e7, 0, bin2, 16, SP_CAP)) {
+    if (n_subproblems(1, 7, 1e7, 1e5, bin2, 1.0, 16, SP_CAP) ||
+        n_subproblems(2, 7, 1e7, 0, bin2, 1.0, 16, SP_CAP)) {
       printf("fail: expected 0 (defer to spopts.max_subproblem_size)\n");
       return 1;
     }

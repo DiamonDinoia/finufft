@@ -198,13 +198,15 @@ double best_type3(double tol, int dim, int nthreads, double nj, const double *X,
   against a 1.008 identity control over 26 changed cells.
 
   Inputs: dim, ns (kernel width), npts (=nj), n_occupied_bins (bins holding >=1
-  pt, 0 if unsorted), bin_size[dim] (sort bin edge lengths), nthreads, and sp_cap =
-  the caller's own spopts.max_subproblem_size, which this may only undercut, never
-  exceed (see the one-sided contract below).
+  pt, 0 if unsorted), bin_size[dim] (sort bin edge lengths), slow_plane_bins =
+  prod over all dims but the slowest of the bin counts ceil(nfdim/bin_size),
+  nthreads, and sp_cap = the caller's own spopts.max_subproblem_size, which this
+  may only undercut, never exceed (see the one-sided contract below).
   Returns nb >= 1, or 0 when there is no occupancy measure to work from.
 */
 inline BIGINT n_subproblems(int dim, int ns, double npts, double n_occupied_bins,
-                            const double *bin_size, int nthreads, double sp_cap) {
+                            const double *bin_size, double slow_plane_bins, int nthreads,
+                            double sp_cap) {
   // target subproblem size, and the overhead level at which amortizing subgrid cells
   // starts to pay for a larger subproblem. sp_cap (the caller's legacy constant) is
   // what bounds per-thread scratch RAM, so no separate cap is needed here.
@@ -241,7 +243,18 @@ inline BIGINT n_subproblems(int dim, int ns, double npts, double n_occupied_bins
   // cap by 5.6%); buys back 12.3% and 10.3% on the two cells the floor and the ramp
   // respectively overshot, which are losses against master rather than missed gains.
   const double ramp = std::min(SP_REF * std::max(r, std::sqrt(r)), SPAN_MAX * occ);
-  const double sp = std::min(std::max(ramp, occ), sp_cap);
+  // A subproblem takes consecutive points in bin order, so on diffuse points it
+  // spans a slab one slow-dim plane thick. When the slab's slow-dim depth falls
+  // below 2*ns the kernel halo dominates the padded subgrid (zero + add-back cost
+  // per point is high no matter how many points it holds), so raise sp until the
+  // span is about 2*ns deep. Fires only on the up-ramp side (r > 1): concentrated
+  // points pack their occupied bins compactly, the slab model does not apply, and
+  // their optimum sits far below this bound (3D dist6 argmin is 1e4 pts vs a
+  // bounded 100k here). Measured on real type-1 3D: sparse uniform (occ = 3
+  // pts/bin, plane = 4624 bins) wants 30k-60k; the depth bound elects 46.6k vs the
+  // unbounded 14.4k, which lands 8-23% above the argmin.
+  const double depth = slow_plane_bins * occ * (2.0 * ns / bin_size[dim - 1]);
+  const double sp = std::min(std::max(ramp, r > 1 ? depth : occ), sp_cap);
   const double nthr = std::max(nthreads, 1);
   // nb below nthreads would starve schedule(dynamic,1), and nb just above a
   // multiple of nthreads runs a whole extra round for a handful of stragglers, so

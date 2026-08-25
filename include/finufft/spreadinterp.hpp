@@ -200,11 +200,17 @@ void FINUFFT_PLAN_T<TF>::indexSort()
   // Skipped when the user fixed the size via opts.spread_max_sp_size (>0).
   if (opts.spread_max_sp_size <= 0) {
     const double bin_size[3] = {bin_size_x, bin_size_y, bin_size_z};
+    const UBIGINT nfd[3] = {N1, N2, N3};
+    // bin count product over all dims but the slowest: the depth-bound input.
+    // A bin-ordered run of points on diffuse inputs spans a slow-dim slab.
+    double slow_plane_bins = 1.0;
+    for (int idim = 0; idim + 1 < dim; ++idim)
+      slow_plane_bins *= (double)(BIGINT(nfd[idim] / bin_size[idim] + 1));
     // Snap against the count that runs the subproblem loop, which is the plan's
     // nthreads, not maxnthr: maxnthr carries the sort-only override.
     m.nSubproblems = finufft::heuristics::n_subproblems(
         dim, m.spopts.nspread, (double)M, (double)m.nOccupiedBins, bin_size,
-        m.spopts.nthreads, (double)m.spopts.max_subproblem_size);
+        slow_plane_bins, m.spopts.nthreads, (double)m.spopts.max_subproblem_size);
     if (m.spopts.debug && m.nSubproblems)
       printf("\toccupancy %.3g pts/bin -> nb=%lld (%.3g pts/subproblem)\n",
              m.nOccupiedBins ? (double)M / (double)m.nOccupiedBins : 0.0,
