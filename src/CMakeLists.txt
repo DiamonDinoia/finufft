@@ -131,7 +131,11 @@ target_include_directories(finufft SYSTEM INTERFACE $<INSTALL_INTERFACE:include>
 enable_asan(finufft)
 
 if(FINUFFT_ENABLE_INSTALL)
-    file(GLOB FINUFFT_PUBLIC_HEADERS "${PROJECT_SOURCE_DIR}/include/finufft*.h")
+    file(
+        GLOB FINUFFT_PUBLIC_HEADERS
+        "${PROJECT_SOURCE_DIR}/include/finufft*.h"
+        "${PROJECT_SOURCE_DIR}/include/finufft*.hpp"
+    )
     set_target_properties(finufft PROPERTIES PUBLIC_HEADER "${FINUFFT_PUBLIC_HEADERS}")
 endif()
 

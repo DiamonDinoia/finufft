@@ -3,6 +3,94 @@
 Example usage from C++ and C
 =================================
 
+.. _cppiface:
+
+Modern C++ interface
+--------------------
+
+C++20 users can use the modern interface declared in ``include/finufft.hpp``.
+
+.. warning::
+   The C++20 interface is experimental: names and semantics may change in
+   future releases. The C API in ``finufft.h`` is the stability contract.
+
+It owns the plan handle for you (no manual destroy), takes arrays as
+``std::span`` (so ``std::vector``, ``std::array`` and raw pointers with a
+count all work), reads the transform dimension from the mode counts passed
+at plan creation, and reports failures by throwing ``finufft::error`` instead
+of filling a status integer.
+
+Here is the same 1D type-1 transform as in the example below, with STL
+vectors this time: no explicit counts or pointers are needed for the data
+arrays, since they are read from the spans:
+
+.. code-block:: C++
+
+  #include <finufft.hpp>
+  #include <vector>
+  #include <complex>
+  #include <iostream>
+
+  // fill x, c with M nonuniform points and strengths as before...
+  std::int64_t N = 1000000;                      // number of output modes
+  std::vector<std::complex<double>> F(N);
+
+  finufft::plan p(1, {N}, +1, 1e-9);             // 1e-9 deduces plan<double>
+  p.setpts(x);                                   // one span per dimension
+  p.execute(c, F);
+
+``finufft::plan`` is templated on the floating-point type. The precision may
+be written explicitly (``finufft::plan<double>``) or deduced from the
+tolerance literal: ``1e-9`` is ``double``, ``1e-6f`` is ``float``. The
+constructor takes, in order: the type (1, 2 or 3), the mode counts with one
+entry per dimension, the sign of the exponential, the tolerance, and
+optionally the number of stacked transforms and the options. ``setpts``
+takes one span of nonuniform coordinates per dimension for types 1 and 2
+(``p.setpts(x, y)`` in 2D), and additionally one span of target frequencies
+per dimension for type 3 (``p.setpts(x, y, s, t)``). ``execute`` checks the
+sizes of the strength and output spans against the plan before running. As
+with the guru interface below, ``execute`` may be repeated with new strength
+data or with new points, and ``execute_adjoint`` runs the adjoint transform
+with no replanning. Any
+misuse (bad type or dimension, tolerance too small, array sizes that do not
+match the plan, calling ``execute`` before ``setpts``) throws
+``finufft::error``, a ``std::runtime_error`` whose ``.code()`` member matches
+the usual :ref:`error codes <error>` of the C interface:
+
+.. code-block:: C++
+
+  try {
+    p.execute(c, F);
+  } catch (const finufft::error &e) {
+    std::cerr << e.what() << " (code " << e.code() << ")\n";
+  }
+
+Options, if needed, come from ``finufft::default_opts<double>()``, are
+modified, then passed as the last constructor argument:
+
+.. code-block:: C++
+
+  auto opts = finufft::default_opts<double>();   // matches finufft_default_opts
+  opts.debug = 1;                                // prints timing/debug info
+  finufft::plan p(1, {N}, +1, 1e-9, 1, opts);
+
+The ``std::span`` members of ``plan`` view your memory: the coordinate and
+data vectors must outlive the calls in which they are used, and the warning
+about not changing the nonuniform point arrays between ``setpts`` and
+``execute`` from the guru interface section applies here identically.
+
+All C++ files in ``examples/`` now use this interface; see eg
+``examples/simple1d1.cpp`` and ``examples/guru2d1.cpp``. Compiling requires a
+C++20 compiler, eg::
+
+  g++ -std=c++20 -fopenmp simple1d1.cpp -o simple1d1 -I../include ../lib-static/libfinufft.a -lfftw3_omp -lfftw3 -lfftw3f_omp -lfftw3f
+
+The equivalent GPU header is ``include/cufinufft.hpp``; it has the identical
+shape in namespace ``cufinufft``, except that spans refer to device memory,
+there is no ``execute_adjoint``, and the type 3 target count is capped to
+``int``; see :ref:`c_gpu`. The remainder of this page documents the C
+interface, which compiles equally from C++.
+
 .. _quick:
 
 Quick-start example in C++
@@ -78,18 +166,21 @@ make your changes, then pass the pointer to FINUFFT:
    - Without the ``finufft_default_opts`` call, options may take on arbitrary values which may cause a crash.
    - Note that, as of version 2.0, ``opts`` is passed as a pointer in both places.
 
-See ``examples/simple1d1.cpp`` for a simple full working demo of the above, including a test of the math. If you instead use single-precision arrays,
-replace the tag ``finufft`` by ``finufftf`` in each command; see ``examples/simple1d1f.cpp``.
+See ``examples/simple1d1c.c`` for the same transform from C, using the same
+flat call. The C++ example of the same name (``examples/simple1d1.cpp``) uses
+the modern interface above; so do the other C++ examples. If you instead use
+single-precision arrays, replace the tag ``finufft`` by ``finufftf`` in each
+command; see ``examples/simple1d1cf.c``.
 
 From the ``examples/`` directory, to compile on a linux/GCC system, linking to the static library, use eg::
 
-  g++ -fopenmp simple1d1.cpp -o simple1d1 -I../include ../lib-static/libfinufft.a -lfftw3_omp -lfftw3 -lfftw3f_omp -lfftw3f
+  g++ -std=c++20 -fopenmp simple1d1.cpp -o simple1d1 -I../include ../lib-static/libfinufft.a -lfftw3_omp -lfftw3 -lfftw3f_omp -lfftw3f
 
 Executing ``./simple1d1`` should now work (exit code ``0`` and displaying a small error).
 If you used ``FFT=DUCC`` you can of course drop the linking of the four ``fftw3`` libraries.
 Better is instead to link to the dynamic shared (``.so``) library, via eg::
 
-  g++ -fopenmp simple1d1.cpp -o simple1d1 -I../include -Wl,-rpath,$FINUFFT/lib/ -lfinufft
+  g++ -std=c++20 -fopenmp simple1d1.cpp -o simple1d1 -I../include -Wl,-rpath,$FINUFFT/lib/ -lfinufft
 
 where ``$FINUFFT`` must be replaced by (or be an environment variable set to) the absolute install path for this repository.
 Notice how ``rpath`` is used to make an executable that may be called from, or moved to, anywhere.

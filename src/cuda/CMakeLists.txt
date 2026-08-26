@@ -133,5 +133,9 @@ if(FINUFFT_HAS_NO_DEPRECATED_DECLARATIONS)
     target_compile_options(cufinufft PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Wno-deprecated-declarations>)
 endif()
 
-file(GLOB CUFINUFFT_PUBLIC_HEADERS "${CMAKE_SOURCE_DIR}/include/cufinufft*.h")
+file(
+    GLOB CUFINUFFT_PUBLIC_HEADERS
+    "${CMAKE_SOURCE_DIR}/include/cufinufft*.h"
+    "${CMAKE_SOURCE_DIR}/include/cufinufft*.hpp"
+)
 set_target_properties(cufinufft PROPERTIES PUBLIC_HEADER "${CUFINUFFT_PUBLIC_HEADERS}")

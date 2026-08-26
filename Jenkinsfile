@@ -112,6 +112,23 @@ catchError {
       }
     }] }
 
+    // The modern C++ interface (include/finufft.hpp): CPU-only, so a small
+    // pod without a card. The GPU twin (include/cufinufft.hpp) needs no stage
+    // of its own: test/cuda/cufinufft_cpp_interface runs inside the regular
+    // cuda-* matrix pods through cuda-build-test.sh.
+    jobs['cpp-interface'] = {
+      runPod(tag: 'cuda12.8', cpus: 8, memory: '16Gi') {
+        stage('cpp interface') {
+          withEnv([
+            "HOME=$WORKSPACE",
+            "CPM_SOURCE_CACHE=$WORKSPACE/.cpm"
+          ]) {
+            sh 'tools/ci/cpp-interface.sh'
+          }
+        }
+      }
+    }
+
     // The perftest comment, PR builds only: CHANGE_ID is unset on branch builds.
     // Each half writes its own section in its own pod - the CPU half wants cores
     // and no card, the GPU half wants the card - so the two run in parallel and

@@ -478,3 +478,40 @@ Points to note:
 
 For a worked example overlapping host-device transfers with transforms on two
 streams, see ``python/cufinufft/examples/example3d2many_async_cupy.py``.
+
+Modern C++ interface (experimental)
+-----------------------------------
+
+C++20 users can use the header ``include/cufinufft.hpp``, which mirrors the
+CPU modern interface (``include/finufft.hpp``, see :ref:`cppiface`) with the
+same shape in namespace ``cufinufft``: an RAII ``cufinufft::plan<T>``,
+variadic ``setpts``, and errors thrown as ``cufinufft::error`` (with
+``.code()``, matching the codes above) instead of a status integer.
+
+.. warning::
+   The C++20 interface is experimental: names and semantics may change in
+   future releases. The C API in ``cufinufft.h`` is the stability contract.
+
+All spans refer to device memory: build them from a device pointer and a
+count. Spans of ``std::complex<T>`` require exactly that pointer type; device
+buffers of ``cuFloatComplex``/``cuDoubleComplex`` need a
+``reinterpret_cast`` at the span constructor. Everything else is as on the
+CPU:
+
+.. code-block:: C++
+
+  #include <cufinufft.hpp>
+
+  // d_x, d_c, d_F are device buffers holding points, strengths, modes
+  cufinufft::plan p(1, {N}, +1, 1e-9);           // deduces plan<double>
+  p.setpts(std::span<const double>(d_x, M));
+  p.execute(std::span<std::complex<double>>(d_c, M),
+            std::span<std::complex<double>>(d_F, N));
+
+Differences from the CPU header: the GPU C API has no adjoint call, so
+``plan`` has no ``execute_adjoint``; the type 3 target count is capped to
+``int`` (the CPU takes a 64-bit count); and ``cufinufft_opts`` carries no
+precision, so templating ``cufinufft::default_opts<T>()`` only serves to
+keep CPU/GPU-generic code source-compatible. The stream note above applies
+unchanged: set ``opts.gpu_stream`` before constructing the plan, and
+synchronize that stream before reading results on the host.

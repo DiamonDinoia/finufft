@@ -219,6 +219,15 @@ function(add_tests PREC REQ_TOL CHECK_TOL UPSAMP)
     )
 endfunction()
 
+# The modern C++ interface test needs C++20 for std::span; the other tests
+# stay at C++17.
+if(TARGET cufinufft_cpp_interface)
+    target_compile_features(cufinufft_cpp_interface PUBLIC cxx_std_20)
+    add_test(NAME cufinufft_cpp_interface COMMAND cufinufft_cpp_interface)
+    # Returns 77 when no CUDA device is visible.
+    set_tests_properties(cufinufft_cpp_interface PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 add_test(NAME cufinufft_public_api COMMAND public_api_test)
 add_test(NAME cufinufft_makeplan COMMAND test_makeplan)
 add_test(NAME cufinufft_error_handling COMMAND cufinufft_error_handling)
