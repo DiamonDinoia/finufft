@@ -3,9 +3,9 @@
 // See devel/find_sigma_bound.py for model fitting and validation.
 // Brodovič; N column added by Barbone 4/3/26.
 
+#include "utils/test_defs.hpp"
 #include <cmath>
 #include <finufft.h>
-#include <finufft/test_defs.hpp>
 #include <finufft_common/common.h>
 #include <getopt.h>
 #include <iostream>

@@ -1,20 +1,20 @@
-#include <finufft/test_defs.hpp>
+#include "utils/test_defs.hpp"
 
 // Basic pass-fail test of one routine in library w/ default opts.
 // exit code 0 success, failure otherwise. This is useful for brew recipe.
-// Works for either single/double, hence use of FLT and CPX.
+// Works for either single/double: the body is templated on FLT and the
+// FINUFFT_TEST_PREC macro (set per target) selects the instantiation.
 // Simplified from Amit Moscovitz and example1d1. Barnett 11/1/18.
 // Using vectors and default opts, 2/29/20; dual-prec lib 7/3/20.
 
-int main() {
+template<typename FLT> int run() {
+  using CPX  = std::complex<FLT>;
+  using CAPI = finufft_capi<FLT>;
   BIGINT M = 1e3, N = 1e3;            // defaults: M = # srcs, N = # modes out
-#ifdef SINGLE
-  double tol = 1e-3; // above single-prec rounding floor ~1.4e-4 at N=1e3
-#else
-  double tol = 1e-5;
-#endif
-  int isign          = +1;            // exponential sign for NUFFT
-  static const CPX I = CPX(0.0, 1.0); // imaginary unit. Note: avoid (CPX) cast
+  // single precision rounding floor is ~1.4e-4 at N=1e3, so use a looser tol
+  const double tol = std::is_same_v<FLT, float> ? 1e-3 : 1e-5;
+  int isign        = +1;              // exponential sign for NUFFT
+  const CPX I(0.0, 1.0);              // imaginary unit
   std::vector<CPX> F(N);              // alloc output mode coeffs
 
   // Make the input data....................................
@@ -27,8 +27,8 @@ int main() {
     c[j] = 2 * ((FLT)rand() / (FLT)RAND_MAX) - 1 +
            I * (2 * ((FLT)rand() / (FLT)RAND_MAX) - 1);
   }
-  // Run it (NULL = default opts) .......................................
-  int ier = FINUFFT1D1(M, &x[0], &c[0], isign, tol, N, &F[0], NULL);
+  // Run it (nullptr = default opts) ....................................
+  int ier = CAPI::f1d1(M, x.data(), c.data(), isign, FLT(tol), N, F.data(), nullptr);
   if (ier != 0) {
     printf("basicpassfail: finufft1d1 error (ier=%d)!", ier);
     exit(ier);
@@ -47,3 +47,5 @@ int main() {
   // printf("requested tol %.3g: rel err for one mode %.3g\n",tol,relerr);
   return (std::isnan(relerr) || relerr > 10.0 * tol); // true reports failure
 }
+
+int main() { return run<FINUFFT_TEST_PREC>(); }

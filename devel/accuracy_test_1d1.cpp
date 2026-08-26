@@ -7,9 +7,9 @@
 
 // to fix up, remove decade-averaging ***
 
+#include "../test/utils/test_defs.hpp"
 #include <cmath>
 #include <cstdlib>
-#include <finufft/test_defs.hpp>
 #include <iomanip>
 #include <iostream>
 #include <random>

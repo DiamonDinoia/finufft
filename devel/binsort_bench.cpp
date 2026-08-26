@@ -14,7 +14,7 @@
  * Usage: ./binsort_bench [--benchmark_filter=<regex>] [--benchmark_repetitions=N]
  */
 
-#include <finufft/test_defs.hpp>
+#include "utils/test_defs.hpp"
 
 #include <finufft/simd.hpp>
 

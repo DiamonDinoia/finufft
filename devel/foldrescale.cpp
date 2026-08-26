@@ -1,4 +1,4 @@
-#include "finufft/test_defs.hpp"
+#include "utils/test_defs.hpp"
 #include <benchmark/benchmark.h>
 #include <cmath>
 #include <iostream>

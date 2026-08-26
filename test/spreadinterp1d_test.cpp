@@ -8,8 +8,10 @@
    into a NUFFT and test that :) But we already have that in FINUFFT.)
 
    Barnett 1/8/25, based on ../examples/spreadinterponly1d and finufft1d_test
+   Either precision: the body is templated on FLT and main() instantiates it
+   with the FINUFFT_TEST_PREC macro (set per target).
 */
-#include <finufft/test_defs.hpp>
+#include "utils/test_defs.hpp"
 #include <numeric>
 using namespace std;
 using namespace finufft::utils;
@@ -22,13 +24,15 @@ const char *help[] = {"Tester for FINUFFT in 1d, spread/interp only, either prec
                       "\tnotes:\tif errfail present, exit code 1 if any error > errfail",
                       NULL};
 
-int main(int argc, char *argv[]) {
+template<typename FLT> int run(int argc, char *argv[]) {
+  using CPX  = std::complex<FLT>;
+  using CAPI = finufft_capi<FLT>;
   BIGINT M, N;          // M = # nonuniform pts, N = # regular grid pts
   double w, tol = 1e-6; // default: used for kernel shape design only
   double errfail = INFINITY;
   FLT errmax     = 0;
   finufft_opts opts;
-  FINUFFT_DEFAULT_OPTS(&opts); // put defaults in opts
+  CAPI::default_opts(&opts);   // put defaults in opts
   opts.spreadinterponly = 1;   // this task
   if (argc < 3 || argc > 8) {
     for (int i = 0; help[i]; ++i) fprintf(stderr, "%s\n", help[i]);
@@ -56,7 +60,7 @@ int main(int argc, char *argv[]) {
   x[0]       = 0.0;
   c[0]       = 1.0;
   int unused = +1;
-  int ier    = FINUFFT1D1(1, x.data(), c.data(), unused, tol, N, F.data(), &opts);
+  int ier    = CAPI::f1d1(1, x.data(), c.data(), unused, tol, N, F.data(), &opts);
   if (ier > 0) {
     printf("error (ier=%d)!\n", ier);
     return ier;
@@ -76,7 +80,7 @@ int main(int argc, char *argv[]) {
   printf("spread-only test 1d:\n"); // ............................................
   CNTime timer;
   timer.start();                    // c input, F output...
-  ier      = FINUFFT1D1(M, x.data(), c.data(), unused, tol, N, F.data(), &opts);
+  ier      = CAPI::f1d1(M, x.data(), c.data(), unused, tol, N, F.data(), &opts);
   double t = timer.elapsedsec();
   if (ier > 0) {
     printf("error (ier=%d)!\n", ier);
@@ -93,7 +97,7 @@ int main(int argc, char *argv[]) {
   printf("interp-only test 1d:\n"); // ............................................
   for (auto &Fk : F) Fk = complex<double>{1.0, 0.0}; // unit grid input
   timer.restart();                                   // F input, c output...
-  ier = FINUFFT1D2(M, x.data(), c.data(), unused, tol, N, F.data(), &opts);
+  ier = CAPI::f1d2(M, x.data(), c.data(), unused, tol, N, F.data(), &opts);
   t   = timer.elapsedsec();
   if (ier > 0) {
     printf("error (ier=%d)!\n", ier);
@@ -110,3 +114,5 @@ int main(int argc, char *argv[]) {
 
   return (errmax > (FLT)errfail);
 }
+
+int main(int argc, char **argv) { return run<FINUFFT_TEST_PREC>(argc, argv); }

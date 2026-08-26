@@ -1,8 +1,7 @@
-#include <finufft/test_defs.hpp>
-// this enforces recompilation, responding to SINGLE...
 #include "finufft/utils.hpp"
 #include "utils/dirft2d.hpp"
 #include "utils/norms.hpp"
+#include "utils/test_defs.hpp"
 
 using namespace std;
 using namespace finufft::utils;
@@ -15,13 +14,17 @@ const char *help[] = {"Tester for FINUFFT in 2d, all 3 types, either precision."
                       "\tnotes:\tif errfail present, exit code 1 if any error > errfail",
                       NULL};
 // Barnett 2/1/17 onwards
+// Either precision: the body is templated on FLT and main() instantiates it
+// with the FINUFFT_TEST_PREC macro (set per target).
 
-int main(int argc, char *argv[]) {
+template<typename FLT> int run(int argc, char *argv[]) {
+  using CPX  = std::complex<FLT>;
+  using CAPI = finufft_capi<FLT>;
   BIGINT M, N1, N2;           // M = # srcs, N1,N2 = # modes
   double w, tol       = 1e-6; // default
   double err, errfail = INFINITY, errmax = 0;
   finufft_opts opts;
-  FINUFFT_DEFAULT_OPTS(&opts);
+  CAPI::default_opts(&opts);
   // opts.fftw = FFTW_MEASURE;  // change from usual FFTW_ESTIMATE
   int isign = +1; // choose which exponential sign to test
   if (argc < 4 || argc > 9) {
@@ -65,7 +68,7 @@ int main(int argc, char *argv[]) {
   printf("test 2d type 1:\n"); // -------------- type 1
   CNTime timer;
   timer.start();
-  int ier   = FINUFFT2D1(M, x, y, c, isign, tol, N1, N2, F, &opts);
+  int ier   = CAPI::f2d1(M, x, y, c, isign, tol, N1, N2, F, &opts);
   double ti = timer.elapsedsec();
   if (ier > 0) {
     printf("error (ier=%d)!\n", ier);
@@ -105,7 +108,7 @@ int main(int argc, char *argv[]) {
     for (BIGINT m = 0; m < N; ++m) F[m] = crandm11r(&se);
   }
   timer.restart();
-  ier = FINUFFT2D2(M, x, y, c, isign, tol, N1, N2, F, &opts);
+  ier = CAPI::f2d2(M, x, y, c, isign, tol, N1, N2, F, &opts);
   ti  = timer.elapsedsec();
   if (ier > 0) {
     printf("error (ier=%d)!\n", ier);
@@ -159,7 +162,7 @@ int main(int argc, char *argv[]) {
     }
   }
   timer.restart();
-  ier = FINUFFT2D3(M, x, y, c, isign, tol, N, s, t, F, &opts);
+  ier = CAPI::f2d3(M, x, y, c, isign, tol, N, s, t, F, &opts);
   ti  = timer.elapsedsec();
   if (ier > 0) {
     printf("error (ier=%d)!\n", ier);
@@ -203,3 +206,5 @@ int main(int argc, char *argv[]) {
   } else
     return 0;
 }
+
+int main(int argc, char **argv) { return run<FINUFFT_TEST_PREC>(argc, argv); }

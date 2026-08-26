@@ -1,4 +1,5 @@
-# Each of these source test files is instantiated in single and double precision
+# Each of these source test files is instantiated in single and double
+# precision via the FINUFFT_TEST_PREC macro (the bodies are templated on FLT)
 set(TESTS
     basicpassfail
     dumbinputs
@@ -18,7 +19,7 @@ foreach(TEST ${TESTS})
     target_compile_features(${TEST} PRIVATE cxx_std_17)
     finufft_link_test(${TEST})
     add_executable(${TEST}f ${TEST}.cpp)
-    target_compile_definitions(${TEST}f PRIVATE -DSINGLE)
+    target_compile_definitions(${TEST}f PRIVATE FINUFFT_TEST_PREC=float)
     target_compile_features(${TEST}f PRIVATE cxx_std_17)
     finufft_link_test(${TEST}f)
 endforeach()
@@ -45,11 +46,39 @@ if(HAS_C_COMPLEX)
     target_compile_features(error_handling PRIVATE c_std_99)
     finufft_link_test(error_handling)
     add_test(NAME run_error_handling COMMAND error_handling WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
-        # the deprecated-opts case must warn, not error (non-C++ wrappers rely on it)
+    # the deprecated-opts case must warn, not error (non-C++ wrappers rely on it)
     set_tests_properties(
         run_error_handling
         PROPERTIES PASS_REGULAR_EXPRESSION "opts.spread_thread is deprecated and ignored"
     )
+endif()
+
+# Modern C++ interface (include/finufft.hpp) tests. The header requires C++20
+# with std::span, so the target only exists when the toolchain provides both.
+include(CheckCXXSourceCompiles)
+set(CMAKE_REQUIRED_FLAGS_SAVE "${CMAKE_REQUIRED_FLAGS}")
+if(MSVC)
+    set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} /std:c++20")
+else()
+    set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -std=c++20")
+endif()
+check_cxx_source_compiles(
+    "
+    #include <span>
+    int main() {
+        int a[2]{};
+        std::span<const int> s(a);
+        return static_cast<int>(s.size());
+    }
+"
+    FINUFFT_HAS_STD_SPAN
+)
+set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS_SAVE}")
+if(FINUFFT_HAS_STD_SPAN)
+    add_executable(cpp_interface cpp_interface.cpp)
+    target_compile_features(cpp_interface PRIVATE cxx_std_20)
+    finufft_link_test(cpp_interface)
+    add_test(NAME run_cpp_interface COMMAND cpp_interface WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 endif()
 
 # Add ctest definitions not for both precisions...
@@ -99,7 +128,7 @@ function(add_tests_with_prec PREC REQ_TOL CHECK_TOL SUFFIX)
 
     add_test(
         NAME run_finufft1dmany_test_${PREC}
-                COMMAND finufft1dmany_test${SUFFIX} 3 1e2 2e2 ${REQ_TOL} 0 0 2 0.0 ${CHECK_TOL}
+        COMMAND finufft1dmany_test${SUFFIX} 3 1e2 2e2 ${REQ_TOL} 0 0 2 0.0 ${CHECK_TOL}
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     )
 

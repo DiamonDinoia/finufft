@@ -1,8 +1,7 @@
-#include <finufft/test_defs.hpp>
-// this enforces recompilation, responding to SINGLE...
 #include "finufft/utils.hpp"
 #include "utils/dirft1d.hpp"
 #include "utils/norms.hpp"
+#include "utils/test_defs.hpp"
 using namespace std;
 using namespace finufft::utils;
 
@@ -15,14 +14,18 @@ const char *help[] = {
     "\tnotes:\tif errfail present, exit code 1 if consistency error > errfail",
     NULL};
 // Malleo 2019 based on Shih 2018. Tidied, extra args, Barnett 5/25/20 onwards
+// Either precision: the body is templated on FLT and main() instantiates it
+// with the FINUFFT_TEST_PREC macro (set per target).
 
-int main(int argc, char *argv[]) {
+template<typename FLT> int run(int argc, char *argv[]) {
+  using CPX  = std::complex<FLT>;
+  using CAPI = finufft_capi<FLT>;
   BIGINT M, N;                // M = # srcs, N = # modes
   int ntransf;                // # of vectors for "many" interface
   double w, tol       = 1e-6; // default
   double err, errfail = INFINITY, errmax = 0;
   finufft_opts opts;
-  FINUFFT_DEFAULT_OPTS(&opts);
+  CAPI::default_opts(&opts);
   // opts.fftw = FFTW_MEASURE;  // change from usual FFTW_ESTIMATE
   int isign = +1; // choose which exponential sign to test
   if (argc < 4 || argc > 10) {
@@ -68,7 +71,7 @@ int main(int argc, char *argv[]) {
   printf("test 1d1 many vs repeated single: ------------------------------------\n");
   CNTime timer;
   timer.start();
-  int ier   = FINUFFT1D1MANY(ntransf, M, x, c, isign, tol, N, F, &opts);
+  int ier   = CAPI::f1d1many(ntransf, M, x, c, isign, tol, N, F, &opts);
   double ti = timer.elapsedsec();
   if (ier > 0) {
     printf("error (ier=%d)!\n", ier);
@@ -86,7 +89,7 @@ int main(int argc, char *argv[]) {
   err       = abs(Ft - F[it + i * N]) / infnorm(N, F + i * N);
   printf("\tone mode: rel err in F[%lld] of trans#%d is %.3g\n", (long long)nt1, i, err);
 
-  // compare the result with FINUFFT1D1
+  // compare the result with finufft1d1
   finufft_fft_forget_wisdom();
   CPX *F_1d1 = (CPX *)malloc(sizeof(CPX) * N * ntransf);
   CPX *Fstart;
@@ -98,7 +101,7 @@ int main(int argc, char *argv[]) {
   for (BIGINT j = 0; j < ntransf; j++) {
     Fstart = F_1d1 + j * N;
     cstart = c + j * M;
-    FINUFFT1D1(M, x, cstart, isign, tol, N, Fstart, &simpleopts);
+    CAPI::f1d1(M, x, cstart, isign, tol, N, Fstart, &simpleopts);
   }
   double t = timer.elapsedsec();
   if (ier > 0) {
@@ -107,7 +110,7 @@ int main(int argc, char *argv[]) {
   } else
     printf("%d of: %lld NU pts to %lld modes in %.3g s \t%.3g NU pts/s\n", ntransf,
            (long long)M, (long long)N, t, ntransf * M / t);
-  printf("\t\t\tspeedup \t T_FINUFFT1D1 / T_finufft1d1many = %.3g\n", t / ti);
+  printf("\t\t\tspeedup \t T_finufft1d1 / T_finufft1d1many = %.3g\n", t / ti);
 
   // Check consistency (worst over the ntransf)
   double maxerror = 0.0;
@@ -127,7 +130,7 @@ int main(int argc, char *argv[]) {
     for (BIGINT m = 0; m < N; ++m) F[m] = crandm11r(&se);
   }
   timer.restart();
-  ier = FINUFFT1D2MANY(ntransf, M, x, c, isign, tol, N, F, &opts);
+  ier = CAPI::f1d2many(ntransf, M, x, c, isign, tol, N, F, &opts);
   // cout<<"c:\n"; for (int j=0;j<M;++j) cout<<c[j]<<endl;
   ti = timer.elapsedsec();
   if (ier > 0) {
@@ -146,14 +149,14 @@ int main(int argc, char *argv[]) {
   err = abs(ct - c[jt + i * M]) / infnorm(M, c + i * M);
   printf("\tone targ: rel err in c[%lld] of trans#%d is %.3g\n", (long long)jt, i, err);
 
-  // check against single calls to FINUFFT1D2...
+  // check against single calls to finufft1d2...
   finufft_fft_forget_wisdom();
   CPX *c_1d2 = (CPX *)malloc(sizeof(CPX) * M * ntransf);
   timer.restart();
   for (BIGINT j = 0; j < ntransf; j++) {
     Fstart = F + j * N;
     cstart = c_1d2 + j * M;
-    FINUFFT1D2(M, x, cstart, isign, tol, N, Fstart, &simpleopts);
+    CAPI::f1d2(M, x, cstart, isign, tol, N, Fstart, &simpleopts);
   }
   t = timer.elapsedsec();
   if (ier > 0) {
@@ -162,7 +165,7 @@ int main(int argc, char *argv[]) {
   } else
     printf("%d of: %lld modes to %lld NU pts in %.3g s \t%.3g NU pts/s\n", ntransf,
            (long long)N, (long long)M, t, ntransf * M / t);
-  printf("\t\t\tspeedup \t T_FINUFFT1D2 / T_finufft1d2many = %.3g\n", t / ti);
+  printf("\t\t\tspeedup \t T_finufft1d2 / T_finufft1d2many = %.3g\n", t / ti);
 
   maxerror = 0.0; // worst error over the ntransf
   for (int k = 0; k < ntransf; ++k)
@@ -194,7 +197,7 @@ int main(int argc, char *argv[]) {
   }
 
   timer.restart();
-  ier = FINUFFT1D3MANY(ntransf, M, x, c, isign, tol, N, s, F, &opts);
+  ier = CAPI::f1d3many(ntransf, M, x, c, isign, tol, N, s, F, &opts);
   ti  = timer.elapsedsec();
   if (ier > 0) {
     printf("error (ier=%d)!\n", ier);
@@ -211,14 +214,14 @@ int main(int argc, char *argv[]) {
   err = abs(Ft - F[kt + i * N]) / infnorm(N, F + i * N);
   printf("\tone targ: rel err in F[%lld] of trans#%d is %.3g\n", (long long)kt, i, err);
 
-  // compare the result with single calls to FINUFFT1D3...
+  // compare the result with single calls to finufft1d3...
   finufft_fft_forget_wisdom();
   CPX *f_1d3 = (CPX *)malloc(sizeof(CPX) * N * ntransf);
   timer.restart();
   for (int k = 0; k < ntransf; k++) {
     cstart = c + k * M;
     Fstart = f_1d3 + k * N;
-    ier    = FINUFFT1D3(M, x, cstart, isign, tol, N, s, Fstart, &simpleopts);
+    ier    = CAPI::f1d3(M, x, cstart, isign, tol, N, s, Fstart, &simpleopts);
   }
   t = timer.elapsedsec();
   if (ier > 0) {
@@ -227,7 +230,7 @@ int main(int argc, char *argv[]) {
   } else
     printf("%d of: %lld NU to %lld NU in %.3g s       \t%.3g tot NU pts/s\n", ntransf,
            (long long)M, (long long)N, t, ntransf * (M + N) / t);
-  printf("\t\t\tspeedup \t T_FINUFFT1D3 / T_finufft1d3many = %.3g\n", t / ti);
+  printf("\t\t\tspeedup \t T_finufft1d3 / T_finufft1d3many = %.3g\n", t / ti);
 
   maxerror = 0.0; // worst error over the ntransf
   for (int k = 0; k < ntransf; ++k)
@@ -245,3 +248,5 @@ int main(int argc, char *argv[]) {
   } else
     return 0;
 }
+
+int main(int argc, char **argv) { return run<FINUFFT_TEST_PREC>(argc, argv); }

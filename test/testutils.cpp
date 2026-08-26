@@ -1,6 +1,7 @@
 /* unit tests for utils module.
 
-   Usage: ./testutils{f}
+   Usage: ./testutils (one binary exercises both the double and float instantiations,
+   so there is no separate float twin)
 
    Pass: exit code 0. (Stdout should indicate passed)
    Fail: exit code>0. (Stdout may indicate what failed)
@@ -8,30 +9,27 @@
    June 2023: switched to pass-fail tests within the executable (more clear,
    and platform-indep, than having to compare the text output)
 
-   Suggested compile. double-prec:
-   g++ -std=c++17 -fopenmp testutils.cpp -I../include ../src/utils.o
-       ../src/utils.o -o testutils -lgomp
-   single-prec:
-   g++ -std=c++17 -fopenmp testutils.cpp
-       -I../include ../src/utils.o -o testutilsf -lgomp -DSINGLE
+   Suggested compile:
+   g++ -std=c++17 -fopenmp testutils.cpp -I../include ../src/utils.o -o testutils -lgomp
 */
 
-// This switches FLT macro from double to float if SINGLE is defined, etc...
+// The test body is templated on FLT; main() runs the double and float instantiations.
 
 #include "finufft/utils.hpp"
 #include "utils/norms.hpp"
+#include "utils/test_defs.hpp"
 #include <finufft/heuristics.hpp> // complexity-based upsampfac (sigma) picker
-#include <finufft/test_defs.hpp>
 
 using namespace finufft::common;
 using namespace finufft::heuristics;
 
-int main() {
-#ifdef SINGLE
-  printf("testutilsf started...\n");
-#else
-  printf("testutils started...\n");
-#endif
+template<typename FLT> int run() {
+  using CPX  = std::complex<FLT>;
+  using CAPI = finufft_capi<FLT>;
+  if constexpr (std::is_same_v<FLT, float>)
+    printf("testutilsf started...\n");
+  else
+    printf("testutils started...\n");
 
   // test next235...
   // Barnett 2/9/17, made smaller range 3/28/17. pass-fail 6/16/23
@@ -101,10 +99,10 @@ int main() {
   if (std::abs(errtwonorm(M, &a[0], &b[0]) - 1.0) > relerr) return 1;
   if (std::abs(std::sqrt((FLT)M) * relerrtwonorm(M, &a[0], &b[0]) - 1.0) > relerr) return 1;
 
-#ifndef SINGLE
   // Complexity-based upsampfac (sigma) picker (finufft/heuristics.hpp). The block
-  // exercises both precisions explicitly, so it runs once in the double build.
-  {
+  // exercises both precisions explicitly, so it runs only in the double
+  // instantiation.
+  if constexpr (std::is_same_v<FLT, double>) {
     const double eps_d = std::numeric_limits<double>::epsilon();
     const double eps_f = std::numeric_limits<float>::epsilon();
     const int ns_d = MAX_NSPREAD<double>, ns_f = MAX_NSPREAD<float>;
@@ -190,12 +188,17 @@ int main() {
       }
     }
   }
-#endif
 
-#ifdef SINGLE
-  printf("testutilsf passed.\n");
-#else
-  printf("testutils passed.\n");
-#endif
+  if constexpr (std::is_same_v<FLT, float>)
+    printf("testutilsf passed.\n");
+  else
+    printf("testutils passed.\n");
   return 0;
+}
+
+int main() {
+  int e = 0;
+  e |= run<double>();
+  e |= run<float>();
+  return e;
 }

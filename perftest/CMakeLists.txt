@@ -3,13 +3,16 @@ set(PERFTESTS guru_timing_test manysmallprobs spreadtestnd spreadtestndall)
 # Other than that, it looks like no actual tests executed here by CMake
 
 foreach(TEST ${PERFTESTS})
+    # Support headers live under test/ (eg test/utils/test_defs.hpp)
     add_executable(${TEST} ${TEST}.cpp)
+    target_include_directories(${TEST} PRIVATE ${CMAKE_SOURCE_DIR}/test)
     if(FINUFFT_USE_DUCC0)
         target_compile_definitions(${TEST} PRIVATE -DFINUFFT_USE_DUCC0)
     endif()
     finufft_link_test(${TEST})
 
     add_executable(${TEST}f ${TEST}.cpp)
+    target_include_directories(${TEST}f PRIVATE ${CMAKE_SOURCE_DIR}/test)
     target_compile_definitions(${TEST}f PRIVATE -DSINGLE)
     if(FINUFFT_USE_DUCC0)
         target_compile_definitions(${TEST}f PRIVATE -DFINUFFT_USE_DUCC0)

@@ -1,9 +1,11 @@
 #include "utils/norms.hpp"
-#include <finufft/test_defs.hpp>
+#include "utils/test_defs.hpp"
 
 /* Test that execute_adjoint applies the adjoint of execute, in the
    guru interface, for all types and dimensions.
-   We use the test_defs macros, as with other C-interface tests.
+   We use the test_defs finufft_capi trait, as with other C-interface tests.
+   Either precision: the body is templated on FLT and main() instantiates it
+   with the FINUFFT_TEST_PREC macro (set per target).
    Barnett 7/23/25. More stable relative error denom, discussion 7/29/25.
 
    Test tolerances are hard-wired in this code, not via cmd line.
@@ -24,25 +26,29 @@
 
 using namespace std;
 
-int main() {
+template<typename FLT> int run() {
+  using CPX    = std::complex<FLT>;
+  using CAPI   = finufft_capi<FLT>;
 
   BIGINT Ns[3] = {200, 40, 6}; // modes per dim, smallish probs (~1e5 max)
   BIGINT M     = 50000;        // NU pts, smallish, but enough so rand err small
   int isign    = +1;
   int ntr      = 1;            // how many transforms (one for now)
   finufft_opts opts;
-  FINUFFT_DEFAULT_OPTS(&opts);
+  CAPI::default_opts(&opts);
   opts.allow_eps_too_small = 1; // honour requested tight tol; warn instead of throw
   // opts.upsampfac = 1.25;    // experts use to override default USF
-#ifdef SINGLE
-  FLT tol        = 1e-6; // requested transform tol (small enough to force USF=2)
-  FLT allowederr = 1e-4; // ~1e3*epsmach (allow USF=1.25 larger r_dyn)
-  string name    = "adjointnessf";
-#else
-  FLT tol        = 1e-12; // requested transform tol (eps<=1e-9 => USF=2 guaranteed)
-  FLT allowederr = 1e-10; // ~1e6*epsmach (USF=2 r_dyn^3<1e3, but allow USF=1.25)
-  string name    = "adjointness";
-#endif
+  FLT tol, allowederr;
+  string name;
+  if constexpr (std::is_same_v<FLT, float>) {
+    tol        = 1e-6; // requested transform tol (small enough to force USF=2)
+    allowederr = 1e-4; // ~1e3*epsmach (allow USF=1.25 larger r_dyn)
+    name       = "adjointnessf";
+  } else {
+    tol        = 1e-12; // requested transform tol (eps<=1e-9 => USF=2 guaranteed)
+    allowederr = 1e-10; // ~1e6*epsmach (USF=2 r_dyn^3<1e3, but allow USF=1.25)
+    name       = "adjointness";
+  }
 
   cout << "adjointness: making random data...";
   // generate random non-uniform points on (x,y) and complex strengths (c)
@@ -82,22 +88,22 @@ int main() {
 
     for (int type = 1; type <= 3; ++type) { // .......... loop over types
       cout << "\ttype " << type << ": ";
-      FINUFFT_PLAN plan;
-      FINUFFT_MAKEPLAN(type, dim, Ns, isign, ntr, tol, &plan, &opts);
+      typename CAPI::plan plan;
+      CAPI::makeplan(type, dim, Ns, isign, ntr, tol, &plan, &opts);
       // always input NU pts and freq targs (latter only used by t3)...
-      FINUFFT_SETPTS(plan, M, x.data(), y.data(), z.data(), Nmax, s.data(), t.data(),
-                     u.data());
-      if (type != 2) {                                              // t1 or t3
-        ier    = FINUFFT_EXECUTE(plan, c.data(), F.data());         // c->F
-        ieradj = FINUFFT_EXECUTE_ADJOINT(plan, C.data(), f.data()); // f->C
-      } else {                                              // has reversed data flow
-        ier    = FINUFFT_EXECUTE(plan, C.data(), f.data()); // f->C
-        ieradj = FINUFFT_EXECUTE_ADJOINT(plan, c.data(), F.data()); // c->F
+      CAPI::setpts(plan, M, x.data(), y.data(), z.data(), Nmax, s.data(), t.data(),
+                   u.data());
+      if (type != 2) {                                            // t1 or t3
+        ier    = CAPI::execute(plan, c.data(), F.data());         // c->F
+        ieradj = CAPI::execute_adjoint(plan, C.data(), f.data()); // f->C
+      } else {                                            // has reversed data flow
+        ier    = CAPI::execute(plan, C.data(), f.data()); // f->C
+        ieradj = CAPI::execute_adjoint(plan, c.data(), F.data()); // c->F
       }
       if (ier > 0) cout << "\texecute failure: ier=" << ier << endl;
       if (ieradj > 0) cout << "\texecute_adjoint failure: ier=" << ieradj << endl;
       iermax = max(max(ier, ieradj), iermax); // track if something failed
-      FINUFFT_DESTROY(plan);
+      CAPI::destroy(plan);
 
       // measure scalar error (f,F) - (C,c), should vanish by adjointness...
       CPX ipc = 0.0, ipf = 0.0;           // inner-prod results for (C,c) and (f,F)
@@ -124,3 +130,5 @@ int main() {
     return 0;
   }
 }
+
+int main() { return run<FINUFFT_TEST_PREC>(); }

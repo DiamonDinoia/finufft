@@ -11,9 +11,9 @@
    Update for new kf=3 (KB+Beatty) kernel, matching new tolsweeptest.m 1/21/26.
 */
 
+#include "utils/test_defs.hpp"
 #include <cmath>
 #include <cstdlib>
-#include <finufft/test_defs.hpp>
 #include <iostream>
 #include <vector>
 // test utilities: direct DFT and norm helpers
@@ -22,7 +22,9 @@
 #include "utils/dirft3d.hpp"
 #include "utils/norms.hpp"
 
-int main(int argc, char *argv[]) {
+template<typename FLT> int run(int argc, char *argv[]) {
+  using CPX  = std::complex<FLT>;
+  using CAPI = finufft_capi<FLT>;
 
   // Define test problems, tolerance ranges, slack factors...
   BIGINT M = 500; // pick problem size: # sources (balance runtime vs rand-averaging)
@@ -49,11 +51,10 @@ int main(int argc, char *argv[]) {
   // test set of upsampfacs each with matching error floor for each dim...
   const int nu         = 2;           // how many upsampfacs
   double upsampfac[nu] = {1.25, 2.0}; // just the standard sigmas for now
-#ifdef SINGLE
-  double floor[nu][3] = {{1e-4, 1e-4, 2e-4}, {2e-5, 2e-5, 1e-5}}; // inner is dim
-#else
-  double floor[nu][3] = {{1e-9, 2e-9, 3e-8}, {3e-14, 3e-14, 3e-14}};
-#endif
+  // matching error floor for each USF and precision; inner index is dim
+  constexpr bool isf      = std::is_same_v<FLT, float>;
+  double floor[nu][3] = {{isf ? 1e-4 : 1e-9, isf ? 1e-4 : 2e-9, isf ? 2e-4 : 3e-8},
+                         {isf ? 2e-5 : 3e-14, isf ? 2e-5 : 3e-14, isf ? 1e-5 : 3e-14}};
 
   // If user asked for help, print usage and exit
   for (int ai = 1; ai < argc; ++ai) {
@@ -76,7 +77,7 @@ int main(int argc, char *argv[]) {
   if (argc > 4) sscanf(argv[4], "%d", &debug);
 
   finufft_opts opts{};
-  FINUFFT_DEFAULT_OPTS(&opts);
+  CAPI::default_opts(&opts);
   opts.spread_kerformula = kerformula;
   opts.debug             = debug;
   opts.showwarn = showwarn;
@@ -123,12 +124,12 @@ int main(int argc, char *argv[]) {
             Z[k] = Nm[2] * rand01();
             F[k] = crandm11();
           }
-          FINUFFT_PLAN plan; // do tested transform...
-          int ier = FINUFFT_MAKEPLAN(type, dim, Nm, isign, ntr, (FLT)tol, &plan, &opts);
-          int ier_set = FINUFFT_SETPTS(plan, M, x.data(), y.data(), z.data(), N, X.data(),
-                                       Y.data(), Z.data());
-          FINUFFT_EXECUTE(plan, c.data(), F.data()); // type 2 writes to c, others to F
-          FINUFFT_DESTROY(plan);
+          typename CAPI::plan plan; // do tested transform...
+          int ier     = CAPI::makeplan(type, dim, Nm, isign, ntr, (FLT)tol, &plan, &opts);
+          int ier_set = CAPI::setpts(plan, M, x.data(), y.data(), z.data(), N, X.data(),
+                                     Y.data(), Z.data());
+          CAPI::execute(plan, c.data(), F.data()); // type 2 writes to c, others to F
+          CAPI::destroy(plan);
 
           if (dim == 1) // do the relevant (of nine) direct "exact" evals...
             if (type == 1)
@@ -185,11 +186,11 @@ int main(int argc, char *argv[]) {
                 printf("   Rerunning with "
                        "debug=1:_______________________________________\n");
                 opts.debug = 1;
-                FINUFFT_MAKEPLAN(type, dim, Nm, isign, ntr, (FLT)tol, &plan, &opts);
-                FINUFFT_SETPTS(plan, M, x.data(), y.data(), z.data(), N, X.data(),
-                               Y.data(), Z.data());
-                FINUFFT_EXECUTE(plan, c.data(), F.data()); // type 2 writes to c
-                FINUFFT_DESTROY(plan);
+                CAPI::makeplan(type, dim, Nm, isign, ntr, (FLT)tol, &plan, &opts);
+                CAPI::setpts(plan, M, x.data(), y.data(), z.data(), N, X.data(), Y.data(),
+                             Z.data());
+                CAPI::execute(plan, c.data(), F.data()); // type 2 writes to c
+                CAPI::destroy(plan);
                 printf("   (Rerun "
                        "done)__________________________________________________\n");
                 opts.debug = debug; // reset to cmdline arg value
@@ -220,3 +221,5 @@ int main(int argc, char *argv[]) {
 
   return nfailtot > 0; // if any fails, allows all test cases to complete
 }
+
+int main(int argc, char **argv) { return run<FINUFFT_TEST_PREC>(argc, argv); }
