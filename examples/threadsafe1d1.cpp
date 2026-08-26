@@ -1,16 +1,16 @@
 // this is all you must include for the finufft lib...
-#include <finufft.h>
+#include <finufft.hpp>
 
 // also used in this example...
 #include <cassert>
 #include <complex>
-#include <cstdio>
+#include <cstdlib>
+#include <iostream>
+#include <numbers>
 #include <omp.h>
-#include <stdlib.h>
+#include <sstream>
 #include <vector>
 using namespace std;
-
-static const double PI = 3.141592653589793238462643383279502884;
 
 int main()
 /* Demo single-threaded FINUFFT calls from inside a OMP parallel block.
@@ -22,14 +22,11 @@ int main()
    reporting small error.
 */
 {
-  int M      = 1e5;                              // number of nonuniform points
-  int N      = 1e5;                              // number of modes
-  double acc = 1e-9;                             // desired accuracy
-  finufft_opts opts;                             // opts is a plain struct
-  finufft_default_opts(&opts);
+  int M             = 1e5;                       // number of nonuniform points
+  int N             = 1e5;                       // number of modes
+  double acc        = 1e-9;                      // desired accuracy
   complex<double> I = complex<double>(0.0, 1.0); // the imaginary unit
 
-  opts.nthreads = 1; // *crucial* so that each call single-thread (otherwise segfaults)
   int overallstatus = 0;
 
   // Now have each thread do independent 1D type 1 on their own data:
@@ -42,7 +39,7 @@ int main()
     vector<double> x(M);
     vector<complex<double>> c(M);
     for (int j = 0; j < M; ++j) {
-      x[j] = PI * (2 * ((double)rand() / RAND_MAX) - 1); // uniform random in [-pi,pi)
+      x[j] = numbers::pi * (2 * ((double)rand() / RAND_MAX) - 1); // unif in [-pi,pi)
       c[j] =
           2 * ((double)rand() / RAND_MAX) - 1 + I * (2 * ((double)rand() / RAND_MAX) - 1);
     }
@@ -50,8 +47,20 @@ int main()
     // allocate output array for the Fourier modes... local to the thread
     vector<complex<double>> F(N);
 
-    // call the NUFFT (with iflag=+1): note pointers (not STL vecs) passed...
-    int ier = finufft1d1(M, &x[0], &c[0], +1, acc, N, &F[0], &opts);
+    // *crucial* nthreads=1: each plan stays single-threaded (else oversubscription)
+    int ier = 0;
+    try {
+      auto opts     = finufft::default_opts<double>();
+      opts.nthreads = 1;
+      finufft::plan p(1, {N}, +1, acc, 1, opts);
+      p.setpts(x);
+      p.execute(c, F);
+    } catch (const finufft::error &e) {
+      std::ostringstream msg;
+      msg << "[thread " << omp_get_thread_num() << "] " << e.what() << '\n';
+      std::cout << msg.str();
+      ier = 1;
+    }
     if (ier > 0) overallstatus = 1;
 
     int k = 42519; // check the answer just for this mode frequency...
@@ -66,8 +75,10 @@ int main()
     int kout   = k + N / 2; // index in output array for freq mode k
     double err = abs(F[kout] - Ftest) / Fmax;
 
-    printf("[thread %2d] 1D t-1 dbl-prec NUFFT done. ier=%d, rel err in F[%d]: %.3g\n",
-           omp_get_thread_num(), ier, k, err);
+    std::ostringstream msg;
+    msg << "[thread " << omp_get_thread_num()
+        << "] 1D t-1 dbl-prec NUFFT done. rel err in F[" << k << "]: " << err << '\n';
+    std::cout << msg.str();
   }
 
   return overallstatus;

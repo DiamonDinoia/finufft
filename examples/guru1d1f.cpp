@@ -1,23 +1,21 @@
 // this is all you must include for the finufft lib...
-#include <complex>
-#include <finufft.h>
+#include <finufft.hpp>
 
 // specific to this example...
-#include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <cstdlib>
+#include <iostream>
+#include <numbers>
 #include <vector>
 
 // only good for small projects...
 using namespace std;
 
-static const double PI = 3.141592653589793238462643383279502884;
 // allows 1i to be the imaginary unit... (C++14 onwards)
 using namespace std::complex_literals;
 
 int main()
-/* Example calling guru C++ interface to FINUFFT library, single-prec, passing
-   pointers to STL vectors of C++ float complex numbers, with a math check.
+/* Example calling the RAII C++ interface to the FINUFFT library,
+   single-prec, with STL vectors of float complex numbers and a math check.
    Barnett 7/5/20
    To compile, see README.  Usage: ./guru1d1f
 */
@@ -25,30 +23,20 @@ int main()
   int M     = 1e5;                // number of nonuniform points
   int N     = 1e4;                // number of modes
   float tol = 1e-3;               // desired accuracy
+  int ntransf    = 1;                  // single transform at a time
 
-  int type = 1, dim = 1;          // 1d1
-  int64_t Ns[3];                  // guru describes mode array by vector [N1,N2..]
-  Ns[0]       = N;
-  int ntransf = 1;                // we want to do a single transform at a time
-  finufftf_plan plan;             // creates single-prec plan struct: note the "f"
-  int ier        = 0;
   int changeopts = 1;             // do you want to try changing opts? 0 or 1
-  if (changeopts) {               // demo how to change options away from defaults..
-    finufft_opts opts;
-    finufftf_default_opts(&opts); // note "f" for single-prec, throughout...
-    opts.debug = 2;               // example options change
-    ier        = finufftf_makeplan(type, dim, Ns, +1, ntransf, tol, &plan, &opts);
-  } else                          // or, NULL here means use default opts...
-    ier = finufftf_makeplan(type, dim, Ns, +1, ntransf, tol, &plan, NULL);
-  if (ier > 0) return ier;        // no plan to use; going on would segfault
+  auto opts      = finufft::default_opts<float>();
+  if (changeopts) opts.debug = 2; // example options change
+
+  // the tolerance literal picks single precision; errors throw finufft::error
+  finufft::plan p(1, {N}, +1, tol, ntransf, opts);
 
   // generate some random nonuniform points
   vector<float> x(M);
   for (int j = 0; j < M; ++j)
-    x[j] = PI * (2 * ((float)rand() / (float)RAND_MAX) - 1); // uniform random in [-pi,pi)
-  // note FINUFFT doesn't use std::vector types, so we need to make a pointer...
-  ier = finufftf_setpts(plan, M, &x[0], NULL, NULL, 0, NULL, NULL, NULL);
-  if (ier > 0) return ier; // the plan has no grid; executing it would segfault
+    x[j] = numbers::pi_v<float> * (2 * ((float)rand() / (float)RAND_MAX) - 1);
+  p.setpts(x);
 
   // generate some complex strengths
   vector<complex<float>> c(M);
@@ -58,29 +46,20 @@ int main()
 
   // alloc output array for the Fourier modes, then do the transform
   vector<complex<float>> F(N);
-  ier = finufftf_execute(plan, &c[0], &F[0]);
-
-  // for fun, do another with same NU pts (no re-sorting), but new strengths...
-  for (int j = 0; j < M; ++j)
-    c[j] = 2 * ((float)rand() / (float)RAND_MAX) - 1 +
-           1if * (2 * ((float)rand() / (float)RAND_MAX) - 1);
-  ier = finufftf_execute(plan, &c[0], &F[0]);
-
-  finufftf_destroy(plan); // done with transforms of this size
+  p.execute(c, F);
 
   // rest is math checking and reporting...
-  int n = 1251; // check the answer just for this mode, must be in [-N/2,N/2)
-  complex<float> Ftest = complex<float>(0, 0);
-  for (int j = 0; j < M; ++j) Ftest += c[j] * exp(1if * (float)n * x[j]);
-  int nout   = n + N / 2; // index in output array for freq mode n
-  float Fmax = 0.0;       // compute inf norm of F
+  int k                = 1425; // check the answer just for this mode frequency...
+  complex<float> Ftest = 0.0f + 0.0if;
+  for (int j = 0; j < M; ++j) Ftest += c[j] * exp(1if * (float)k * x[j]);
+  float Fmax = 0.0; // compute inf norm of F
   for (int m = 0; m < N; ++m) {
     float aF = abs(F[m]);
     if (aF > Fmax) Fmax = aF;
   }
-  float err = abs(F[nout] - Ftest) / Fmax;
-  printf("guru 1D type-1 single-prec NUFFT done. ier=%d, rel err in F[%d] is %.3g\n", ier,
-         n, err);
-
-  return ier;
+  int kout  = k + N / 2; // index in output array for freq mode k
+  float err = abs(F[kout] - Ftest) / Fmax;
+  std::cout << "guru 1D type-1 single-prec NUFFT done. rel err in F[" << k << "] is "
+            << err << '\n';
+  return 0;
 }

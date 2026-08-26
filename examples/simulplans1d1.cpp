@@ -8,17 +8,15 @@
 */
 
 // this is all you must include for the finufft lib...
-#include <finufft.h>
+#include <finufft.hpp>
 
 // also used in this example...
-#include <cassert>
 #include <complex>
-#include <cstdio>
-#include <stdlib.h>
+#include <cstdlib>
+#include <iostream>
+#include <numbers>
 #include <vector>
 using namespace std;
-
-static const double PI = 3.141592653589793238462643383279502884;
 
 void strengths(vector<complex<double>> &c) { // fill random complex array
   for (long unsigned int j = 0; j < c.size(); ++j)
@@ -32,7 +30,7 @@ double chk1d1(int n, vector<double> &x, vector<complex<double>> &c,
 {
   int N = F.size();
   if (n >= N / 2 || n < -N / 2) {
-    printf("n out of bounds!\n");
+    std::cout << "n out of bounds!\n";
     return NAN;
   }
   complex<double> Ftest = complex<double>(0, 0);
@@ -48,32 +46,25 @@ double chk1d1(int n, vector<double> &x, vector<complex<double>> &c,
 }
 
 int main() {
-  double tol = 1e-9;         // desired accuracy for both plans
-  int type = 1, dim = 1;     // 1d1
-  int64_t Ns[3];             // guru describes mode array by vector [N1,N2..]
-  int ntransf = 1;           // we want to do a single transform at a time
+  double tol = 1e-9;             // desired accuracy for both plans
 
   int MA = 3e6;              // number of nonuniform points    PLAN A
   int NA = 1e6;              // number of modes
   int MB = 2e6;              // number of nonuniform points    PLAN B, diff sizes
   int NB = 1e5;              // number of modes
 
-  finufft_plan planA, planB; // creates plan structs
-  Ns[0] = NA;
-  finufft_makeplan(type, dim, Ns, +1, ntransf, tol, &planA, NULL);
-  Ns[0] = NB;
-  finufft_makeplan(type, dim, Ns, +1, ntransf, tol, &planB, NULL);
+  finufft::plan planA(1, {NA}, +1, tol);
+  finufft::plan planB(1, {NB}, +1, tol);
 
   // generate some random nonuniform points
   vector<double> xA(MA), xB(MB);
   for (int j = 0; j < MA; ++j)
-    xA[j] = PI * (2 * ((double)rand() / RAND_MAX) - 1); // uniform random in [-pi,pi)
+    xA[j] = numbers::pi * (2 * ((double)rand() / RAND_MAX) - 1); // unif in [-pi,pi)
   for (int j = 0; j < MB; ++j)
-    xB[j] = PI * (2 * ((double)rand() / RAND_MAX) - 1); // uniform random in [-pi,pi)
+    xB[j] = numbers::pi * (2 * ((double)rand() / RAND_MAX) - 1);
 
-  // note FINUFFT doesn't use std::vector types, so we need to make a pointer...
-  finufft_setpts(planA, MA, &xA[0], NULL, NULL, 0, NULL, NULL, NULL);
-  finufft_setpts(planB, MB, &xB[0], NULL, NULL, 0, NULL, NULL, NULL);
+  planA.setpts(xA);
+  planB.setpts(xB);
 
   // generate some complex strengths
   vector<complex<double>> cA(MA), cB(MB);
@@ -82,26 +73,25 @@ int main() {
 
   // allocate output arrays for the Fourier modes...
   vector<complex<double>> FA(NA), FB(NB);
-  int ierA = finufft_execute(planA, &cA[0], &FA[0]);
-  int ierB = finufft_execute(planB, &cB[0], &FB[0]);
+  planA.execute(cA, FA);
+  planB.execute(cB, FB);
 
   // change strengths and exec again for fun...
   strengths(cA);
   strengths(cB);
-  ierA = finufft_execute(planA, &cA[0], &FA[0]);
-  ierB = finufft_execute(planB, &cB[0], &FB[0]);
-  finufft_destroy(planA);
-  finufft_destroy(planB);
+  planA.execute(cA, FA);
+  planB.execute(cB, FB);
+  // both plans free themselves at the end of the scope
 
   // math checking and reporting...
   int n       = 116354;
   double errA = chk1d1(n, xA, cA, FA);
-  printf("planA: 1D type-1 double-prec NUFFT done. ier=%d, rel err in F[%d] is %.3g\n",
-         ierA, n, errA);
+  std::cout << "planA: 1D type-1 double-prec NUFFT done. rel err in F[" << n << "] is "
+            << errA << '\n';
   n           = 27152;
   double errB = chk1d1(n, xB, cB, FB);
-  printf("planB: 1D type-1 double-prec NUFFT done. ier=%d, rel err in F[%d] is %.3g\n",
-         ierB, n, errB);
+  std::cout << "planB: 1D type-1 double-prec NUFFT done. rel err in F[" << n << "] is "
+            << errB << '\n';
 
-  return ierA + ierB;
+  return 0;
 }

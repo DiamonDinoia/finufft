@@ -1,27 +1,25 @@
 // this is all you must include for the finufft lib...
-#include <complex>
-#include <finufft.h>
+#include <finufft.hpp>
 
 // also needed for this example...
+#include <complex>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#include <numbers>
 #include <vector>
 using namespace std;
 
-static const double PI = 3.141592653589793238462643383279502884;
-
 int main() {
 
-  /* Simple 2D type-1 example of calling the FINUFFT library from C++, using plain
-     arrays of C++ complex numbers, with a math test. Double precision version.
+  /* Simple 2D type-1 example of calling the FINUFFT library from modern C++,
+     using STL double complex vectors, with a math test.
      To compile, see README. Usage:  ./simple2d1
   */
 
-  int M      = 1e6;  // number of nonuniform points
-  int N      = 1e6;  // approximate total number of modes (N1*N2)
-  double tol = 1e-6; // desired accuracy
-  finufft_opts opts;
-  finufft_default_opts(&opts);
+  int M      = 1e6;            // number of nonuniform points
+  int N      = 1e6;            // approximate total number of modes (N1*N2)
+  double tol = 1e-6;           // desired accuracy
   complex<double> I(0.0, 1.0); // the imaginary unit
 
   // generate random non-uniform points on (x,y) and complex strengths (c):
@@ -29,8 +27,8 @@ int main() {
   vector<complex<double>> c(M);
 
   for (int i = 0; i < M; i++) {
-    x[i] = PI * (2 * (double)rand() / RAND_MAX - 1); // uniform random in [-pi, pi)
-    y[i] = PI * (2 * (double)rand() / RAND_MAX - 1); // uniform random in [-pi, pi)
+    x[i] = numbers::pi * (2 * (double)rand() / RAND_MAX - 1); // unif in [-pi, pi)
+    y[i] = numbers::pi * (2 * (double)rand() / RAND_MAX - 1);
 
     // each component uniform random in [-1,1]
     c[i] =
@@ -44,9 +42,12 @@ int main() {
   // output array for the Fourier modes
   vector<complex<double>> F(N1 * N2);
 
-  // call the NUFFT (with iflag += 1): note passing in pointers...
+  // 2d type-1 plan with a low-upsampling option (iflag=+1)
+  auto opts      = finufft::default_opts<double>();
   opts.upsampfac = 1.25;
-  int ier        = finufft2d1(M, &x[0], &y[0], &c[0], 1, tol, N1, N2, &F[0], &opts);
+  finufft::plan p(1, {N1, N2}, +1, tol, 1, opts);
+  p.setpts(x, y); // two spans select two dimensions
+  p.execute(c, F);
 
   int k1 = round(0.45 * N1); // check the answer for mode frequency (k1,k2)
   int k2 = round(-0.35 * N2);
@@ -69,7 +70,7 @@ int main() {
 
   // compute relative error
   double err = abs(F[indexOut] - Ftest) / Fmax;
-  cout << "2D type-1 NUFFT done. ier=" << ier << ", err in F[" << indexOut
-       << "] rel to max(F) is " << setprecision(2) << err << endl;
-  return ier;
+  cout << "2D type-1 NUFFT done. err in F[" << indexOut << "] rel to max(F) is "
+       << setprecision(2) << err << endl;
+  return 0;
 }

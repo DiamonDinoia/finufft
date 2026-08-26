@@ -1,43 +1,43 @@
 // this is all you must include...
-#include <finufft.h>
+#include <finufft.hpp>
 
 // also needed for this example...
 #include <cassert>
 #include <complex>
-#include <stdio.h>
-#include <stdlib.h>
+#include <cstdlib>
+#include <iostream>
+#include <numbers>
 #include <vector>
 using namespace std;
 
-static const double PI = 3.141592653589793238462643383279502884;
-
 int main()
-/* Example of calling the FINUFFT library from C++, using STL
+/* Example of calling the FINUFFT library from modern C++, using STL
    single complex vectors, with a math test.
    (See simple1d1 for double-precision version.)
    To compile, see README. Usage: ./simple1d1f
 */
 {
-  int M     = 1e5;              // number of nonuniform points
-  int N     = 1e4;              // number of modes
-  float acc = 1e-3;             // desired accuracy
-  finufft_opts opts;            // opts is a plain struct
-  finufftf_default_opts(&opts); // note finufft "f" suffix
+  int M            = 1e5;                      // number of nonuniform points
+  int N            = 1e4;                      // number of modes
+  float acc        = 1e-3;                     // desired accuracy
   complex<float> I = complex<float>(0.0, 1.0); // the imaginary unit
 
   // generate some random nonuniform points (x) and complex strengths (c)...
   vector<float> x(M);
   vector<complex<float>> c(M);
   for (int j = 0; j < M; ++j) {
-    x[j] = PI * (2 * ((float)rand() / (float)RAND_MAX) - 1); // uniform random in [-pi,pi)
+    x[j] = numbers::pi_v<float> * (2 * ((float)rand() / (float)RAND_MAX) - 1); // unif in
+                                                                               // [-pi,pi)
     c[j] = 2 * ((float)rand() / (float)RAND_MAX) - 1 +
            I * (2 * ((float)rand() / (float)RAND_MAX) - 1);
   }
   // allocate output array for the Fourier modes...
   vector<complex<float>> F(N);
 
-  // call the NUFFT (with iflag=+1): note pointers (not STL vecs) passed...
-  int ier = finufftf1d1(M, &x[0], &c[0], +1, acc, N, &F[0], &opts); // note "f"
+  // the tolerance literal picks single precision; setpts deduces 1d
+  finufft::plan p(1, {N}, +1, acc);
+  p.setpts(x);
+  p.execute(c, F);
 
   int k   = 1425; // check the answer just for this mode...
   assert(k >= -(double)N / 2 && k < (double)N / 2);
@@ -50,7 +50,7 @@ int main()
   }
   int kout  = k + N / 2; // index in output array for freq mode k
   float err = abs(F[kout] - Ftest) / Fmax;
-  printf("1D type-1 single-prec NUFFT done. ier=%d, rel err in F[%d] is %.3g\n", ier, k,
-         err);
-  return ier;
+  std::cout << "1D type-1 single-prec NUFFT done. rel err in F[" << k << "] is " << err
+            << '\n';
+  return 0;
 }

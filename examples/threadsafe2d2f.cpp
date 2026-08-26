@@ -14,7 +14,7 @@
 */
 
 // this is all you must include for the finufft lib...
-#include <finufft.h>
+#include <finufft.hpp>
 
 // also used in this example...
 #include <complex>
@@ -23,19 +23,27 @@
 #include <vector>
 using namespace std;
 
-int test_finufft(finufft_opts *opts)
-// self-contained small test that one single-prec FINUFFT2D2 has no error/crash
+int test_finufft(const finufft_opts &opts)
+// self-contained small test that one single-prec FINUFFT 2D2 has no error/crash
 {
-  size_t n_rows = 256, n_cols = 256;   // 2d image size
-  size_t n_read = 512, n_spokes = 128; // some k-space point params
-  size_t M = n_read * n_spokes;        // how many k-space pts; MRI-specific
+  int n_rows = 256, n_cols = 256;      // 2d image size
+  int n_read = 512, n_spokes = 128;    // some k-space point params
+  int M = n_read * n_spokes;           // how many k-space pts; MRI-specific
   std::vector<float> x(M);             // bunch of zero input data
   std::vector<float> y(M);
   std::vector<std::complex<float>> img(n_rows * n_cols); // coeffs
   std::vector<std::complex<float>> ksp(M); // output array (vals @ k-space pts)
 
-  int ier = finufftf2d2(M, x.data(), y.data(), ksp.data(), -1, 1e-3, n_rows, n_cols,
-                        img.data(), opts);
+  int ier = 0;
+  try {
+    // type 2, single-prec (the tolerance literal picks it), isign=-1
+    finufft::plan p(2, {n_rows, n_cols}, -1, 1e-3f, 1, opts);
+    p.setpts(x, y);
+    p.execute(ksp, img); // type 2: img in, ksp out
+  } catch (const finufft::error &e) {
+    std::cerr << e.what() << std::endl;
+    ier = e.code();
+  }
 
   std::cout << "\ttest_finufft: exit code " << ier << ", thread " << omp_get_thread_num()
             << std::endl;
@@ -43,15 +51,14 @@ int test_finufft(finufft_opts *opts)
 }
 
 int main() {
-  finufft_opts opts;
-  finufftf_default_opts(&opts);
+  auto opts         = finufft::default_opts<float>();
   opts.nthreads     = 1;  // *crucial* so each call single-thread; else segfaults
 
   int n_slices      = 50; // number of transforms. parallelize over slices
   int overallstatus = 0;
 #pragma omp parallel for
   for (int i = 0; i < n_slices; i++) {
-    int ier = test_finufft(&opts);
+    int ier = test_finufft(opts);
     if (ier != 0) overallstatus = 1;
   }
 

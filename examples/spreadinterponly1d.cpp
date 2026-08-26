@@ -1,16 +1,15 @@
 // this is all you must include for the finufft lib...
-#include <finufft.h>
+#include <finufft.hpp>
 
 // also used in this example...
-#include <cassert>
 #include <chrono>
 #include <complex>
-#include <cstdio>
-#include <stdlib.h>
+#include <cstdlib>
+#include <iostream>
+#include <numbers>
 #include <vector>
 using namespace std;
 
-static const double PI = 3.141592653589793238462643383279502884;
 using namespace std::chrono;
 
 int main()
@@ -30,60 +29,58 @@ int main()
    See: spreadtestnd for usage of internal (non FINUFFT-API) spread/interp.
 */
 {
-  int M = 1e7; // number of nonuniform points
-  int N = 1e7; // size of regular grid
-  finufft_opts opts;
-  finufft_default_opts(&opts);
-  opts.spreadinterponly = 1;    // task: the following two control kernel used...
+  int M                 = 1e7;  // number of nonuniform points
+  int N                 = 1e7;  // size of regular grid
+  auto opts             = finufft::default_opts<double>();
+  opts.spreadinterponly = 1;    // task: the following control kernel used...
   double tol            = 1e-9; // tolerance for (real) kernel shape design only
   opts.upsampfac        = 2.0;  // pretend upsampling factor (really no upsampling)
-       // opts.spread_kerevalmeth = 0;  // DEPRECATED: no effect; the library always uses Horner.
 
   complex<double> I = complex<double>(0.0, 1.0); // the imaginary unit
   vector<double> x(M);                           // input
   vector<complex<double>> c(M);                  // input
   vector<complex<double>> F(N);                  // output (spread to this array)
 
-  // first spread M=1 single unit-strength at the origin, only to get its total mass...
-  x[0]       = 0.0;
-  c[0]       = 1.0;
-  int unused = 1;
-  int ier = finufft1d1(1, x.data(), c.data(), unused, tol, N, F.data(), &opts); // warm-up
-  if (ier > 0) return ier;
+  finufft::plan<double> p1(1, {N}, +1, tol, 1, opts); // spread-only "1d1"
+  finufft::plan<double> p2(2, {N}, +1, tol, 1, opts); // interp-only "1d2"
+
+  // first spread a single unit-strength at the origin, to get the kernel mass...
+  vector<double> xone{0.0};
+  vector<complex<double>> cone{1.0};
+  p1.setpts(xone);
+  p1.execute(cone, F);            // warm-up: M=1 spread
   complex<double> kersum = 0.0;
   for (auto Fk : F) kersum += Fk; // kernel mass
 
   // Now generate random nonuniform points (x) and complex strengths (c)...
   for (int j = 0; j < M; ++j) {
-    x[j] = PI * (2 * ((double)rand() / RAND_MAX) - 1); // uniform random in [-pi,pi)
+    x[j] = numbers::pi * (2 * ((double)rand() / RAND_MAX) - 1); // unif in [-pi,pi)
     c[j] =
         2 * ((double)rand() / RAND_MAX) - 1 + I * (2 * ((double)rand() / RAND_MAX) - 1);
   }
 
-  opts.debug = 1;
-  auto t0    = steady_clock::now(); // now spread with all M pts... (dir=1)
-  ier      = finufft1d1(M, x.data(), c.data(), unused, tol, N, F.data(), &opts); // do it
-  double t = (steady_clock::now() - t0) / 1.0s;
-  if (ier > 0) return ier;
+  auto t0 = steady_clock::now(); // now spread with all M pts... (dir=1)
+  p1.setpts(x);
+  p1.execute(c, F);
+  double t             = (steady_clock::now() - t0) / 1.0s;
   complex<double> csum = 0.0; // tot input strength
   for (auto cj : c) csum += cj;
   complex<double> mass = 0.0; // tot output mass
   for (auto Fk : F) mass += Fk;
   double relerr = abs(mass - kersum * csum) / abs(mass);
-  printf("1D spread-only, double-prec, %.3g s (%.3g NU pt/sec), ier=%d, mass err %.3g\n",
-         t, M / t, ier, relerr);
+  std::cout << "1D spread-only, double-prec, " << t << " s (" << M / t
+            << " NU pt/sec), mass err " << relerr << '\n';
 
   for (auto &Fk : F) Fk = complex<double>{1.0, 0.0}; // unit grid input
-  opts.debug = 0;
-  t0         = steady_clock::now(); // now interp to all M pts...  (dir=2)
-  ier = finufft1d2(M, x.data(), c.data(), unused, tol, N, F.data(), &opts); // do it
-  t   = (steady_clock::now() - t0) / 1.0s;
-  if (ier > 0) return ier;
+  t0 = steady_clock::now(); // now interp to all M pts...  (dir=2)
+  p2.setpts(x);
+  p2.execute(c, F);         // type 2: F is the grid input, c the output at NU pts
+  t    = (steady_clock::now() - t0) / 1.0s;
   csum = 0.0; // tot output
   for (auto cj : c) csum += cj;
   double maxerr = 0.0;
   for (auto cj : c) maxerr = max(maxerr, abs(cj - kersum));
-  printf("1D interp-only, double-prec, %.3g s (%.3g NU pt/sec), ier=%d, max err %.3g\n",
-         t, M / t, ier, maxerr / abs(kersum));
+  std::cout << "1D interp-only, double-prec, " << t << " s (" << M / t
+            << " NU pt/sec), max err " << maxerr / abs(kersum) << '\n';
   return 0;
 }
