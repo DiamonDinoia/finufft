@@ -17,6 +17,12 @@
 #   CONTROLS  1 to also run the two FFTW positive controls (Linux, fftw only)
 set -euo pipefail
 
+# Its own leftovers, not the caller's business: the controls below write four
+# more trees than the three routes do, and a stale one from the previous arm
+# turns a failure analysis into a guessing game.
+rm -rf _build _stage _consume _fetch _plain_app _leak _broken _broken_consume \
+	_nofetch _userfftw _deffftw broken.log nofetch.log userfftw.log deffftw.log
+
 linking=${LINKING:-Static}
 backend=${BACKEND:-ducc}
 cuda=${CUDA:-0}
@@ -46,11 +52,36 @@ cmake -S . -B _build -DCMAKE_BUILD_TYPE=Release \
 cmake --build _build --config Release
 cmake --install _build --prefix "$stage" --config Release
 
-# The exported interface must not bake in build-machine absolute paths.
-if grep -R "/usr/" "$stage"/lib*/cmake/finufft/finufftTargets*.cmake; then
-	echo "ERROR: absolute path leaked into exported finufftTargets"
+# The exported interface must not name a path from the build machine: an
+# absolute dependency path is what left the static install of #494 unlinkable,
+# and a build-tree path makes the package work only where it was built.
+build_paths() { # $1 = install prefix, prints every offending line
+	local targets
+	targets=("$1"/lib*/cmake/finufft/finufftTargets*.cmake)
+	# An unmatched glob would hand grep a literal path, grep would exit 2, and
+	# the `if` below would read that as "clean".
+	[[ -f "${targets[0]}" ]] || {
+		echo "ERROR: no exported targets file under $1, so the check proves nothing"
+		exit 1
+	}
+	grep -HF -e "$PWD" -e /usr/ -e /opt/ -e /home/ -e /Users/ "${targets[@]}"
+}
+if build_paths "$stage"; then
+	echo "ERROR: a build-machine path leaked into exported finufftTargets"
 	exit 1
 fi
+
+# The guard on that guard, run wherever the guard runs rather than only under
+# CONTROLS: put the shape it hunts for into a copy of the install and require a
+# hit. A check that has never fired cannot be told from one that cannot fire.
+cp -a "$stage" _leak
+sed -i.bak '1i set(FINUFFT_LEAK_CONTROL "/usr/lib/libfftw3.so")' \
+	_leak/lib*/cmake/finufft/finufftTargets.cmake
+build_paths _leak >/dev/null || {
+	echo "ERROR: the build-machine path check does not fire on an injected leak"
+	exit 1
+}
+rm -rf _leak
 
 cmake -S "$consumer" -B _consume -DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_PREFIX_PATH="$stage" \
@@ -72,22 +103,21 @@ fi
 # Second route: FetchContent/add_subdirectory, which builds FINUFFT as a
 # subproject rather than against an install. It is what the CPM and FetchContent
 # recipes in docs/install.rst do, and the path that breaks when a
-# top-level-only guard (CTest, docs targets, install rules) is missing. The
-# route depends on neither linkage nor backend, so one CPU arm covers it.
-if [[ "$cuda" == "1" || ("$linking" == "Static" && "$backend" == "ducc") ]]; then
-	cmake -S "$consumer/fetchcontent" -B _fetch -DCMAKE_BUILD_TYPE=Release \
-		-DFINUFFT_SOURCE_DIR="$PWD" \
-		-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
-		"${install_flags[@]}"
-	cmake --build _fetch --config Release
-	if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-		app=_fetch/app.exe
-		[[ -x $app ]] || app=_fetch/Release/app.exe
-	else
-		app=_fetch/app
-	fi
-	"$app"
+# top-level-only guard (CTest, docs targets, install rules) is missing. Every
+# arm runs it: install_flags reach the subproject too, so the linkage and the
+# backend do change what gets built here.
+cmake -S "$consumer/fetchcontent" -B _fetch -DCMAKE_BUILD_TYPE=Release \
+	-DFINUFFT_SOURCE_DIR="$PWD" \
+	-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
+	"${install_flags[@]}"
+cmake --build _fetch --config Release
+if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+	app=_fetch/app.exe
+	[[ -x $app ]] || app=_fetch/Release/app.exe
+else
+	app=_fetch/app
 fi
+"$app"
 
 # Third route: no CMake at all. A shared install has to be usable from a plain
 # compiler line, which is what a hand-written Makefile, a ctypes load or a Julia
@@ -113,7 +143,6 @@ if [[ "$cuda" == "1" ]]; then
 	# install and require the consumer to stop linking: main.cpp calls cudaMalloc
 	# and cudaMemcpy itself, so the symbols can only come from CUDA::cudart. A
 	# check that has never failed cannot be told from one that cannot fail.
-	rm -rf _broken _broken_consume
 	cp -a _stage _broken
 	sed -i 's/CUDA::cudart;CUDA::cufft//' _broken/lib*/cmake/finufft/finufftTargets.cmake
 	if cmake -S "$consumer" -B _broken_consume -DCMAKE_BUILD_TYPE=Release \
@@ -137,7 +166,10 @@ fi
 # TARGETS given target fftw3 which does not exist" at the end of the configure.
 # setupFFTW.cmake now says so where it happens; this is the control proving the
 # message still appears.
-if cmake -S . -B _nofetch -DFINUFFT_USE_DUCC0=OFF \
+# CPM_SOURCE_CACHE has to go: with a warm cache the disconnected configure
+# succeeds, which says nothing about the guard. A developer machine has one set,
+# and this control reported exactly that.
+if env -u CPM_SOURCE_CACHE cmake -S . -B _nofetch -DFINUFFT_USE_DUCC0=OFF \
 	-DFINUFFT_FFTW_LIBRARIES=DOWNLOAD \
 	-DFETCHCONTENT_FULLY_DISCONNECTED=ON >nofetch.log 2>&1; then
 	echo "ERROR: configure succeeded with fetching disabled"

@@ -322,7 +322,7 @@ catchError {
               def controls = (linking == 'Static' && backend == 'fftw') ? '1' : '0'
               withEnv(["HOME=$WORKSPACE", "LINKING=${linking}", "BACKEND=${backend}",
                        "CONTROLS=${controls}"]) {
-                sh 'rm -rf _build _stage _consume _fetch _plain_app && tools/ci/install-test.sh'
+                sh 'tools/ci/install-test.sh'
               }
             }
           }
