@@ -14,7 +14,9 @@
 #   BACKEND   ducc (default) or fftw
 #   CUDA      1 to install and consume cufinufft instead of the CPU library
 #   CUDA_ARCH the pod's compute capability, required when CUDA=1
-#   OPENMP    ON (default) or OFF, a supported build and a packaging case of its own
+#   OPENMP    ON (default) or OFF, a supported build and a packaging case of its
+#             own. A machine whose compiler has no OpenMP runtime, Apple clang
+#             without brew libomp, sets it OFF.
 #   CONTROLS  1 to also run the two FFTW positive controls (Linux, fftw only)
 set -euo pipefail
 
@@ -44,13 +46,6 @@ if [[ "$cuda" == "1" ]]; then
 		-DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCH")
 else
 	consumer=test/cmake_consume
-	# Apple clang carries no OpenMP runtime of its own. The macOS cells brew
-	# install libomp and export its prefix, exactly as the build cells in
-	# cmake_ci.yml do. The Jenkins macs have no brew, so they cover the
-	# OpenMP-off case instead of failing to configure.
-	if [[ "$(uname -s)" == "Darwin" ]] && ! brew --prefix libomp >/dev/null 2>&1; then
-		openmp=OFF
-	fi
 	install_flags=(-DFINUFFT_USE_DUCC0=$ducc -DFINUFFT_STATIC_LINKING=$static
 		-DFINUFFT_USE_OPENMP=$openmp)
 fi
@@ -65,15 +60,20 @@ cmake --install _build --prefix "$stage" --config Release
 # The exported interface must not name a path from the build machine: an
 # absolute dependency path is what left the static install of #494 unlinkable,
 # and a build-tree path makes the package work only where it was built.
-run_app() { # $1 = the consumer's executable
+run_app() { # $1 = the consumer's build directory
 	# Told apart on purpose: a missing executable is a build that went wrong, and
 	# an executable that will not start is a runtime path that went wrong. Both
-	# reach bash as 127.
-	[[ -x "$1" ]] || {
-		echo "ERROR: $1 was not built"
-		exit 1
-	}
-	"$1"
+	# reach bash as 127. Ninja writes app.exe beside the build directory, the
+	# Visual Studio generator one level down under the config.
+	local app
+	for app in "$1/app" "$1/app.exe" "$1/Release/app.exe"; do
+		if [[ -x "$app" ]]; then
+			"$app"
+			return
+		fi
+	done
+	echo "ERROR: $1 built no executable"
+	exit 1
 }
 
 build_paths() { # $1 = install prefix, prints every offending line
@@ -123,17 +123,11 @@ cmake -S "$consumer" -B _consume -DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
 cmake --build _consume --config Release
 
-# A shared install leaves the loader to find the library; a Windows build puts
-# the executable in a per-config subdirectory.
-if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-	app=_consume/app.exe
-	[[ -x $app ]] || app=_consume/Release/app.exe
-else
-	app=_consume/app
-	export LD_LIBRARY_PATH="$stage/lib:$stage/lib64:${LD_LIBRARY_PATH:-}"
-	export DYLD_LIBRARY_PATH="$stage/lib:${DYLD_LIBRARY_PATH:-}"
-fi
-run_app "$app"
+# A shared install leaves the loader to find the library. Windows does not read
+# these, and puts the DLL beside the executable instead.
+export LD_LIBRARY_PATH="$stage/lib:$stage/lib64:${LD_LIBRARY_PATH:-}"
+export DYLD_LIBRARY_PATH="$stage/lib:${DYLD_LIBRARY_PATH:-}"
+run_app _consume
 
 # Second route: FetchContent/add_subdirectory, which builds FINUFFT as a
 # subproject rather than against an install. It is what the CPM and FetchContent
@@ -146,13 +140,7 @@ cmake -S "$consumer/fetchcontent" -B _fetch -DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
 	"${install_flags[@]}"
 cmake --build _fetch --config Release
-if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-	app=_fetch/app.exe
-	[[ -x $app ]] || app=_fetch/Release/app.exe
-else
-	app=_fetch/app
-fi
-run_app "$app"
+run_app _fetch
 
 # Third route: no CMake at all. A shared install has to be usable from a plain
 # compiler line, which is what a hand-written Makefile, a ctypes load or a Julia
@@ -166,9 +154,10 @@ run_app "$app"
 if [[ "$cuda" == "0" && "$linking" == "Shared" && "${RUNNER_OS:-}" != "Windows" ]]; then
 	libdir=$stage/lib
 	[[ -d "$libdir" ]] || libdir=$stage/lib64
+	mkdir -p _plain_app
 	"${CXX:-c++}" -std=c++17 -O2 test/cmake_consume/main.cpp \
-		-I"$stage/include" -L"$libdir" -lfinufft -Wl,-rpath,"$libdir" -o _plain_app
-	run_app ./_plain_app
+		-I"$stage/include" -L"$libdir" -lfinufft -Wl,-rpath,"$libdir" -o _plain_app/app
+	run_app _plain_app
 fi
 
 [[ "${CONTROLS:-0}" == "1" ]] || exit 0
