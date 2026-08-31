@@ -14,6 +14,7 @@
 #   BACKEND   ducc (default) or fftw
 #   CUDA      1 to install and consume cufinufft instead of the CPU library
 #   CUDA_ARCH the pod's compute capability, required when CUDA=1
+#   OPENMP    ON (default) or OFF, a supported build and a packaging case of its own
 #   CONTROLS  1 to also run the two FFTW positive controls (Linux, fftw only)
 set -euo pipefail
 
@@ -26,6 +27,7 @@ rm -rf _build _stage _consume _fetch _plain_app _leak _broken _broken_consume \
 linking=${LINKING:-Static}
 backend=${BACKEND:-ducc}
 cuda=${CUDA:-0}
+openmp=${OPENMP:-ON}
 stage="$PWD/_stage"
 
 static=ON
@@ -42,12 +44,16 @@ if [[ "$cuda" == "1" ]]; then
 		-DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCH")
 else
 	consumer=test/cmake_consume
-	install_flags=(-DFINUFFT_USE_DUCC0=$ducc -DFINUFFT_STATIC_LINKING=$static)
+	# Apple clang carries no OpenMP runtime of its own. The macOS cells brew
+	# install libomp and export its prefix, exactly as the build cells in
+	# cmake_ci.yml do. The Jenkins macs have no brew, so they cover the
+	# OpenMP-off case instead of failing to configure.
+	if [[ "$(uname -s)" == "Darwin" ]] && ! brew --prefix libomp >/dev/null 2>&1; then
+		openmp=OFF
+	fi
+	install_flags=(-DFINUFFT_USE_DUCC0=$ducc -DFINUFFT_STATIC_LINKING=$static
+		-DFINUFFT_USE_OPENMP=$openmp)
 fi
-
-# Apple clang ships no OpenMP runtime and the Jenkins macs have no brew, so the
-# mac arms test the packaging single-threaded rather than not at all.
-[[ "$(uname -s)" == "Darwin" ]] && install_flags+=(-DFINUFFT_USE_OPENMP=OFF)
 
 cmake -S . -B _build -DCMAKE_BUILD_TYPE=Release \
 	-DFINUFFT_ENABLE_INSTALL=ON \
@@ -97,6 +103,20 @@ build_paths _leak >/dev/null || {
 	exit 1
 }
 rm -rf _leak
+
+# The OpenMP flag has to reach the exported interface, not only the build. A
+# consumer on a machine that has OpenMP links either way, so an OpenMP-off arm
+# that merely builds proves nothing; the export is where a wrong answer shows.
+# The two directions are each other's control, checked against install trees for
+# Static and Shared, ducc and fftw, before this landed.
+if [[ "$cuda" == "0" ]]; then
+	exported=OFF
+	grep -q "OpenMP::" "$stage"/lib*/cmake/finufft/finufftTargets.cmake && exported=ON
+	if [[ "$exported" != "$openmp" ]]; then
+		echo "ERROR: built with FINUFFT_USE_OPENMP=$openmp, but the export says $exported"
+		exit 1
+	fi
+fi
 
 cmake -S "$consumer" -B _consume -DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_PREFIX_PATH="$stage" \

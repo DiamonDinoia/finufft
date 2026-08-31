@@ -376,8 +376,9 @@ jobs:
           if [[ "$RUNNER_OS" == "Windows" ]]; then ./_consume/Release/app.exe; else ./_consume/app; fi
 
   # Linux and its two FFTW controls moved to Jenkins, where the same script runs
-  # with a real device for the GPU half. Windows stays here: no Jenkins agent
-  # carries a toolchain.
+  # with a real device for the GPU half. Windows and macOS stay here: no Jenkins
+  # agent carries a toolchain, and the Jenkins macs have no brew, so an installed
+  # package built against Apple clang plus libomp can only be consumed here.
   consume-test:
     name: consume find_package (${{ matrix.os }}, ${{ matrix.linking }}, ${{ matrix.backend }})
     runs-on: ${{ matrix.os }}
@@ -390,7 +391,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022]
+        os: [windows-2022, macos-15]
         linking: [Static, Shared]
         backend: [ducc, fftw]
     steps:
@@ -408,6 +409,21 @@ jobs:
           vcvarsall: true
           cmake: true
           ninja: true
+      # The same libomp recipe the build cells above use: Apple clang carries no
+      # OpenMP runtime, and the consumer needs it as well, because the installed
+      # config asks for the dependency the library was built with.
+      - name: Install toolchain + FFTW (macOS)
+        if: startsWith(matrix.os, 'macos-')
+        run: |
+          export HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_INSTALL_CLEANUP=1
+          brew install libomp fftw
+          {
+            echo "LDFLAGS=-L$(brew --prefix libomp)/lib"
+            echo "CPPFLAGS=-I$(brew --prefix libomp)/include"
+            echo "LIBRARY_PATH=$(brew --prefix libomp)/lib"
+            echo "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib"
+            echo "CMAKE_PREFIX_PATH=$(brew --prefix libomp)"
+          } >> "$GITHUB_ENV"
       - name: Install FINUFFT and consume it
         shell: bash
         run: tools/ci/install-test.sh

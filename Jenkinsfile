@@ -315,15 +315,24 @@ catchError {
     jobs['install cpu'] = {
       runPod(tag: 'cuda12.8', cpus: 8, memory: '16Gi') {
         stage('install cpu') {
-          for (linking in ['Static', 'Shared']) {
-            for (backend in ['ducc', 'fftw']) {
-              // The FFTW controls need a configure each and no build, so they
-              // ride on one arm rather than all four.
-              def controls = (linking == 'Static' && backend == 'fftw') ? '1' : '0'
-              withEnv(["HOME=$WORKSPACE", "LINKING=${linking}", "BACKEND=${backend}",
-                       "CONTROLS=${controls}"]) {
-                sh 'tools/ci/install-test.sh'
-              }
+          // OpenMP off is a supported build and a packaging case of its own: the
+          // installed config must not ask a consumer for a dependency the build
+          // never used. One arm rather than a doubled matrix, because the flag
+          // reaches the config through the same code path in all of them.
+          for (arm in [['Static', 'ducc', 'ON'], ['Static', 'fftw', 'ON'],
+                       ['Shared', 'ducc', 'ON'], ['Shared', 'fftw', 'ON'],
+                       ['Static', 'ducc', 'OFF']]) {
+            // Indexed rather than destructured: multiple assignment does not
+            // survive the CPS transform a pipeline runs under.
+            def linking = arm[0]
+            def backend = arm[1]
+            def openmp = arm[2]
+            // The FFTW controls need a configure each and no build, so they ride
+            // on one arm rather than all five.
+            def controls = (linking == 'Static' && backend == 'fftw') ? '1' : '0'
+            withEnv(["HOME=$WORKSPACE", "LINKING=${linking}", "BACKEND=${backend}",
+                     "OPENMP=${openmp}", "CONTROLS=${controls}"]) {
+              sh 'tools/ci/install-test.sh'
             }
           }
         }
