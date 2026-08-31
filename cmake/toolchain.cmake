@@ -39,6 +39,12 @@ set(FINUFFT_CXX_FLAGS_RELEASE
 if(NOT APPLE AND NOT WIN32)
     list(APPEND FINUFFT_CXX_FLAGS_RELEASE -fno-semantic-interposition)
 endif()
+# AppleClang 16.x (Xcode 16, clang-1700) segfaults compiling src/fft.cpp at -O3
+# when the reassociation pair is on and ducc0 headers are included; Xcode 26's
+# clang-2100 compiles it clean. Measured by flag bisection in CI run 33486075290.
+if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 21)
+    list(REMOVE_ITEM FINUFFT_CXX_FLAGS_RELEASE -fassociative-math -freciprocal-math)
+endif()
 filter_supported_compiler_flags(FINUFFT_CXX_FLAGS_RELEASE FINUFFT_CXX_FLAGS_RELEASE)
 message(STATUS "FINUFFT Release flags: ${FINUFFT_CXX_FLAGS_RELEASE}")
 set(FINUFFT_CXX_FLAGS_RELWITHDEBINFO ${FINUFFT_CXX_FLAGS_RELEASE})

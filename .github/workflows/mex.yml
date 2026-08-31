@@ -25,11 +25,24 @@ jobs:
         include:
           - os: ubuntu-22.04
           - os: windows-2022
+          - os: windows-2025
+            # CUDA 12.4's nvcc rejects VS2026's v145 (_MSC_VER >= 1950); the image
+            # carries the v143 toolset side-by-side, so select it
+            msvc_toolset: '14.44'
 #         - os: macos-13 this requires matlab openmp to work.
-          - os: macos-14
           - os: macos-15
+            osx_arch: arm64
+            xcode_version: '16.4'
+          - os: macos-26
+            osx_arch: arm64
+          - os: macos-15-intel
+            osx_arch: x86_64
+            xcode_version: '16.4'
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # mac runners have hung inside MATLAB startup (the mexext probe) for hours;
+    # cap the job and the quick probe step separately so a hang turns red
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v7
@@ -40,23 +53,27 @@ jobs:
           cmake: true
           ninja: true
           vcvarsall: true
-      - name: Select Xcode 16.0 (macOS 15 only)
-        if: ${{ runner.os == 'macOS' && matrix.os == 'macos-15' }}
+      - name: Select MSVC toolset (where pinned per cell)
+        if: ${{ matrix.msvc_toolset }}
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          toolset: ${{ matrix.msvc_toolset }}
+      - name: Select Xcode (per-cell pin; unset cells keep the image default)
+        if: ${{ runner.os == 'macOS' && matrix.xcode_version }}
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: '16.0'
+          xcode-version: ${{ matrix.xcode_version }}
       - name: Set macOS deployment target
         if: runner.os == 'macOS'
         shell: bash
         run: |
           xcodebuild -version
-          brew install fftw libomp
-          echo "LDFLAGS=-L$(brew --prefix libomp)/lib" >> $GITHUB_ENV
-          echo "CPPFLAGS=-I$(brew --prefix libomp)/include" >> $GITHUB_ENV
-          echo "LIBRARY_PATH=$(brew --prefix libomp)/lib" >> $GITHUB_ENV
-          echo "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib" >> $GITHUB_ENV
-          echo "CMAKE_PREFIX_PATH=$(brew --prefix):$(brew --prefix libomp)" >> $GITHUB_ENV
-          ver="${{ matrix.os }}"; ver="${ver#macos-}"
+          # brew libomp is neither needed (MEX builds without OpenMP) nor safe to
+          # expose here: exporting DYLD_LIBRARY_PATH at it wedges MATLAB on maca64
+          # (run 33508066886: dyld-pointed probes red, clean-env green).
+          brew install fftw
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix)" >> $GITHUB_ENV
+          ver="${{ matrix.os }}"; ver="${ver#macos-}"; ver="${ver%%-*}"
           echo "MACOSX_DEPLOYMENT_TARGET=${ver}.0" >> "$GITHUB_ENV"
 
       # Install CUDA on non-macOS runners
@@ -79,20 +96,25 @@ jobs:
           release: R2023b
           products: Parallel_Computing_Toolbox
           cache: false
-      - name: Detect mexext via MATLAB
-        uses: matlab-actions/run-command@v3
-        with:
-          command: |
-            me = mexext;                       % e.g., mexa64|mexw64|mexmaci64|mexmaca64
-            fprintf('Detected mexext: %s\n', me);
-            f = fopen(getenv('GITHUB_ENV'), 'a');
-            fprintf(f, 'MEXEXT=%s\n', me);
-            fclose(f);
       - name: Configure & Build
         shell: bash
         run: |
           # Ensure MATLAB is on PATH if provided by setup-matlab
           if [ -n "${MATLAB_ROOT:-}" ]; then export PATH="${MATLAB_ROOT}/bin:${PATH}"; fi
+
+          # MEXEXT is a function of the matrix, not something MATLAB must tell us
+          # (a MATLAB-booting detect step also hangs intermittently on maca64)
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            MEXEXT=mexa64; MATLAB_ARCH_DIR=glnxa64
+          elif [ "${RUNNER_OS}" = "Windows" ]; then
+            MEXEXT=mexw64; MATLAB_ARCH_DIR=win64
+          elif [ "${{ matrix.osx_arch }}" = "x86_64" ]; then
+            MEXEXT=mexmaci64; MATLAB_ARCH_DIR=maci64
+          else
+            MEXEXT=mexmaca64; MATLAB_ARCH_DIR=maca64
+          fi
+          echo "MEXEXT=$MEXEXT" >> "$GITHUB_ENV"
+          echo "MEXEXT=$MEXEXT, MATLAB_ARCH_DIR=$MATLAB_ARCH_DIR"
 
           # Enable CUDA if not macOS
           CUDA_FLAG=""
@@ -100,29 +122,23 @@ jobs:
             CUDA_FLAG="-DFINUFFT_USE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=50;60;70;80;89"
           fi
 
-          # Map MEXEXT to arch dir for any path logic you might need
-          case "$MEXEXT" in
-          mexa64)    MATLAB_ARCH_DIR=glnxa64 ;;
-          mexw64)    MATLAB_ARCH_DIR=win64 ;;
-          mexmaci64) MATLAB_ARCH_DIR=maci64 ;;
-          mexmaca64) MATLAB_ARCH_DIR=maca64 ;;
-          *) echo "Unknown MEXEXT=$MEXEXT"; exit 1;;
-          esac
-          echo "MEXEXT=$MEXEXT, MATLAB_ARCH_DIR=$MATLAB_ARCH_DIR"
-
-          # On macOS, force Apple Silicon build so we don't accidentally target x86_64
+          # On macOS, target the per-cell CMAKE_OSX_ARCHITECTURES from the matrix
           EXTRA_MACOS_FLAGS=""
           if [ "${RUNNER_OS}" = "macOS" ]; then
-          EXTRA_MACOS_FLAGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
+          EXTRA_MACOS_FLAGS="-DCMAKE_OSX_ARCHITECTURES=${{ matrix.osx_arch }}"
           fi
 
+          # No OpenMP in the mac MEX: LLVM libomp refuses to coexist with the copy
+          # MATLAB bundles and initializes (OMP #15/#179; static embedding refused
+          # the same way). ducc0 stays ON everywhere via its std::threads fallback.
+          OMP_FLAG=""
+          if [ "${RUNNER_OS}" = "macOS" ]; then OMP_FLAG="-DFINUFFT_USE_OPENMP=OFF"; fi
+
           DUCC0_FLAG="-DFINUFFT_USE_DUCC0=ON"
-          if [ "${{ matrix.os }}" = "macos-15" ]; then
-            DUCC0_FLAG="-DFINUFFT_USE_DUCC0=OFF"
-          fi
 
           cmake --preset matlab -B build \
             ${EXTRA_MACOS_FLAGS} \
+            ${OMP_FLAG} \
             ${DUCC0_FLAG} \
             -DMatlab_MEX_EXTENSION="${MEXEXT}" \
             -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" \
@@ -133,6 +149,48 @@ jobs:
           if [ "${RUNNER_OS}" != "macOS" ]; then
             cmake --build build --verbose --target cufinufft_mex --parallel
           fi
+
+      - name: Inspect cufinufft MEX dynamic dependencies
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          # matlab/CMakeLists.txt defines cufinufft_mex via matlab_add_mex with
+          # OUTPUT_NAME cufinufft and no output-dir override, so with `-B build` the
+          # artifact lands at build/matlab/cufinufft.${MEXEXT}
+          MEX="build/matlab/cufinufft.${MEXEXT}"
+          if [ ! -f "${MEX}" ]; then
+            echo "::error::Expected cufinufft MEX artifact missing: ${MEX}"
+            exit 1
+          fi
+          echo "Dynamic dependents of ${MEX}"
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            # dumpbin is not on the default PATH; locate it via vswhere (CRLF-stripped)
+            DUMPBIN="$(vswhere -latest -products '*' -find '**/dumpbin.exe' | head -1 | tr -d '\r')"
+            if [ -z "${DUMPBIN}" ]; then
+              echo "::error::dumpbin not found via vswhere"
+              exit 1
+            fi
+            echo "Using dumpbin: ${DUMPBIN}"
+            # dash form: MSYS2 rewrites /dependents into a path for native exes
+            "${DUMPBIN}" -dependents "${MEX}" | tee deps.txt
+          else
+            ldd "${MEX}" | tee deps.txt
+          fi
+          # the driver (nvcuda/libcuda.so) loads at runtime; hard-linking it is a defect
+          if grep -qiE 'nvcuda|libcuda\.so' deps.txt; then
+            echo "::error::cufinufft MEX hard-links the CUDA driver library"
+            exit 1
+          fi
+
+      - name: Verify cufinufft MEX loads in MATLAB (no GPU)
+        if: runner.os != 'macOS'
+        uses: matlab-actions/run-command@v3
+        with:
+          command: |
+            addpath(genpath('matlab'));
+            addpath('build/matlab');
+            assert(exist('cufinufft')==3, 'cufinufft MEX not found on the MATLAB path');
+            cufinufft
 
       - name: Run matlab math & tol-sweep tests
         uses: matlab-actions/run-command@v3
@@ -154,3 +212,62 @@ jobs:
             build/*.zip
             build/*.tar.gz
           if-no-files-found: error
+
+  # Consume the packaged MEX on a fresh runner that has ONLY MATLAB: no cmake,
+  # brew, CUDA or any build tooling. This is what a user machine looks like.
+  consume:
+    needs: mex
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+          - os: windows-2022
+          - os: windows-2025
+          - os: macos-15
+          - os: macos-26
+          - os: macos-15-intel
+    name: consume-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v7  # only for matlab/test; the binaries come from the artifact
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: finufft-matlab-mex-${{ matrix.os }}
+          path: dl
+
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2023b
+          products: Parallel_Computing_Toolbox
+          cache: false
+
+      - name: Unpack the artifact (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dl/x
+          tar xzf dl/*.tar.gz -C dl/x
+          ls dl/x/matlab | head -5
+          ls dl/x/matlab/*.mex* || { echo "::error::artifact carries no MEX binary"; exit 1; }
+
+      - name: Unpack the artifact (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Expand-Archive dl\*.zip -DestinationPath dl\x
+          Get-ChildItem dl\x\matlab | Select-Object -First 5
+          if (-not (Get-ChildItem dl\x\matlab\*.mex* -ErrorAction SilentlyContinue)) { throw "artifact carries no MEX binary" }
+
+      - name: Test the packaged MEX
+        uses: matlab-actions/run-command@v3
+        with:
+          command: |
+            addpath(genpath('matlab'));          % test scripts only
+            addpath(genpath(fullfile('dl','x','matlab')));  % the packaged MEX + .m wrappers
+            fullmathtest
+            tolsweeptest

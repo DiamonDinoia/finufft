@@ -46,7 +46,12 @@ if(FINUFFT_BUILD_MATLAB AND FINUFFT_USE_CPU)
     target_include_directories(finufft_mex PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
     if(APPLE)
         # needed to prevent new Apple XCode linker which can break mex...
-        target_link_options(finufft_mex PRIVATE -ld_classic)
+        # Xcode 27 removes the classic linker, so add the flag only where it exists
+        include(CheckLinkerFlag)
+        check_linker_flag(CXX "-ld_classic" FINUFFT_HAVE_LD_CLASSIC)
+        if(FINUFFT_HAVE_LD_CLASSIC)
+            target_link_options(finufft_mex PRIVATE -ld_classic)
+        endif()
     endif()
     make_mex_self_contained(finufft_mex)
 endif()
