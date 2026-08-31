@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Install FINUFFT to a staging prefix and consume it the four ways a user does:
-# find_package against the install, FetchContent and CPM against the sources, and
-# a bare compiler line against the installed headers and library.
+# Install FINUFFT to a staging prefix and consume it the five ways a user does:
+# find_package against the install, FetchContent, CPM and a submodule against the
+# sources, and a bare compiler line against the installed headers and library.
 #
 # One script for GitHub and for Jenkins. GitHub runs it on Windows, where no
 # Jenkins agent carries a toolchain; Jenkins runs the Linux arms, and is the only
@@ -172,7 +172,20 @@ if [[ "$cuda" == "0" && "$backend" == "ducc" ]]; then
 	run_app _cpm
 fi
 
-# Fourth route: no CMake at all. A shared install has to be usable from a plain
+# Fourth route: a submodule, which reaches CMake as a plain add_subdirectory,
+# without the EXCLUDE_FROM_ALL and SYSTEM that CPM passes. It is the route
+# docs/install.rst publishes for a submodule, and the one whose CMakeLists a
+# reader copies verbatim. Rides on the DUCC arms beside CPM, for the same reason.
+if [[ "$cuda" == "0" && "$backend" == "ducc" ]]; then
+	cmake -S examples/quick-start/subdirectory -B _submod -DCMAKE_BUILD_TYPE=Release \
+		-DFINUFFT_SOURCE_DIR="$PWD" \
+		-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
+		"${install_flags[@]}"
+	cmake --build _submod --config Release
+	run_app _submod
+fi
+
+# Fifth route: no CMake at all. A shared install has to be usable from a plain
 # compiler line, which is what a hand-written Makefile, a ctypes load or a Julia
 # ccall ends up doing, and it is the only route that reads the installed headers
 # and the library without the exported target in between.
