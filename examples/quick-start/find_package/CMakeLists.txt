@@ -15,7 +15,7 @@ project(finufft_consume LANGUAGES CXX)
 
 find_package(finufft REQUIRED)
 
-add_executable(app main.cpp)
+add_executable(app ../main.cpp)
 target_link_libraries(app PRIVATE finufft::finufft)
 target_compile_features(app PRIVATE cxx_std_17)
 

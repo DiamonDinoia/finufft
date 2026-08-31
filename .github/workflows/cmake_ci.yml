@@ -357,7 +357,7 @@ jobs:
           set -euo pipefail
           triplet=x64-linux
           [[ "$RUNNER_OS" == "Windows" ]] && triplet=x64-windows-static-md
-          cmake -S test/cmake_consume -B _consume \
+          cmake -S examples/quick-start/find_package -B _consume \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$PWD/_vcpkg/$triplet" \
             -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded

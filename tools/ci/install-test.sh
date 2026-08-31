@@ -39,13 +39,15 @@ ducc=ON
 
 if [[ "$cuda" == "1" ]]; then
 	: "${CUDA_ARCH:?CUDA=1 needs CUDA_ARCH; a default would silently build for the wrong card}"
-	consumer=test/cmake_consume/cuda
+	consumer=examples/quick-start/cuda
+	fetch_consumer=examples/quick-start/cuda/fetchcontent
 	# CPU off on purpose: this is the CUDA-only install layout that used to ship
 	# cufinufft.h without the headers it includes.
 	install_flags=(-DFINUFFT_USE_CUDA=ON -DFINUFFT_USE_CPU=OFF
 		-DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCH")
 else
-	consumer=test/cmake_consume
+	consumer=examples/quick-start/find_package
+	fetch_consumer=examples/quick-start/fetchcontent
 	install_flags=(-DFINUFFT_USE_DUCC0=$ducc -DFINUFFT_STATIC_LINKING=$static
 		-DFINUFFT_USE_OPENMP=$openmp)
 fi
@@ -137,7 +139,7 @@ run_app _consume
 # top-level-only guard (CTest, docs targets, install rules) is missing. Every
 # arm runs it: install_flags reach the subproject too, so the linkage and the
 # backend do change what gets built here.
-cmake -S "$consumer/fetchcontent" -B _fetch -DCMAKE_BUILD_TYPE=Release \
+cmake -S "$fetch_consumer" -B _fetch -DCMAKE_BUILD_TYPE=Release \
 	-DFINUFFT_SOURCE_DIR="$PWD" \
 	-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
 	"${install_flags[@]}"
@@ -162,7 +164,7 @@ if [[ "$cuda" == "0" && "$backend" == "ducc" ]]; then
 		*) cpm_cache=(-DCPM_SOURCE_CACHE="$PWD/$CPM_SOURCE_CACHE") ;;
 		esac
 	fi
-	cmake -S test/cmake_consume/cpm -B _cpm -DCMAKE_BUILD_TYPE=Release \
+	cmake -S examples/quick-start/cpm -B _cpm -DCMAKE_BUILD_TYPE=Release \
 		-DFINUFFT_SOURCE_DIR="$PWD" "${cpm_cache[@]}" \
 		-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
 		"${install_flags[@]}"
@@ -183,7 +185,7 @@ if [[ "$cuda" == "0" && "$linking" == "Shared" && "${RUNNER_OS:-}" != "Windows" 
 	libdir=$stage/lib
 	[[ -d "$libdir" ]] || libdir=$stage/lib64
 	mkdir -p _plain_app
-	"${CXX:-c++}" -std=c++17 -O2 test/cmake_consume/main.cpp \
+	"${CXX:-c++}" -std=c++17 -O2 examples/quick-start/main.cpp \
 		-I"$stage/include" -L"$libdir" -lfinufft -Wl,-rpath,"$libdir" -o _plain_app/app
 	run_app _plain_app
 fi
