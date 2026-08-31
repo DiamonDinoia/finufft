@@ -364,6 +364,11 @@ catchError {
           withEnv(["HOME=$WORKSPACE", "CUDA=1", "CUDA_ARCH=${arch}", "CONTROLS=1",
                    "LIBRARY_PATH=/usr/local/cuda/lib64/stubs"]) {
             sh 'tools/ci/install-test.sh'
+            // The two presets presets.yml cannot reach: both ask CMake for
+            // CMAKE_CUDA_ARCHITECTURES=native, and only a pod with a device can
+            // answer that. Configure only; what they build is the matrix above.
+            sh 'cmake --preset gpu -B _preset_gpu'
+            sh 'cmake --preset all -B _preset_all'
             // The conda quick start's GPU half, here rather than in a pod of its
             // own: this one already holds the card and the toolkit, and build.sh
             // skips the conda CUDA toolkit when nvcc is on PATH. Conda itself is
