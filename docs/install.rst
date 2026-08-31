@@ -730,6 +730,45 @@ An additional performance test you could then do is::
    As of v2.0.1, our python interface is quite different from Dan Foreman-Mackey's original repo that wrapped finufft: `python-finufft <https://github.com/dfm/python-finufft>`_, or Jeremy Magland's wrapper. The interface is simpler, and the existing shared binary is linked to (no recompilation). Under the hood we achieve this via ``ctypes`` instead of ``pybind11``.
 
 
+Building inside a conda environment
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+conda is not an officially supported way to install FINUFFT, and
+``pip install finufft`` needs none of it. Building from source inside a conda
+environment is still worth doing when the wheel does not fit: to use the CPU the
+machine actually has, to get the GPU package, or because conda already owns the
+compilers and libraries there.
+
+From the root of a checkout, with conda on PATH:
+
+.. code-block:: bash
+
+  bash examples/quick-start/conda/build.sh          # CPU package, then its tests
+  bash examples/quick-start/conda/build.sh --gpu    # and the GPU package
+
+That script is the recipe, and CI runs it on every pull request: a GitHub runner
+for the CPU package, and a Jenkins pod with a card for the GPU one.
+
+.. literalinclude:: ../examples/quick-start/conda/build.sh
+   :language: bash
+
+``pip install python/finufft`` names a path, not a package, so pip builds this
+checkout and never consults PyPI. The environment carries the compilers and the
+OpenMP runtime as well, because FINUFFT is C and C++ and asks for OpenMP with
+``REQUIRED``, and the macOS system clang ships no OpenMP runtime. FFTW comes from
+conda-forge because the source build looks for one and otherwise downloads and
+builds its own; pass
+``--config-settings=cmake.define.FINUFFT_USE_DUCC0=ON`` to use the FFT that
+ships with FINUFFT instead. Building ``cufinufft`` needs the CUDA toolkit only,
+while its tests need a device; the script runs them when ``nvidia-smi`` finds a
+card and skips them when it does not. Those tests take a ``--framework``
+argument and are parametrized on it, so ``pytest python/cufinufft/tests`` on its
+own reports every test as skipped.
+
+This recipe comes from
+`@remy-abergel <https://github.com/flatironinstitute/finufft/discussions/649#discussioncomment-12969277>`_
+(issue #668).
+
 A few words about python environments
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

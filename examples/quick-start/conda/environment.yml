@@ -1,0 +1,25 @@
+# Quick start with conda: a build environment for FINUFFT's Python package.
+#
+#   conda env create -f environment.yml
+#   conda activate finufft-build
+#   pip install <finufft checkout>/python/finufft
+#
+# The compilers and the OpenMP runtime are in the environment rather than assumed
+# on the machine: FINUFFT is C and C++ and asks for OpenMP with REQUIRED, and the
+# macOS system clang ships no OpenMP runtime at all.
+#
+# fftw is here because the Python package builds the C++ library from source and
+# that build looks for an FFTW first; without one FINUFFT downloads and builds
+# its own, which works but costs several minutes. Pass
+# --config-settings=cmake.define.FINUFFT_USE_DUCC0=ON instead to use the FFT that
+# ships with FINUFFT and drop the fftw line below.
+name: finufft-build
+channels:
+  - conda-forge
+dependencies:
+  - python >=3.9
+  - pip
+  - c-compiler
+  - cxx-compiler
+  - llvm-openmp
+  - fftw

@@ -353,6 +353,16 @@ catchError {
           withEnv(["HOME=$WORKSPACE", "CUDA=1", "CUDA_ARCH=${arch}", "CONTROLS=1",
                    "LIBRARY_PATH=/usr/local/cuda/lib64/stubs"]) {
             sh 'tools/ci/install-test.sh'
+            // The conda quick start's GPU half, here rather than in a pod of its
+            // own: this one already holds the card and the toolkit, and build.sh
+            // skips the conda CUDA toolkit when nvcc is on PATH. Conda itself is
+            // all the stage installs.
+            //
+            // Pinned, not 'latest': an installer release would otherwise reach
+            // every pull request with no commit here. -u so a retry in a reused
+            // workspace updates the prefix instead of refusing it.
+            sh 'curl -fsSL https://github.com/conda-forge/miniforge/releases/download/26.5.3-0/Miniforge3-26.5.3-0-Linux-x86_64.sh -o mf.sh && bash mf.sh -b -u -p "$WORKSPACE/mf" && rm mf.sh'
+            sh 'PATH="$WORKSPACE/mf/bin:$PATH" bash examples/quick-start/conda/build.sh --gpu'
           }
         }
       }

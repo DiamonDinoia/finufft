@@ -164,3 +164,23 @@ jobs:
             -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
           cmake --build _consume --config Release
           if [[ "$RUNNER_OS" == "Windows" ]]; then ./_consume/Release/app.exe; else ./_consume/app; fi
+
+  # macOS only: Jenkins runs the same recipe on Linux, on a pod with a card, so
+  # that arm also runs python/cufinufft/tests. No Jenkins agent runs macOS.
+  conda:
+    name: conda from source (macos-15)
+    runs-on: macos-15
+    defaults:
+      run:
+        # conda activate needs a login shell, and the environment file names the
+        # environment this shell then lands in.
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: conda-incubator/setup-miniconda@v4
+        with:
+          miniforge-version: latest
+      # The published recipe itself, so the page in the docs and the cell here
+      # cannot say different things.
+      - name: Build and test the CPU package
+        run: bash examples/quick-start/conda/build.sh
