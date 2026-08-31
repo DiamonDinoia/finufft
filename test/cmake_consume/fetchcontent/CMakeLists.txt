@@ -18,3 +18,17 @@ FetchContent_MakeAvailable(finufft)
 add_executable(app ../main.cpp)
 target_link_libraries(app PRIVATE finufft::finufft)
 target_compile_features(app PRIVATE cxx_std_17)
+
+# On Windows the finufft DLL must sit next to the executable at runtime, exactly
+# as in the find_package consumer beside this one. A subproject build leaves it
+# under _deps, where the loader does not look, and the app then exits 127.
+if(WIN32)
+    get_target_property(_finufft_type finufft TYPE)
+    if(_finufft_type STREQUAL "SHARED_LIBRARY")
+        add_custom_command(
+            TARGET app
+            POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:finufft> $<TARGET_FILE_DIR:app>
+        )
+    endif()
+endif()

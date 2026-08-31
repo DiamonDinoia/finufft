@@ -45,6 +45,10 @@ else
 	install_flags=(-DFINUFFT_USE_DUCC0=$ducc -DFINUFFT_STATIC_LINKING=$static)
 fi
 
+# Apple clang ships no OpenMP runtime and the Jenkins macs have no brew, so the
+# mac arms test the packaging single-threaded rather than not at all.
+[[ "$(uname -s)" == "Darwin" ]] && install_flags+=(-DFINUFFT_USE_OPENMP=OFF)
+
 cmake -S . -B _build -DCMAKE_BUILD_TYPE=Release \
 	-DFINUFFT_ENABLE_INSTALL=ON \
 	-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
@@ -55,6 +59,17 @@ cmake --install _build --prefix "$stage" --config Release
 # The exported interface must not name a path from the build machine: an
 # absolute dependency path is what left the static install of #494 unlinkable,
 # and a build-tree path makes the package work only where it was built.
+run_app() { # $1 = the consumer's executable
+	# Told apart on purpose: a missing executable is a build that went wrong, and
+	# an executable that will not start is a runtime path that went wrong. Both
+	# reach bash as 127.
+	[[ -x "$1" ]] || {
+		echo "ERROR: $1 was not built"
+		exit 1
+	}
+	"$1"
+}
+
 build_paths() { # $1 = install prefix, prints every offending line
 	local targets
 	targets=("$1"/lib*/cmake/finufft/finufftTargets*.cmake)
@@ -98,7 +113,7 @@ else
 	export LD_LIBRARY_PATH="$stage/lib:$stage/lib64:${LD_LIBRARY_PATH:-}"
 	export DYLD_LIBRARY_PATH="$stage/lib:${DYLD_LIBRARY_PATH:-}"
 fi
-"$app"
+run_app "$app"
 
 # Second route: FetchContent/add_subdirectory, which builds FINUFFT as a
 # subproject rather than against an install. It is what the CPM and FetchContent
@@ -117,7 +132,7 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
 else
 	app=_fetch/app
 fi
-"$app"
+run_app "$app"
 
 # Third route: no CMake at all. A shared install has to be usable from a plain
 # compiler line, which is what a hand-written Makefile, a ctypes load or a Julia
@@ -133,7 +148,7 @@ if [[ "$cuda" == "0" && "$linking" == "Shared" && "${RUNNER_OS:-}" != "Windows" 
 	[[ -d "$libdir" ]] || libdir=$stage/lib64
 	"${CXX:-c++}" -std=c++17 -O2 test/cmake_consume/main.cpp \
 		-I"$stage/include" -L"$libdir" -lfinufft -Wl,-rpath,"$libdir" -o _plain_app
-	./_plain_app
+	run_app ./_plain_app
 fi
 
 [[ "${CONTROLS:-0}" == "1" ]] || exit 0
