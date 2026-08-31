@@ -398,15 +398,20 @@ jobs:
           key: cpm-cache-00-${{ runner.os == 'windows' && 'windows-' || '' }}${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
           enableCrossOsArchive: true
           path: cpm
+      # The same compilers the build cells above use, msvc and brew llvm. Apple
+      # clang is not among them anywhere in this workflow, and it cannot be: at
+      # -O3 -march=native with the -Xclang -fopenmp that FindOpenMP hands it,
+      # Apple clang 17 crashes its own frontend on src/fft.cpp.
       - name: Setup Cpp
         uses: aminya/setup-cpp@v1
         with:
+          compiler: ${{ startsWith(matrix.os, 'macos-') && 'llvm' || 'msvc' }}
           vcvarsall: true
           cmake: true
           ninja: true
-      # The same libomp recipe the build cells above use: Apple clang carries no
-      # OpenMP runtime, and the consumer needs it as well, because the installed
-      # config asks for the dependency the library was built with.
+      # The same libomp recipe the build cells above use. The consumer needs it
+      # too, because the installed config asks for the dependency the library was
+      # built with.
       - name: Install toolchain + FFTW (macOS)
         if: startsWith(matrix.os, 'macos-')
         run: |
