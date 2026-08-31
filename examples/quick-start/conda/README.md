@@ -29,8 +29,8 @@ Two things in it are worth knowing before you adapt it:
   ships with FINUFFT instead, and drop fftw from the environment.
 
 Building `cufinufft` needs the CUDA toolkit only; running it needs a device as
-well. `build.sh --gpu` runs the tests when `nvidia-smi` finds a card and prints
-the installed version when it does not, so the same file covers a GitHub runner,
+well. `build.sh --gpu` always prints the installed version and runs the tests
+only when `nvidia-smi` finds a card, so the same file covers a GitHub runner,
 which has no device, and a Jenkins pod, which has one.
 
 `--framework` is not optional. `conftest.py` parametrizes every cufinufft test

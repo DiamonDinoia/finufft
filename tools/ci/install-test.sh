@@ -89,7 +89,13 @@ build_paths() { # $1 = install prefix, prints every offending line
 		echo "ERROR: no exported targets file under $1, so the check proves nothing"
 		exit 1
 	}
-	grep -HF -e "$PWD" -e /usr/ -e /opt/ -e /home/ -e /Users/ "${targets[@]}"
+	# git-bash on Windows reports $PWD as /d/a/... but CMake writes the native
+	# D:/... into the export, so the $PWD pattern alone would miss a leak there.
+	local patterns=(-e "$PWD" -e /usr/ -e /opt/ -e /home/ -e /Users/)
+	if command -v cygpath >/dev/null; then
+		patterns+=(-e "$(cygpath -m "$PWD")")
+	fi
+	grep -HF "${patterns[@]}" "${targets[@]}"
 }
 if build_paths "$stage"; then
 	echo "ERROR: a build-machine path leaked into exported finufftTargets"
@@ -97,17 +103,31 @@ if build_paths "$stage"; then
 fi
 
 # The guard on that guard, run wherever the guard runs rather than only under
-# CONTROLS: put the shape it hunts for into a copy of the install and require a
-# hit. A check that has never fired cannot be told from one that cannot fire.
+# CONTROLS: put every shape the guard hunts for into a copy of the install and
+# require a hit on each. A check that has never fired cannot be told from one
+# that cannot fire, and firing on one pattern is not firing on all of them.
 cp -a "$stage" _leak
 # Appended rather than inserted with sed: `1i` is a GNU extension, and BSD sed on
 # the macOS runners answers it with "command i expects \ followed by text".
 leak=(_leak/lib*/cmake/finufft/finufftTargets.cmake)
-echo 'set(FINUFFT_LEAK_CONTROL "/usr/lib/libfftw3.so")' >>"${leak[0]}"
-build_paths _leak >/dev/null || {
+# One marker per pattern: an absolute system path, the build tree as POSIX tools
+# spell it, and, where cygpath exists, the same tree as git-bash's native tools
+# spell it.
+markers=("/usr/lib/libfftw3.so" "$PWD/libfinufft.a")
+if command -v cygpath >/dev/null; then
+	markers+=("$(cygpath -m "$PWD")/libfinufft.a")
+fi
+printf 'set(FINUFFT_LEAK_CONTROL "%s")\n' "${markers[@]}" >>"${leak[0]}"
+hits=$(build_paths _leak) || {
 	echo "ERROR: the build-machine path check does not fire on an injected leak"
 	exit 1
 }
+for marker in "${markers[@]}"; do
+	grep -qF "$marker" <<<"$hits" || {
+		echo "ERROR: the build-machine path check does not fire on the injected $marker"
+		exit 1
+	}
+done
 rm -rf _leak
 
 # The OpenMP flag has to reach the exported interface, not only the build. A

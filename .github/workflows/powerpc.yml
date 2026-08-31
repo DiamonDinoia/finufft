@@ -78,4 +78,4 @@ jobs:
       - name: Test
         shell: bash
         # With CMAKE_CROSSCOMPILING_EMULATOR set, tests run via QEMU automatically.
-        run: ctest --test-dir build --output-on-failure -j
+        run: ctest --test-dir build --output-on-failure --no-tests=error -j

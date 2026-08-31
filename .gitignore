@@ -35,6 +35,13 @@ docs/_build
 docs/_generated/
 
 build/
+# tools/ci/install-test.sh scratch trees (_build _stage _consume _fetch _cpm
+# _submod _leak _broken _broken_consume _nofetch _userfftw _deffftw)
+/_*/
+# Same script's control logs (broken nofetch userfftw deffftw), plus the CPM
+# cache a relative CPM_SOURCE_CACHE lands at the root.
+/*.log
+/cpm/
 
 cufinufft/python/cufinufft/docs/_build
 cufinufft/python/cufinufft/docs/_static

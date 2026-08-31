@@ -251,7 +251,7 @@ jobs:
                 -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
 
               cmake --build "$build_dir" --config "$build_type"
-              ctest --test-dir "$build_dir" --output-on-failure -j
+              ctest --test-dir "$build_dir" --output-on-failure --no-tests=error -j
 
               python3 -m pip install \
                 --verbose \
@@ -327,7 +327,7 @@ jobs:
       # The two tolerance sweeps dominate an -O0 run (144 s against 10 s for the
       # next slowest test), and every RelWithDebInfo cell already runs them.
       - name: Test Debug
-        run: ctest --test-dir _debug --output-on-failure -j -E tolsweep
+        run: ctest --test-dir _debug --output-on-failure --no-tests=error -j -E tolsweep
 
   cleanup:
     runs-on: ubuntu-22.04

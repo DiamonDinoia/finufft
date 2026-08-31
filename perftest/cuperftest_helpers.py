@@ -5,6 +5,10 @@ the invocation, the event names and the device description have one home here,
 the way ``perftest_helpers`` holds them for the CPU library.
 """
 
+# /// script
+# dependencies = ["matplotlib"]
+# ///
+
 import csv
 import io
 import subprocess

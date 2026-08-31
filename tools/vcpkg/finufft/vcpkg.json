@@ -1,6 +1,6 @@
 {
   "name": "finufft",
-  "version-string": "2.6.0-dev",
+  "version": "2.6.0",
   "description": "Nonuniform fast Fourier transforms of types 1, 2 and 3, in dimensions 1, 2 and 3",
   "homepage": "https://github.com/flatironinstitute/finufft",
   "documentation": "https://finufft.readthedocs.io",

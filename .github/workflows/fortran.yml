@@ -77,4 +77,4 @@ jobs:
         # (STATUS_ENTRYPOINT_NOT_FOUND, exit 0xc0000139); the toolchain must win.
         run: |
           [[ "$RUNNER_OS" == "Windows" ]] && export PATH="$(dirname "$(command -v gfortran)"):$PATH"
-          ctest --test-dir build --output-on-failure -j
+          ctest --test-dir build --output-on-failure --no-tests=error -j

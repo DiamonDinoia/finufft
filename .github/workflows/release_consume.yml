@@ -10,9 +10,10 @@
 # Two events, two questions. On a schedule or a release it consumes the published
 # release, where most failures come from the world moving rather than from a
 # commit here. On a pull request that touches packaging it consumes that pull
-# request's own head, which both checks the change and proves this workflow still
-# runs; a cron-only workflow that has never executed is one nobody knows is
-# broken.
+# request's own head — the wheel route pins the latest release instead, since no
+# wheel exists for a commit — which both checks the change and proves this
+# workflow still runs; a cron-only workflow that has never executed is one
+# nobody knows is broken.
 name: released package
 
 on:
@@ -31,12 +32,18 @@ on:
       - "cmake/**"
       - "examples/quick-start/**"
       - ".github/workflows/release_consume.yml"
+      # export-ignore rules here are the only source of a checkout/archive delta,
+      # which is what the tarball route exists to catch.
+      - ".gitattributes"
   workflow_dispatch:
     inputs:
       tag:
         description: "Release tag to consume (default: the latest release)"
         required: false
         type: string
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.inputs.tag || github.ref }}
@@ -51,15 +58,19 @@ jobs:
     steps:
       - name: Pick what to consume
         id: pick
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_TAG: ${{ github.event.inputs.tag }}
           EVENT_TAG: ${{ github.event.release.tag_name }}
-          # The head of the pull request, not the merge commit: the merge commit
-          # exists only in this repository's refs/pull namespace, and a clone
-          # cannot reach it by name.
+          # The pull request head by sha, not its branch name: a name resolves
+          # at clone time, so a force-push mid-run would land the FetchContent
+          # and CPM clones and the tarball download on different commits. The
+          # merge ref is no alternative: it exists only in this repository's
+          # refs/pull namespace, and a clone cannot reach it. On non-PR events
+          # this expands to an empty string and the else branch below wins.
           PR_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          PR_REF: ${{ github.event.pull_request.head.ref }}
+          PR_REF: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           if [ -n "${PR_REF:-}" ]; then
@@ -68,8 +79,12 @@ jobs:
           else
             repo="$GITHUB_REPOSITORY"
             ref="${INPUT_TAG:-${EVENT_TAG:-}}"
+            # A dispatch tag typed without the leading v names that release anyway: 2.5.1 means v2.5.1.
+            [[ "$ref" =~ ^[0-9] ]] && ref="v$ref"
             if [ -z "$ref" ]; then
-              ref=$(gh api "repos/${repo}/releases/latest" -q .tag_name)
+              # Releases, like the PyPI wheels, live in the upstream repository;
+              # $GITHUB_REPOSITORY on a fork has none and the lookup 404s.
+              ref=$(gh api "repos/flatironinstitute/finufft/releases/latest" -q .tag_name)
             fi
           fi
           echo "repo=$repo" >>"$GITHUB_OUTPUT"
@@ -174,11 +189,8 @@ jobs:
           if [ -x _b/app.exe ]; then _b/app.exe; else _b/app; fi
 
   wheel:
-    # needs: target for the tag the pin below uses.
+    # needs: target for the ref the expected version below resolves from.
     needs: target
-    # No wheel exists for a pull request, and checking the published one there
-    # would report on code the pull request does not contain.
-    if: github.event_name != 'pull_request'
     name: pypi wheel (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -195,38 +207,60 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      # The wheel on PyPI, not one built here — --only-binary makes that a gate:
-      # without it pip answers a missing wheel by building the sdist and the
-      # cell reports green on exactly the fault it exists to catch (#909's
-      # missing macosx x86_64 wheel was invisible this way).
-      # On a release the version is pinned
-      # to the tag, because an unpinned install minutes after a release resolves
-      # to the *previous* wheel and would report the new release green without
-      # testing it. The wheels for a fresh tag appear minutes after the release,
-      # so the pin waits for them rather than failing on the timing.
-      - name: Install and check the published wheel
+      # Every cell asserts one exact version, whatever the event: the tag on a
+      # release or a tagged dispatch, the latest release on a schedule or a pull
+      # request (a pull request target is a commit, and no wheel exists for it).
+      # Less than that leaves holes: on workflow_dispatch(tag) an unpinned
+      # install tests PyPI-latest instead of the tag, and on a schedule a
+      # release whose wheel upload failed resolves an older wheel and stays
+      # green — the #909 fault shape, still open.
+      - name: Resolve the expected version
+        id: expect
         shell: bash
         env:
-          EVENT: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
           REF: ${{ needs.target.outputs.ref }}
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          if [ "$EVENT" = "release" ]; then
-            want=${REF#v}
+          ref="$REF"
+          if [[ ! "$ref" =~ ^v[0-9] ]]; then
+            # Upstream, not $GITHUB_REPOSITORY: a fork has no releases to find.
+            ref=$(gh api "repos/flatironinstitute/finufft/releases/latest" -q .tag_name)
+          fi
+          echo "expected=${ref#v}" >>"$GITHUB_OUTPUT"
+      # The wheel on PyPI, not one built here — --only-binary makes that a gate:
+      # without it pip answers a missing wheel by building the sdist and the
+      # cell reports green on exactly the fault it exists to catch (#909's
+      # missing macosx x86_64 wheel was invisible this way). The wheels for a
+      # fresh tag appear minutes after the release, so the pin retries rather
+      # than failing on the timing. cufinufft ships wheels for manylinux_x86_64
+      # and win_amd64 only, so just those cells gate it too; no import, no card.
+      - name: Install and check the published wheels
+        shell: bash
+        env:
+          EXPECTED: ${{ steps.expect.outputs.expected }}
+        run: |
+          set -euo pipefail
+          install_wheel() {
+            pkg=$1; shift
             for _ in $(seq 20); do
-              if python -m pip install --only-binary=finufft "finufft==$want" numpy; then found=1; break; fi
-              echo "finufft $want is not on PyPI yet; waiting 60 s"
+              if python -m pip install --only-binary="$pkg" "$pkg==$EXPECTED" "$@"; then return 0; fi
+              echo "$pkg $EXPECTED is not on PyPI yet; waiting 60 s"
               sleep 60
             done
-            [ "${found:-0}" = 1 ] || {
-              echo "finufft $want never appeared on PyPI: the release has no wheel"
-              exit 1
-            }
-          else
-            python -m pip install --only-binary=finufft finufft numpy
+            echo "$pkg $EXPECTED never appeared on PyPI: the release has no wheel"
+            return 1
+          }
+          assert_version() {
+            python -c "import importlib.metadata as m; v = m.version('$1'); print('$1', v); assert v == '$EXPECTED', v"
+          }
+          python -m pip install --upgrade pip
+          install_wheel finufft numpy
+          assert_version finufft
+          if [[ "$RUNNER_OS" == "Linux" || "$RUNNER_OS" == "Windows" ]]; then
+            install_wheel cufinufft
+            assert_version cufinufft
           fi
-          python -c "import finufft; print('finufft', finufft.__version__)"
           python - <<'PY'
           import numpy as np, finufft
           rng = np.random.default_rng(0)

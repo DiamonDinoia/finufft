@@ -11,6 +11,13 @@
 # cuda-nvcc_activate.sh dies on NVCC_PREPEND_FLAGS under set -u.
 set -eo pipefail
 
+# --gpu is the only argument; anything else dies before conda does any work,
+# or a typo would quietly read as a CPU-only run.
+if [[ $# -ne 0 && ($# -ne 1 || $1 != "--gpu") ]]; then
+	echo "usage: bash examples/quick-start/conda/build.sh [--gpu]" >&2
+	exit 2
+fi
+
 # --yes so a second run replaces the environment instead of stopping on it.
 conda env create --yes -f examples/quick-start/conda/environment.yml
 eval "$(conda shell.bash hook)"

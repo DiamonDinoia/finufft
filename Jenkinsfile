@@ -287,8 +287,11 @@ catchError {
     def pageJob = {
       catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE',
                  catchInterruptions: true) {
-        // Covers a wait for a free node, then both CPU backends in turn.
-        timeout(time: 180, unit: 'MINUTES') {
+        // Covers a wait for a free node, then both CPU backends in turn. The GPU
+        // page grid grew 18 -> 66 charts: 6 cases x (4+3+4) methods over the 3
+        // transforms, each chart 5 tags x NRUNS=5 runs. Its ~50 min worst case
+        // becomes ~190, and 480 covers that plus the node wait.
+        timeout(time: 480, unit: 'MINUTES') {
           parallel 'page cpu': pageCpu,
                    'page gpu': pageGpu
           pagePost()
@@ -376,8 +379,9 @@ catchError {
             //
             // Pinned, not 'latest': an installer release would otherwise reach
             // every pull request with no commit here. -u so a retry in a reused
-            // workspace updates the prefix instead of refusing it.
-            sh 'curl -fsSL https://github.com/conda-forge/miniforge/releases/download/26.5.3-0/Miniforge3-26.5.3-0-Linux-x86_64.sh -o mf.sh && bash mf.sh -b -u -p "$WORKSPACE/mf" && rm mf.sh'
+            // workspace updates the prefix instead of refusing it. The sha256 is
+            // the one the release publishes; both move at a version bump.
+            sh 'curl -fsSL https://github.com/conda-forge/miniforge/releases/download/26.5.3-0/Miniforge3-26.5.3-0-Linux-x86_64.sh -o mf.sh && echo "14db468222ad564658656f769506056209b6dc375f5e7dfd31eb5ebbf08fa529  mf.sh" | sha256sum -c - && bash mf.sh -b -u -p "$WORKSPACE/mf" && rm mf.sh'
             sh 'PATH="$WORKSPACE/mf/bin:$PATH" bash examples/quick-start/conda/build.sh --gpu'
           }
         }

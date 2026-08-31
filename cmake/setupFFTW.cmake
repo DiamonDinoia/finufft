@@ -24,6 +24,9 @@ if(FINUFFT_FFTW_LIBRARIES STREQUAL DEFAULT OR FINUFFT_FFTW_LIBRARIES STREQUAL DO
         else()
             set(FINUFFT_USE_THREADS OFF)
         endif()
+        # EXCLUDE_FROM_ALL keeps FFTW's own install rules out of the prefix:
+        # the archives ship inside finufftTargets via the parent's install block,
+        # and fftw3.h, its cmake config and its pkg-config files stay out.
         CPMAddPackage(
             NAME
             fftw3
@@ -31,6 +34,8 @@ if(FINUFFT_FFTW_LIBRARIES STREQUAL DEFAULT OR FINUFFT_FFTW_LIBRARIES STREQUAL DO
             "http://www.fftw.org/fftw-${FFTW_VERSION}.tar.gz"
             URL_HASH
             "MD5=8ccbf6a5ea78a16dbc3e1306e234cc5c"
+            EXCLUDE_FROM_ALL
+            YES
             SYSTEM
             YES
             OPTIONS
@@ -51,6 +56,8 @@ if(FINUFFT_FFTW_LIBRARIES STREQUAL DEFAULT OR FINUFFT_FFTW_LIBRARIES STREQUAL DO
             "http://www.fftw.org/fftw-${FFTW_VERSION}.tar.gz"
             URL_HASH
             "MD5=8ccbf6a5ea78a16dbc3e1306e234cc5c"
+            EXCLUDE_FROM_ALL
+            YES
             SYSTEM
             YES
             OPTIONS
@@ -77,7 +84,8 @@ if(FINUFFT_FFTW_LIBRARIES STREQUAL DEFAULT OR FINUFFT_FFTW_LIBRARIES STREQUAL DO
         if(NOT TARGET fftw3)
             message(
                 FATAL_ERROR
-                "FINUFFT could not fetch FFTW (FETCHCONTENT_FULLY_DISCONNECTED=${FETCHCONTENT_FULLY_DISCONNECTED}). "
+                "FINUFFT could not fetch FFTW ${FFTW_VERSION} from http://www.fftw.org "
+                "(FETCHCONTENT_FULLY_DISCONNECTED=${FETCHCONTENT_FULLY_DISCONNECTED}). "
                 "Install FFTW where find_package(FFTW) can see it, or allow the download."
             )
         endif()

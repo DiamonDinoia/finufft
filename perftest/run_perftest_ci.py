@@ -242,7 +242,9 @@ def main() -> None:
         # the raw.githubusercontent URLs already published keep resolving
         # once the perftest-results branch is force-pushed.
         # A method suffix only on the backend that has methods, so the CPU page's
-        # figures keep the names their published URLs already point at.
+        # figures keep the names their published URLs already point at; the GPU
+        # figures published before the suffix get renamed here once, and their
+        # old URLs go stale.
         method_key = "" if method is None else f"|m{method}"
         key = f"{args.backend}|t{transform}{method_key}|" + "|".join(
             param.digest_args()

@@ -125,7 +125,7 @@ jobs:
         # from brew: the osx triplets compile with Apple clang, which carries no
         # OpenMP runtime, and the port's default features are fftw + openmp.
         include:
-          - { os: ubuntu-22.04, triplet: x64-linux }
+          - { os: ubuntu-24.04, triplet: x64-linux }
           - { os: windows-2022, triplet: x64-windows-static-md }
           - { os: windows-2025, triplet: x64-windows-static-md }
           - { os: macos-15, triplet: arm64-osx }
@@ -151,16 +151,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # --binarysource=clear, last as it has to be: the port's ABI hash
+          # excludes the checkout it builds, so a cache hit can be stale.
+          # github.workspace, not $PWD: git-bash hands the native vcpkg.exe an
+          # MSYS path (/d/a/...).
           vcpkg install "finufft:$TRIPLET" \
-            --overlay-ports=tools/vcpkg --x-install-root="$PWD/_vcpkg"
+            --overlay-ports=tools/vcpkg \
+            --x-install-root="${{ github.workspace }}/_vcpkg" \
+            --binarysource=clear
       # An installed package that no consumer can use is not installed.
       - name: Consume it
         shell: bash
         run: |
           set -euo pipefail
+          # github.workspace, not $PWD: git-bash hands the native cmake.exe an
+          # MSYS path (/d/a/...).
           cmake -S examples/quick-start/find_package -B _consume \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$PWD/_vcpkg/$TRIPLET;${CMAKE_PREFIX_PATH:-}" \
+            -DCMAKE_PREFIX_PATH="${{ github.workspace }}/_vcpkg/$TRIPLET;${CMAKE_PREFIX_PATH:-}" \
             -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
           cmake --build _consume --config Release
           if [[ "$RUNNER_OS" == "Windows" ]]; then ./_consume/Release/app.exe; else ./_consume/app; fi
@@ -179,7 +187,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: conda-incubator/setup-miniconda@v4
         with:
-          miniforge-version: latest
+          # Pinned, not 'latest': an installer release would otherwise reach
+          # every pull request with no commit here (same pin as the Jenkinsfile).
+          miniforge-version: 26.5.3-0
       # The published recipe itself, so the page in the docs and the cell here
       # cannot say different things.
       - name: Build and test the CPU package

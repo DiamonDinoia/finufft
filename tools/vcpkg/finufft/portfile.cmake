@@ -1,8 +1,9 @@
-# The port builds the checkout it ships in, not a release tarball. Every FINUFFT
-# tag up to v2.5.0 installs a finufftConfig.cmake that no consumer can use (it
-# asks for OpenMP components the export does not name), so a release SHA512 here
-# would hand the user a broken package. Building the tree next to the portfile
-# also means CI installs the file below verbatim rather than a rewritten copy.
+# The port builds the checkout it ships in, not a release tarball. No released
+# FINUFFT tag, up to and including v2.5.1, installs a finufftConfig.cmake a
+# consumer can use: it never finds the OpenMP and FFT targets its own export
+# references, so a release SHA512 here would hand the user a broken package.
+# Building the tree next to the portfile also means CI installs the file below
+# verbatim rather than a rewritten copy.
 get_filename_component(SOURCE_PATH "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
 
 vcpkg_check_features(
@@ -26,10 +27,13 @@ vcpkg_cmake_configure(
         # vcpkg supplies FFTW; never let the build download its own copy.
         -DFINUFFT_FFTW_LIBRARIES=DEFAULT
         # xsimd, poet and the findFFTW module still come from CPM at configure
-        # time, and none of the three has a vcpkg port. vcpkg_cmake_configure
-        # PREPENDs -DFETCHCONTENT_FULLY_DISCONNECTED=ON, so this later -D wins
-        # and the fetches are allowed again. An upstream vcpkg submission needs
-        # ports for those three first; until then this port is an overlay.
+        # time. Of the three, only xsimd has a vcpkg port, and it is at 14.3.0:
+        # the fix CMakeLists.txt pins as XSIMD_VERSION is a commit past that
+        # release, and a vcpkg override cannot name a commit.
+        # vcpkg_cmake_configure PREPENDs -DFETCHCONTENT_FULLY_DISCONNECTED=ON,
+        # so this later -D wins and the fetches are allowed again. An upstream
+        # vcpkg submission needs the missing ports first; until then this port
+        # is an overlay.
         -DFETCHCONTENT_FULLY_DISCONNECTED=OFF
     MAYBE_UNUSED_VARIABLES
         FINUFFT_FFTW_LIBRARIES

@@ -5,8 +5,10 @@ include(CMakeFindDependencyMacro)
 # Re-discover the dependencies that the exported targets reference. For a SHARED
 # build everything is baked into the library, so only the (interface-propagated)
 # OpenMP runtime needs to be found. For a STATIC build the FFT backend and its
-# threading runtime are separate archives that the consumer must also link.
-if(@FINUFFT_USE_OPENMP@)
+# threading runtime are separate archives that the consumer must also link. A
+# CUDA-only install has no CPU library to carry OpenMP into the export even
+# though FINUFFT_USE_OPENMP stays at its default ON, so gate on both.
+if(@FINUFFT_USE_CPU@ AND @FINUFFT_USE_OPENMP@)
     # Only OpenMP::OpenMP_CXX appears in the export. Asking for the C component
     # as well fails outright in a consumer that enables only CXX, because
     # FindOpenMP cannot compile its probe for a language the project never

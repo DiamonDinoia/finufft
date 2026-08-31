@@ -15,6 +15,8 @@ every CI cell builds and runs.
     python3 tools/ci/check-docs.py --selftest  # prove the check can fail
 """
 
+import contextlib
+import io
 import re
 import sys
 import tempfile
@@ -24,9 +26,10 @@ BLOCK = re.compile(r"^\.\.\s+literalinclude::\s*(\S+)\s*$")
 OPTION = re.compile(r"^\s+:(start-after|end-before):\s*(\S+)\s*$")
 
 
-def check(docs: Path) -> list[str]:
-    """Return one message per unresolved include, empty when the tree is clean."""
+def check(docs: Path) -> tuple[list[str], int]:
+    """One message per unresolved include, plus how many directives were seen."""
     problems = []
+    count = 0
     for rst in sorted(docs.rglob("*.rst")):
         lines = rst.read_text().splitlines()
         i = 0
@@ -35,6 +38,7 @@ def check(docs: Path) -> list[str]:
             if not block:
                 i += 1
                 continue
+            count += 1
             where = f"{rst}:{i + 1}"
             # The options of a directive are the indented lines under it.
             options, j = [], i + 1
@@ -56,7 +60,7 @@ def check(docs: Path) -> list[str]:
                             f"{where}: {block.group(1)} has no {name} tag {tag}"
                         )
             i = j
-    return problems
+    return problems, count
 
 
 def selftest() -> int:
@@ -70,35 +74,75 @@ def selftest() -> int:
             "   :start-after: @good_start\n"
             "   :end-before: @good_end\n"
         )
-        if check(docs):
+        problems, _ = check(docs)
+        if problems:
             print("selftest: a clean tree was reported dirty", file=sys.stderr)
             return 1
         (docs / "recipe.txt").write_text("# @good_start\nkeep me\n")
-        problems = check(docs)
+        problems, _ = check(docs)
         if len(problems) != 1 or "@good_end" not in problems[0]:
             print(
                 f"selftest: a removed tag was not caught: {problems}", file=sys.stderr
             )
             return 1
         (docs / "recipe.txt").unlink()
-        if not check(docs):
+        problems, _ = check(docs)
+        if not problems:
             print("selftest: a missing file was not caught", file=sys.stderr)
             return 1
-    print("selftest: the check fails on a removed tag and on a missing file")
+        # The two guards in run(): an absent docs root, and a root whose .rst
+        # files hold no directives. Each guard owns a message, and the message
+        # is the assertion: without the first, a missing root reports "no
+        # directives" instead of "does not exist", and still exits nonzero.
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            status = run(Path(tmp) / "no-docs")
+        if status == 0 or "does not exist" not in err.getvalue():
+            print("selftest: a missing docs root was not caught", file=sys.stderr)
+            return 1
+        bare = Path(tmp) / "bare-docs"
+        bare.mkdir()
+        (bare / "page.rst").write_text("prose, no literals to include\n")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            status = run(bare)
+        if status == 0 or "no literalinclude directives" not in err.getvalue():
+            print(
+                "selftest: a docs root with no directives was not caught",
+                file=sys.stderr,
+            )
+            return 1
+    print(
+        "selftest: the check fails on a removed tag, a missing file,"
+        " a missing docs root and a directive-less root"
+    )
+    return 0
+
+
+def run(docs: Path) -> int:
+    """The guards main() relies on, around check(), so selftest can reach them."""
+    # An empty result set is a bug, not a clean tree: rglob on a missing or moved
+    # docs root yields nothing instead of failing, which used to print success.
+    if not docs.is_dir():
+        print(f"docs directory does not exist: {docs}", file=sys.stderr)
+        return 1
+    problems, count = check(docs)
+    for problem in problems:
+        print(problem, file=sys.stderr)
+    if problems:
+        print(f"{len(problems)} unresolved literalinclude(s)", file=sys.stderr)
+        return 1
+    if not count:
+        print(f"no literalinclude directives under {docs}", file=sys.stderr)
+        return 1
+    print("every literalinclude resolves")
     return 0
 
 
 def main() -> int:
     if "--selftest" in sys.argv[1:]:
         return selftest()
-    problems = check(Path(__file__).resolve().parents[2] / "docs")
-    for problem in problems:
-        print(problem, file=sys.stderr)
-    if problems:
-        print(f"{len(problems)} unresolved literalinclude(s)", file=sys.stderr)
-        return 1
-    print("every literalinclude resolves")
-    return 0
+    return run(Path(__file__).resolve().parents[2] / "docs")
 
 
 if __name__ == "__main__":
