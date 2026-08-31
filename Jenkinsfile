@@ -304,10 +304,11 @@ catchError {
     if (pagePublishes || (env.CHANGE_TITLE ?: '').contains('[perf page]')) measures << pageJob
     if (measures) jobs['measure'] = { for (measure in measures) measure() }
 
-    // Install and consume, the three routes a user takes: find_package against
-    // an install, FetchContent against the sources, and a bare compiler line.
-    // tools/ci/install-test.sh is the same script cmake_ci.yml runs on Windows,
-    // where no Jenkins agent carries a toolchain.
+    // Install and consume, the five routes a user takes: find_package against an
+    // install, FetchContent, CPM and a submodule against the sources, and a bare
+    // compiler line. examples/quick-start holds all five as published recipes.
+    // tools/ci/install-test.sh is the same script quick-start.yml runs on
+    // Windows and macOS, where no Jenkins agent carries a toolchain.
     //
     // One pod per half rather than one per cell: an install plus two consumers
     // is a couple of minutes, and four pods would spend longer being scheduled

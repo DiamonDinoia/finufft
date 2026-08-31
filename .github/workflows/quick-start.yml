@@ -1,0 +1,166 @@
+# Every recipe under examples/quick-start, run as published. This is kept apart
+# from the compiler matrix in cmake_ci.yml because the cells answer a different
+# question: not "does it build with this toolchain" but "can somebody else use
+# what it installs". A recipe that stops working is a failed build here rather
+# than a stale page in the docs.
+#
+# tools/ci/install-test.sh holds the four CMake routes and the Makefile one, and
+# runs unchanged on Jenkins, which owns the Linux and CUDA arms. The cells here
+# are every Windows and macOS image cmake_ci.yml builds on, because no Jenkins
+# agent carries either toolchain.
+#
+# Every cell here runs on every pull request. Nothing is expensive enough to
+# defer to a schedule: the find_package cells take 52-168 s, against a compiler
+# matrix in cmake_ci.yml that already spends 8-30 min per cell on every pull
+# request. The weekly schedule below repeats them all for one cell's sake: the
+# vcpkg port builds xsimd, poet and findFFTW from their upstream repositories at
+# configure time, so it can break with no commit here.
+name: quick start routes
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "43 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Regression guard for consuming an installed FINUFFT (issue #494): missing
+  # transitive headers, a missing find_dependency() in the package config, and the
+  # Windows DLL runtime path. Both FFT backends run, because a static install has
+  # to hand its backend to the consumer and the two do it differently: DUCC0 and a
+  # downloaded FFTW ship archives in finufftTargets, a system FFTW ships the
+  # FindFFTW module that located it. Windows has no system FFTW and takes the
+  # downloaded path; the macOS cells brew install one and take the system path.
+  # Linux and its two FFTW controls run on Jenkins instead, where the same script
+  # also reaches a real device for the GPU half. Windows and macOS stay here
+  # because no Jenkins host agent carries cmake, ninja or a compiler.
+  consume-test:
+    name: consume find_package (${{ matrix.os }}, ${{ matrix.linking }}, ${{ matrix.backend }})
+    runs-on: ${{ matrix.os }}
+    env:
+      CMAKE_GENERATOR: Ninja
+      CPM_SOURCE_CACHE: cpm
+      LINKING: ${{ matrix.linking }}
+      BACKEND: ${{ matrix.backend }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The Windows and macOS images cmake_ci.yml builds on, except that
+        # deprecated macos-14 (runner-images #13518) becomes macos-26 here.
+        # macos-15-intel is x86_64 and the other two macOS images are arm64;
+        # build_finufft_wheels.yml ships a wheel for both architectures, so both
+        # are supported and both are tested. Linux is on
+        # Jenkins, on a pod that also reaches a card.
+        os: [windows-2022, windows-2025, macos-15, macos-15-intel, macos-26]
+        linking: [Static, Shared]
+        backend: [ducc, fftw]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      # The cache cmake_ci.yml's own job saves. A miss is not a failure here: CPM
+      # downloads what it needs, and only the wall clock notices.
+      - name: Restore Cache
+        uses: actions/cache/restore@v6
+        with:
+          key: cpm-cache-00-${{ runner.os == 'windows' && 'windows-' || '' }}${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+          enableCrossOsArchive: true
+          path: cpm
+      # The same compilers the build cells in cmake_ci.yml use, msvc and brew
+      # llvm. Apple clang is not among them anywhere here, and it cannot be: at
+      # -O3 -march=native with the -Xclang -fopenmp that FindOpenMP hands it,
+      # Apple clang 17 crashes its own frontend on src/fft.cpp.
+      - name: Setup Cpp
+        uses: aminya/setup-cpp@v1
+        with:
+          compiler: ${{ startsWith(matrix.os, 'macos-') && 'llvm' || 'msvc' }}
+          vcvarsall: true
+          cmake: true
+          ninja: true
+      # The same libomp recipe the build cells in cmake_ci.yml use. The consumer
+      # needs it too, because the installed config asks for the dependency the
+      # library was built with.
+      - name: Install toolchain + FFTW (macOS)
+        if: startsWith(matrix.os, 'macos-')
+        run: |
+          export HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_INSTALL_CLEANUP=1
+          brew install libomp fftw
+          {
+            echo "LDFLAGS=-L$(brew --prefix libomp)/lib"
+            echo "CPPFLAGS=-I$(brew --prefix libomp)/include"
+            echo "LIBRARY_PATH=$(brew --prefix libomp)/lib"
+            echo "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib"
+            echo "CMAKE_PREFIX_PATH=$(brew --prefix libomp)"
+          } >> "$GITHUB_ENV"
+      - name: Install FINUFFT and consume it
+        shell: bash
+        run: tools/ci/install-test.sh
+
+  # The recipes are included, not copied, so the docs cannot go stale in their
+  # text. The one claim left to assert is that every include resolves; the
+  # recipes fetch master, which is what every other cell here builds, so no
+  # version pin exists to go stale.
+  docs-claims:
+    name: docs match the recipes
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Every literalinclude resolves
+        run: |
+          set -euo pipefail
+          python3 tools/ci/check-docs.py --selftest
+          python3 tools/ci/check-docs.py
+
+  vcpkg-port:
+    name: vcpkg overlay port (${{ matrix.os }}, ${{ matrix.triplet }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # vcpkg ships on every runner image these cells use. macOS needs libomp
+        # from brew: the osx triplets compile with Apple clang, which carries no
+        # OpenMP runtime, and the port's default features are fftw + openmp.
+        include:
+          - { os: ubuntu-22.04, triplet: x64-linux }
+          - { os: windows-2022, triplet: x64-windows-static-md }
+          - { os: windows-2025, triplet: x64-windows-static-md }
+          - { os: macos-15, triplet: arm64-osx }
+          - { os: macos-15-intel, triplet: x64-osx }
+    env:
+      # vcpkg is on PATH on all three platforms. VCPKG_INSTALLATION_ROOT is not:
+      # the ubuntu and windows images set it machine-wide, the macOS image only
+      # appends an export to ~/.bashrc, which a non-interactive step never reads.
+      TRIPLET: ${{ matrix.triplet }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Install libomp (macOS)
+        if: startsWith(matrix.os, 'macos-')
+        run: |
+          export HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_INSTALL_CLEANUP=1
+          brew install libomp
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix libomp)" >> "$GITHUB_ENV"
+      # x64-windows-static-md, not x64-windows: vcpkg's own fftw3 port fails to
+      # link fftw3_omp.dll (LNK1120, 32 unresolved externals), and the static
+      # libraries are the case #494 was about anyway.
+      - name: Install through vcpkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          vcpkg install "finufft:$TRIPLET" \
+            --overlay-ports=tools/vcpkg --x-install-root="$PWD/_vcpkg"
+      # An installed package that no consumer can use is not installed.
+      - name: Consume it
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S examples/quick-start/find_package -B _consume \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$PWD/_vcpkg/$TRIPLET;${CMAKE_PREFIX_PATH:-}" \
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+          cmake --build _consume --config Release
+          if [[ "$RUNNER_OS" == "Windows" ]]; then ./_consume/Release/app.exe; else ./_consume/app; fi
