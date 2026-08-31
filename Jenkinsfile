@@ -336,6 +336,17 @@ catchError {
               sh 'tools/ci/install-test.sh'
             }
           }
+          // The three routes that need no install, as tests of a FINUFFT build
+          // rather than of a shell script: that is how a developer runs them.
+          // --no-tests=error is what makes it a gate: ctest exits 0 on a label
+          // that matches nothing, so without it a dropped option or a renamed
+          // label would pass here. Three more FINUFFT builds from cold, measured
+          // at 13 min on six cores.
+          withEnv(["HOME=$WORKSPACE", "CPM_SOURCE_CACHE=$WORKSPACE/.cpm"]) {
+            sh 'cmake -S . -B _quickstart -G Ninja -DCMAKE_BUILD_TYPE=Release' +
+               ' -DFINUFFT_BUILD_TESTS=ON -DFINUFFT_BUILD_QUICKSTART=ON'
+            sh 'ctest --test-dir _quickstart -L quickstart --no-tests=error --output-on-failure'
+          }
         }
       }
     }
