@@ -96,8 +96,10 @@ fi
 # CONTROLS: put the shape it hunts for into a copy of the install and require a
 # hit. A check that has never fired cannot be told from one that cannot fire.
 cp -a "$stage" _leak
-sed -i.bak '1i set(FINUFFT_LEAK_CONTROL "/usr/lib/libfftw3.so")' \
-	_leak/lib*/cmake/finufft/finufftTargets.cmake
+# Appended rather than inserted with sed: `1i` is a GNU extension, and BSD sed on
+# the macOS runners answers it with "command i expects \ followed by text".
+leak=(_leak/lib*/cmake/finufft/finufftTargets.cmake)
+echo 'set(FINUFFT_LEAK_CONTROL "/usr/lib/libfftw3.so")' >>"${leak[0]}"
 build_paths _leak >/dev/null || {
 	echo "ERROR: the build-machine path check does not fire on an injected leak"
 	exit 1
@@ -194,7 +196,7 @@ if [[ "$cuda" == "1" ]]; then
 	# and cudaMemcpy itself, so the symbols can only come from CUDA::cudart. A
 	# check that has never failed cannot be told from one that cannot fail.
 	cp -a _stage _broken
-	sed -i 's/CUDA::cudart;CUDA::cufft//' _broken/lib*/cmake/finufft/finufftTargets.cmake
+	sed -i.bak 's/CUDA::cudart;CUDA::cufft//' _broken/lib*/cmake/finufft/finufftTargets.cmake
 	if cmake -S "$consumer" -B _broken_consume -DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_PREFIX_PATH="$PWD/_broken" >broken.log 2>&1 &&
 		cmake --build _broken_consume >>broken.log 2>&1; then
