@@ -1,0 +1,17 @@
+# The workflows pin action versions by hand, and nothing noticed when four of
+# them fell behind: setup-python and setup-miniconda were a major behind,
+# cuda-toolkit and sccache-action a patch. A patch matters here because both pin
+# a 0.x version exactly.
+#
+# Monthly and grouped, so this is one pull request a month rather than one per
+# action. Major bumps arrive in the same request; the release notes decide
+# whether they land, as the two above did.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
