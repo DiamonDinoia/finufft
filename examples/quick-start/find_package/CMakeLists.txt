@@ -1,22 +1,28 @@
-# Standalone downstream project: verifies an *installed* FINUFFT can be consumed
-# via find_package(finufft) + target_link_libraries(finufft::finufft).
+# Quick start: use an installed FINUFFT from another project.
 #
-# This is intentionally NOT part of the main FINUFFT build. CI installs FINUFFT
-# to a staging prefix and then configures this project against it with
-#   -DCMAKE_PREFIX_PATH=<stage>   (or -Dfinufft_DIR=<stage>/lib/cmake/finufft)
+#   cmake -S . -B build -DCMAKE_PREFIX_PATH=<install prefix>
+#   cmake --build build && ./build/app
 #
-# It is the regression guard for: missing transitive headers, missing
-# find_dependency() in the config, and the Windows DLL export/runtime path.
+# (or -Dfinufft_DIR=<install prefix>/lib/cmake/finufft). The directories beside
+# this one build the same program the other four ways: fetchcontent/, cpm/,
+# subdirectory/ and makefile/.
+#
+# tools/ci/install-test.sh runs this project on every pull request, so the recipe
+# cannot rot. It is also the regression guard for missing transitive headers, a
+# missing find_dependency() in the installed config, and the Windows DLL runtime
+# path.
 cmake_minimum_required(VERSION 3.19)
 # CXX only, deliberately: a C++-only consumer is the common case and the strict
 # one. Enabling C here would hide a find_dependency() in finufftConfig.cmake that
 # asks for a C component the consumer never enables.
 project(finufft_consume LANGUAGES CXX)
 
+# sphinx tag (don't remove): @quickstart_find_package_start
 find_package(finufft REQUIRED)
 
 add_executable(app ../main.cpp)
 target_link_libraries(app PRIVATE finufft::finufft)
+# sphinx tag (don't remove): @quickstart_find_package_end
 target_compile_features(app PRIVATE cxx_std_17)
 
 # On Windows the finufft DLL must sit next to the executable at runtime.

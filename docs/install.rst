@@ -55,62 +55,50 @@ Including FINUFFT into your own CMake project
 This is the easiest way to install and use FINUFFT if you already use
 CMake in your own project, since CMake automates all aspects of
 installation and compilation.
-There are three options: CPM, FetchContent, or an installed package.
-We recommend the first.
+There are five options: CPM, FetchContent, an installed package, a git
+submodule, or no CMake at all. We recommend the first.
 
-1) **CPM**. First include `CPM <https://github.com/cpm-cmake/CPM.cmake>`_ to your project, by following the `instructions <https://github.com/cpm-cmake/CPM.cmake/wiki/Downloading-CPM.cmake-in-CMake>`_ to automatically add CPM to CMake.
-Then add the following to your ``CMakeLists.txt``:
+Each is a working project under ``examples/quick-start``, one directory per
+route, with a ``README.md`` that is the short version of this section.
+``tools/ci/install-test.sh`` configures, builds and runs all five on every pull
+request (CPM and the submodule only on the DUCC0 arms, since neither depends on
+the FFT backend), so a recipe that stops working is a failed build rather than a
+stale page. Every block below is included from the project CI runs rather than copied
+from it; ``app`` is that project's own executable and ``../main.cpp`` its source,
+so substitute your own target and sources.
 
-.. code-block:: cmake
+1) **CPM**. First include `CPM <https://github.com/cpm-cmake/CPM.cmake>`_ in your
+project, by following the `instructions <https://github.com/cpm-cmake/CPM.cmake/wiki/Downloading-CPM.cmake-in-CMake>`_
+to add CPM to CMake automatically. Then add the following to your
+``CMakeLists.txt``:
 
-  # short version
-  CPMAddPackage("gh:flatironinstitute/finufft@2.5.0")
+.. literalinclude:: ../examples/quick-start/cpm/CMakeLists.txt
+   :language: cmake
+   :start-after: @quickstart_cpm_start
+   :end-before: @quickstart_cpm_end
 
-  # alternative in case custom options are needed
-  CPMAddPackage(
-    NAME             Finufft
-    GIT_REPOSITORY   https://github.com/flatironinstitute/finufft.git
-    GIT_TAG          2.5.0
-    GIT_SHALLOW      Yes
-    GIT_PROGRESS     Yes
-    EXCLUDE_FROM_ALL Yes
-    SYSTEM
-  )
+CMake then downloads FINUFFT and links it to your executable. The shortest form
+of the same thing is ``CPMAddPackage("gh:flatironinstitute/finufft#master")``
+(replace ``#master`` with ``@2.5.1`` to pin a release).
 
-  target_link_libraries(your_executable [PUBLIC|PRIVATE|INTERFACE] finufft::finufft)
+2) **FetchContent**: this tool comes with CMake. Add the following to your
+``CMakeLists.txt``:
 
-Then CMake will automatically download FINUFFT and link it to your executable.
+.. literalinclude:: ../examples/quick-start/fetchcontent/CMakeLists.txt
+   :language: cmake
+   :start-after: @quickstart_fetchcontent_start
+   :end-before: @quickstart_fetchcontent_end
 
-2) **FetchContent**: This tool is provided directly by CMake.
-Add the following to your ``CMakeLists.txt``:
-
-.. code-block:: cmake
-
-    include(FetchContent)
-
-    # Define the finufft library
-    FetchContent_Declare(
-      finufft
-      GIT_REPOSITORY https://github.com/flatironinstitute/finufft.git
-      GIT_TAG 2.5.0
-    )
-
-    # Make the content available
-    FetchContent_MakeAvailable(finufft)
-
-    # Optionally, link the finufft library to your target
-    target_link_libraries(your_executable [PUBLIC|PRIVATE|INTERFACE] finufft::finufft)
-
-Then CMake will automatically download FINUFFT and link it to your executable.
+CMake then downloads FINUFFT and links it to your executable.
 
 3) **Installed package via** ``find_package``. If FINUFFT has been built and
 installed (see :ref:`below <cmake-install>`), a downstream project can consume
 the installed package directly:
 
-.. code-block:: cmake
-
-    find_package(finufft REQUIRED)
-    target_link_libraries(your_executable [PUBLIC|PRIVATE|INTERFACE] finufft::finufft)
+.. literalinclude:: ../examples/quick-start/find_package/CMakeLists.txt
+   :language: cmake
+   :start-after: @quickstart_find_package_start
+   :end-before: @quickstart_find_package_end
 
 Point CMake at the install prefix when configuring your project, e.g.
 ``-DCMAKE_PREFIX_PATH=/path/to/install`` (or ``-Dfinufft_DIR=/path/to/install/lib/cmake/finufft``).
@@ -127,16 +115,72 @@ find the same FFTW in the consumer.
 The GPU library is exported as ``finufft::cufinufft`` by the same package, so a
 build configured with ``-DFINUFFT_USE_CUDA=ON`` gives:
 
-.. code-block:: cmake
+.. literalinclude:: ../examples/quick-start/cuda/CMakeLists.txt
+   :language: cmake
+   :start-after: @quickstart_cufinufft_start
+   :end-before: @quickstart_cufinufft_end
 
-    find_package(finufft REQUIRED)
-    target_link_libraries(your_executable PRIVATE finufft::cufinufft)
+``examples/quick-start/cuda/fetchcontent`` is the same for a FetchContent build,
+and Jenkins runs both against a device on every pull request.
 
 ``find_package(finufft)`` runs ``find_dependency(CUDAToolkit)`` for it, so the
 CUDA toolkit has to be visible to the consumer as well. The consumer does not
 have to enable the ``CUDA`` language: the public headers are plain C++ and a
 static ``cufinufft`` carries ``CUDA::cudart`` and ``CUDA::cufft`` on its link
 interface.
+
+4) **Git submodule**. A submodule reaches CMake as a plain ``add_subdirectory``,
+which is the build ``FetchContent_MakeAvailable`` above performs as well. CPM is
+the one route that differs: ``CPMAddPackage`` passes ``EXCLUDE_FROM_ALL`` and
+``SYSTEM``, which keep the FINUFFT targets out of your ``all`` target and turn
+its headers into system includes.
+
+.. code-block:: bash
+
+  git submodule add https://github.com/flatironinstitute/finufft.git extern/finufft
+
+.. code-block:: cmake
+
+    add_subdirectory(extern/finufft)
+    target_link_libraries(your_executable [PUBLIC|PRIVATE|INTERFACE] finufft::finufft)
+
+With this route and with FetchContent, nothing excludes them, so the FINUFFT
+targets join your ``all`` target and its install rules join your project's:
+``cmake --install`` on your project installs FINUFFT as well. Add
+``EXCLUDE_FROM_ALL`` to ``add_subdirectory`` (or to ``FetchContent_Declare``,
+which takes it from CMake 3.28), or set ``-DFINUFFT_ENABLE_INSTALL=OFF``, if that
+is not what you want.
+
+5) **No CMake at all**. A shared install is usable from a plain compiler line,
+which is what ``examples/quick-start/makefile`` does:
+
+.. literalinclude:: ../examples/quick-start/makefile/Makefile
+   :language: make
+
+Run it with ``make PREFIX=<install prefix>``, and add
+``LIBDIR=<install prefix>/lib64`` where the install puts the library in ``lib64``
+rather than ``lib``, as RHEL-style prefixes do.
+
+This route needs a *shared* FINUFFT. A static ``libfinufft.a`` leaves its FFT
+and OpenMP dependencies to whoever links it, and ``finufftTargets.cmake`` is the
+only thing that knows what those are, so use one of the CMake routes above for a
+static install.
+
+Running the recipes
+~~~~~~~~~~~~~~~~~~~
+
+The five recipes above live in ``examples/quick-start``, one directory per
+route, and CI builds and runs every one of them on each pull request. The three
+that need no install also run from a FINUFFT build::
+
+  cmake -S . -B build -G Ninja -DFINUFFT_BUILD_TESTS=ON -DFINUFFT_BUILD_QUICKSTART=ON
+  ctest --test-dir build -L quickstart --no-tests=error
+
+Each test configures, builds and runs one recipe as a separate project, with the
+FFT backend, linking and generator of the build it is started from, so it
+rebuilds FINUFFT. ``--no-tests=error`` is what makes the label a check: ``ctest``
+exits 0 when a label matches nothing, so a build configured without
+``FINUFFT_BUILD_QUICKSTART`` would otherwise report success.
 
 vcpkg
 ~~~~~

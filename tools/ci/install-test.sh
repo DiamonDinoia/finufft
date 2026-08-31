@@ -21,10 +21,12 @@
 set -euo pipefail
 
 # Its own leftovers, not the caller's business: the controls below write four
-# more trees than the three routes do, and a stale one from the previous arm
-# turns a failure analysis into a guessing game.
-rm -rf _build _stage _consume _fetch _cpm _plain_app _leak _broken _broken_consume \
-	_nofetch _userfftw _deffftw broken.log nofetch.log userfftw.log deffftw.log
+# more trees than the five routes do, and a stale one from the previous arm turns
+# a failure analysis into a guessing game. The makefile route builds into the
+# source tree, so its executable is on the list as well.
+rm -rf _build _stage _consume _fetch _cpm _submod _leak _broken _broken_consume \
+	_nofetch _userfftw _deffftw broken.log nofetch.log userfftw.log deffftw.log \
+	examples/quick-start/makefile/app
 
 linking=${LINKING:-Static}
 backend=${BACKEND:-ducc}
@@ -133,14 +135,13 @@ export LD_LIBRARY_PATH="$stage/lib:$stage/lib64:${LD_LIBRARY_PATH:-}"
 export DYLD_LIBRARY_PATH="$stage/lib:${DYLD_LIBRARY_PATH:-}"
 run_app _consume
 
-# Second route: FetchContent/add_subdirectory, which builds FINUFFT as a
-# subproject rather than against an install. It is what the CPM and FetchContent
-# recipes in docs/install.rst do, and the path that breaks when a
-# top-level-only guard (CTest, docs targets, install rules) is missing. Every
-# arm runs it: install_flags reach the subproject too, so the linkage and the
-# backend do change what gets built here.
+# Second route: FetchContent, which builds FINUFFT as a subproject rather than
+# against an install, and is the recipe docs/install.rst publishes second. It is
+# the path that breaks when a top-level-only guard (CTest, docs targets, install
+# rules) is missing. Every arm runs it: install_flags reach the subproject too,
+# so the linkage and the backend do change what gets built here.
 cmake -S "$fetch_consumer" -B _fetch -DCMAKE_BUILD_TYPE=Release \
-	-DFINUFFT_SOURCE_DIR="$PWD" \
+	-DFETCHCONTENT_SOURCE_DIR_FINUFFT="$PWD" \
 	-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
 	"${install_flags[@]}"
 cmake --build _fetch --config Release
@@ -164,8 +165,11 @@ if [[ "$cuda" == "0" && "$backend" == "ducc" ]]; then
 		*) cpm_cache=(-DCPM_SOURCE_CACHE="$PWD/$CPM_SOURCE_CACHE") ;;
 		esac
 	fi
+	# FINUFFT_SOURCE_DIR names the CPM bootstrap; CPM_finufft_SOURCE is the
+	# redirect, and it is CPM's own documented override rather than something
+	# this project invented.
 	cmake -S examples/quick-start/cpm -B _cpm -DCMAKE_BUILD_TYPE=Release \
-		-DFINUFFT_SOURCE_DIR="$PWD" "${cpm_cache[@]}" \
+		-DFINUFFT_SOURCE_DIR="$PWD" -DCPM_finufft_SOURCE="$PWD" "${cpm_cache[@]}" \
 		-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
 		"${install_flags[@]}"
 	cmake --build _cpm --config Release
@@ -197,10 +201,11 @@ fi
 if [[ "$cuda" == "0" && "$linking" == "Shared" && "${RUNNER_OS:-}" != "Windows" ]]; then
 	libdir=$stage/lib
 	[[ -d "$libdir" ]] || libdir=$stage/lib64
-	mkdir -p _plain_app
-	"${CXX:-c++}" -std=c++17 -O2 examples/quick-start/main.cpp \
-		-I"$stage/include" -L"$libdir" -lfinufft -Wl,-rpath,"$libdir" -o _plain_app/app
-	run_app _plain_app
+	# The published Makefile itself, not a compiler line spelled out again here:
+	# a second copy of the recipe is a second thing to keep true.
+	make -C examples/quick-start/makefile PREFIX="$stage" LIBDIR="$libdir" clean app
+	run_app examples/quick-start/makefile
+	make -C examples/quick-start/makefile clean
 fi
 
 [[ "${CONTROLS:-0}" == "1" ]] || exit 0

@@ -1,27 +1,30 @@
-# Second consume variant: pull FINUFFT in via FetchContent (the add_subdirectory
-# path) instead of an installed find_package. CI points FINUFFT_SOURCE_DIR at the
-# checked-out repo so no network access is needed; drop that define to fetch from
-# GitHub instead.
+# Second quick-start variant: FetchContent, which CMake ships. It clones FINUFFT
+# at configure time and builds it as part of this project.
+#
+#   cmake -S . -B build && cmake --build build && ./build/app
+#
+# CI configures this project unchanged and redirects the clone at the checkout
+# with FetchContent's own documented override,
+# -DFETCHCONTENT_SOURCE_DIR_FINUFFT=<path>, so nothing below is CI-specific.
 cmake_minimum_required(VERSION 3.25)
 project(finufft_consume_fetchcontent LANGUAGES C CXX)
 
-set(FINUFFT_SOURCE_DIR "" CACHE PATH "Local FINUFFT checkout to consume")
+# sphinx tag (don't remove): @quickstart_fetchcontent_start
+set(FINUFFT_GIT_REPOSITORY "https://github.com/flatironinstitute/finufft.git" CACHE STRING "")
+set(FINUFFT_GIT_TAG "master" CACHE STRING "FINUFFT ref to fetch; set a release tag like v2.5.1 to pin")
 
 include(FetchContent)
-if(FINUFFT_SOURCE_DIR)
-    FetchContent_Declare(finufft SOURCE_DIR ${FINUFFT_SOURCE_DIR})
-else()
-    FetchContent_Declare(finufft GIT_REPOSITORY https://github.com/flatironinstitute/finufft.git GIT_TAG master)
-endif()
+FetchContent_Declare(finufft GIT_REPOSITORY ${FINUFFT_GIT_REPOSITORY} GIT_TAG ${FINUFFT_GIT_TAG})
 FetchContent_MakeAvailable(finufft)
 
 add_executable(app ../main.cpp)
 target_link_libraries(app PRIVATE finufft::finufft)
+# sphinx tag (don't remove): @quickstart_fetchcontent_end
 target_compile_features(app PRIVATE cxx_std_17)
 
-# On Windows the finufft DLL must sit next to the executable at runtime, exactly
-# as in the find_package consumer beside this one. A subproject build leaves it
-# under _deps, where the loader does not look, and the app then exits 127.
+# On Windows the finufft DLL must sit next to the executable at runtime. A
+# subproject build leaves it under _deps, where the loader does not look, and the
+# app then exits 127.
 if(WIN32)
     get_target_property(_finufft_type finufft TYPE)
     if(_finufft_type STREQUAL "SHARED_LIBRARY")
