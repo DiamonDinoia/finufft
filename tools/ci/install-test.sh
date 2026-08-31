@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Install FINUFFT to a staging prefix and consume it the three ways a user does:
-# find_package against the install, FetchContent against the sources, and a bare
-# compiler line against the installed headers and library.
+# Install FINUFFT to a staging prefix and consume it the four ways a user does:
+# find_package against the install, FetchContent and CPM against the sources, and
+# a bare compiler line against the installed headers and library.
 #
 # One script for GitHub and for Jenkins. GitHub runs it on Windows, where no
 # Jenkins agent carries a toolchain; Jenkins runs the Linux arms, and is the only
@@ -23,7 +23,7 @@ set -euo pipefail
 # Its own leftovers, not the caller's business: the controls below write four
 # more trees than the three routes do, and a stale one from the previous arm
 # turns a failure analysis into a guessing game.
-rm -rf _build _stage _consume _fetch _plain_app _leak _broken _broken_consume \
+rm -rf _build _stage _consume _fetch _cpm _plain_app _leak _broken _broken_consume \
 	_nofetch _userfftw _deffftw broken.log nofetch.log userfftw.log deffftw.log
 
 linking=${LINKING:-Static}
@@ -142,7 +142,33 @@ cmake -S "$consumer/fetchcontent" -B _fetch -DCMAKE_BUILD_TYPE=Release \
 cmake --build _fetch --config Release
 run_app _fetch
 
-# Third route: no CMake at all. A shared install has to be usable from a plain
+# Third route: CPM, which docs/install.rst recommends before the other two. CPM
+# wraps FetchContent but not identically: EXCLUDE_FROM_ALL takes the FINUFFT
+# targets out of `all` and SYSTEM turns its headers into system includes, and the
+# route above covers neither. Only the DUCC arms run it: CPM's own behaviour does
+# not depend on the FFT backend, and the subproject build itself is already
+# covered by every arm above.
+if [[ "$cuda" == "0" && "$backend" == "ducc" ]]; then
+	# cmake_ci.yml sets CPM_SOURCE_CACHE=cpm, and a relative cache resolves
+	# against the working directory for the download and the source directory for
+	# the include. Those coincide only in a top-level build, so out here CPM was
+	# written to one path and read from another.
+	cpm_cache=()
+	if [[ -n "${CPM_SOURCE_CACHE:-}" ]]; then
+		case "$CPM_SOURCE_CACHE" in
+		/*) cpm_cache=(-DCPM_SOURCE_CACHE="$CPM_SOURCE_CACHE") ;;
+		*) cpm_cache=(-DCPM_SOURCE_CACHE="$PWD/$CPM_SOURCE_CACHE") ;;
+		esac
+	fi
+	cmake -S test/cmake_consume/cpm -B _cpm -DCMAKE_BUILD_TYPE=Release \
+		-DFINUFFT_SOURCE_DIR="$PWD" "${cpm_cache[@]}" \
+		-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
+		"${install_flags[@]}"
+	cmake --build _cpm --config Release
+	run_app _cpm
+fi
+
+# Fourth route: no CMake at all. A shared install has to be usable from a plain
 # compiler line, which is what a hand-written Makefile, a ctypes load or a Julia
 # ccall ends up doing, and it is the only route that reads the installed headers
 # and the library without the exported target in between.
