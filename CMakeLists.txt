@@ -16,6 +16,7 @@ option(FINUFFT_BUILD_FORTRAN "Whether to build the FINUFFT Fortran examples" OFF
 option(FINUFFT_BUILD_MATLAB "Whether to build the FINUFFT Matlab interface" OFF)
 option(FINUFFT_BUILD_OCTAVE "Whether to build the FINUFFT Octave interface" OFF)
 option(FINUFFT_BUILD_PYTHON "Whether the Python wrapper should be built." OFF)
+option(FINUFFT_BUILD_QUICKSTART "Whether to run the examples/quick-start recipes as tests; needs FINUFFT_BUILD_TESTS, and each recipe rebuilds FINUFFT" OFF)
 option(FINUFFT_BUILD_TESTS "Whether to build the FINUFFT tests" OFF)
 option(FINUFFT_INTERPROCEDURAL_OPTIMIZATION "Enable interprocedural optimization (LTO) if supported" OFF)
 option(FINUFFT_POSITION_INDEPENDENT_CODE "Whether to build the finufft library with position independent code (-fPIC). This forced ON when FINUFFT_SHARED_LINKING is ON." ON)
@@ -71,7 +72,7 @@ include(toolchain) # finds cmake/toolchain.cmake
 # Versions for dependencies
 set(CPM_DOWNLOAD_VERSION "0.43.1" CACHE STRING "Version of CPM.cmake to use")
 set(FFTW_VERSION "3.3.10" CACHE STRING "Version of FFTW to use")
-set(XSIMD_VERSION "14.3.0" CACHE STRING "Version of xsimd to use")
+set(XSIMD_VERSION "c71a9b23258c613b6f61ae9857342dc7b774dcab" CACHE STRING "Version of xsimd to use")
 set(POET_VERSION "v0.0.1" CACHE STRING "Version of POET to use")
 set(DUCC0_VERSION "ducc0_0_41_1" CACHE STRING "Version of ducc0 to use")
 set(CUDA11_CCCL_VERSION "2.8.5" CACHE STRING "Version of FINUFFT-cccl for cuda 11 to use")
@@ -89,6 +90,10 @@ mark_as_advanced(
 )
 
 include(setupCPM)
+
+if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME AND FINUFFT_BUILD_DOCS)
+    include(setupSphinx)
+endif()
 
 # POET header-only dispatcher, used by both CPU and CUDA spread/interp paths.
 include(setupPOET)
@@ -125,6 +130,10 @@ endif()
 
 if(FINUFFT_BUILD_EXAMPLES AND FINUFFT_USE_CUDA)
     add_subdirectory(examples/cuda)
+endif()
+
+if(BUILD_TESTING AND FINUFFT_BUILD_TESTS AND FINUFFT_BUILD_QUICKSTART)
+    add_subdirectory(examples/quick-start)
 endif()
 
 if(FINUFFT_BUILD_FORTRAN)
@@ -172,6 +181,7 @@ message(STATUS "  FINUFFT_STATIC_LINKING: ${FINUFFT_STATIC_LINKING}")
 message(STATUS "  FINUFFT_POSITION_INDEPENDENT_CODE: ${FINUFFT_POSITION_INDEPENDENT_CODE}")
 message(STATUS "  FINUFFT_ENABLE_INSTALL: ${FINUFFT_ENABLE_INSTALL}")
 message(STATUS "  FINUFFT_BUILD_EXAMPLES: ${FINUFFT_BUILD_EXAMPLES}")
+message(STATUS "  FINUFFT_BUILD_QUICKSTART: ${FINUFFT_BUILD_QUICKSTART}")
 message(STATUS "  FINUFFT_BUILD_TESTS: ${FINUFFT_BUILD_TESTS}")
 message(STATUS "  FINUFFT_BUILD_FORTRAN: ${FINUFFT_BUILD_FORTRAN}")
 message(STATUS "  FINUFFT_BUILD_MATLAB: ${FINUFFT_BUILD_MATLAB}")
@@ -193,34 +203,20 @@ if(FINUFFT_ENABLE_INSTALL)
         EXPORT finufftTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        RUNTIME
-            DESTINATION
-                ${CMAKE_INSTALL_BINDIR} # .dll on Windows
-        PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} # .dll on Windows
+        FILE_SET HEADERS DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     )
     # Static builds expose finufft's private FFT backend on the install interface
-    # (see src/CMakeLists.txt), so the backend targets must be part of the export.
-    # DUCC0 is bundled by FINUFFT; FFTW is not (a static + FFTW consumer supplies
-    # its own FFTW). A shared build bakes the backend in and exports nothing here.
-    if(FINUFFT_STATIC_LINKING AND FINUFFT_USE_DUCC0 AND TARGET ducc0)
-        install(TARGETS ducc0 finufft_fftlibs EXPORT finufftTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-    endif()
-    # Public transitive headers that live in subdirectories and are therefore not
-    # matched by the flat finufft*.h PUBLIC_HEADER glob. finufft.h pulls in
-    # finufft/finufft_eitherprec.h, which (with finufft_errors.h) pulls in
-    # finufft_common/defines.h; without these an installed consumer cannot
-    # compile. Only these two subdir headers are part of the public surface; the
-    # rest of include/finufft and include/finufft_common are internal.
-    if(FINUFFT_USE_CPU)
+    if(FINUFFT_STATIC_LINKING AND (FINUFFT_FFT_EXPORT_TARGETS OR FINUFFT_FFT_FIND_MODULE))
         install(
-            FILES ${PROJECT_SOURCE_DIR}/include/finufft/finufft_eitherprec.h
-            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/finufft
+            TARGETS finufft_fftlibs ${FINUFFT_FFT_EXPORT_TARGETS}
+            EXPORT finufftTargets
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         )
-        install(
-            FILES ${PROJECT_SOURCE_DIR}/include/finufft_common/defines.h
-            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/finufft_common
-        )
+        if(FINUFFT_FFT_FIND_MODULE)
+            install(FILES ${FINUFFT_FFT_FIND_MODULE} DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/finufft)
+        endif()
     endif()
     install(EXPORT finufftTargets NAMESPACE finufft:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/finufft)
     configure_package_config_file(

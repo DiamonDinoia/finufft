@@ -127,11 +127,27 @@ target_link_libraries(
         $<BUILD_INTERFACE:poet::poet>
 )
 
+if(FINUFFT_ENABLE_INSTALL AND NOT FINUFFT_SHARED_LINKING)
+    target_link_libraries(
+        cufinufft
+        INTERFACE $<INSTALL_INTERFACE:CUDA::cudart> $<INSTALL_INTERFACE:CUDA::cufft> $<INSTALL_INTERFACE:finufft_common>
+    )
+endif()
+
 check_cxx_compiler_flag(-Wno-deprecated-declarations FINUFFT_HAS_NO_DEPRECATED_DECLARATIONS)
 # disable deprecated warnings for tests if supported
 if(FINUFFT_HAS_NO_DEPRECATED_DECLARATIONS)
     target_compile_options(cufinufft PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Wno-deprecated-declarations>)
 endif()
 
-file(GLOB CUFINUFFT_PUBLIC_HEADERS "${CMAKE_SOURCE_DIR}/include/cufinufft*.h")
-set_target_properties(cufinufft PROPERTIES PUBLIC_HEADER "${CUFINUFFT_PUBLIC_HEADERS}")
+target_sources(
+    cufinufft
+    PUBLIC
+        FILE_SET HEADERS
+            BASE_DIRS ${PROJECT_SOURCE_DIR}/include
+            FILES
+                ${PROJECT_SOURCE_DIR}/include/cufinufft.h
+                ${PROJECT_SOURCE_DIR}/include/cufinufft_opts.h
+                ${PROJECT_SOURCE_DIR}/include/finufft_errors.h
+                ${PROJECT_SOURCE_DIR}/include/finufft_common/defines.h
+)

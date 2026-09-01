@@ -128,9 +128,6 @@ if(FINUFFT_BUILD_FORTRAN)
 endif()
 
 # ---- Sanitizers ---------------------------------------------------------------
-# TODO: drop the -O1 below (revert to Debug -O0) once xsimd > 14.3.0 ships the fix
-# for the constexpr immediate-argument folding (xsimd_avx_128.hpp "last argument
-# must be an 8-bit immediate" at -O0). -O1 is only here to work around that.
 set(FINUFFT_SANITIZER_FLAGS)
 string(TOUPPER "${FINUFFT_USE_SANITIZERS}" FINUFFT_USE_SANITIZERS_MODE)
 if(FINUFFT_USE_SANITIZERS_MODE STREQUAL "OFF")
@@ -158,13 +155,9 @@ if(FINUFFT_SANITIZER_FLAGS)
     set(FINUFFT_SANITIZER_FLAGS $<$<CONFIG:Debug,RelWithDebInfo>:${FINUFFT_SANITIZER_FLAGS}>)
 endif()
 
-# ---- Top-project features (CTest, Sphinx) ------------------------------------
 if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
     include(CTest)
     if(FINUFFT_BUILD_TESTS)
         enable_testing()
-    endif()
-    if(FINUFFT_BUILD_DOCS)
-        include(setupSphinx)
     endif()
 endif()

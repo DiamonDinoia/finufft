@@ -113,7 +113,7 @@ endif()
 # and only needed while compiling finufft, not by downstream consumers.
 if(FINUFFT_STATIC_LINKING)
     target_link_libraries(finufft INTERFACE $<INSTALL_INTERFACE:finufft_common>)
-    if(FINUFFT_USE_DUCC0)
+    if(FINUFFT_FFT_EXPORT_TARGETS OR FINUFFT_FFT_FIND_MODULE)
         target_link_libraries(finufft INTERFACE $<INSTALL_INTERFACE:finufft_fftlibs>)
     endif()
 endif()
@@ -130,10 +130,18 @@ target_include_directories(finufft SYSTEM INTERFACE $<INSTALL_INTERFACE:include>
 
 enable_asan(finufft)
 
-if(FINUFFT_ENABLE_INSTALL)
-    file(GLOB FINUFFT_PUBLIC_HEADERS "${PROJECT_SOURCE_DIR}/include/finufft*.h")
-    set_target_properties(finufft PROPERTIES PUBLIC_HEADER "${FINUFFT_PUBLIC_HEADERS}")
-endif()
+target_sources(
+    finufft
+    PUBLIC
+        FILE_SET HEADERS
+            BASE_DIRS ${PROJECT_SOURCE_DIR}/include
+            FILES
+                ${PROJECT_SOURCE_DIR}/include/finufft.h
+                ${PROJECT_SOURCE_DIR}/include/finufft_opts.h
+                ${PROJECT_SOURCE_DIR}/include/finufft_errors.h
+                ${PROJECT_SOURCE_DIR}/include/finufft/finufft_eitherprec.h
+                ${PROJECT_SOURCE_DIR}/include/finufft_common/defines.h
+)
 
 set(_targets ${INSTALL_TARGETS})
 list(APPEND _targets finufft)
