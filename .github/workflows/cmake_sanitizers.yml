@@ -94,7 +94,7 @@ jobs:
           path: cpm
 
       - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Setup Cpp
         uses: aminya/setup-cpp@v1
@@ -145,10 +145,10 @@ jobs:
           for arch in "${arch_flags[@]}"; do
             rm -rf $build_dir
 
-            ctest_args=(--output-on-failure -j)
+            ctest_args=(--output-on-failure --no-tests=error -j)
             # Keep the TSAN job focused on the concurrency-sensitive coverage.
             if [[ "${{ matrix.sanitizer }}" == "TSAN" ]]; then
-              ctest_args=(--output-on-failure -R '^(run_testutils|run_threadsafe_execute)$')
+              ctest_args=(--output-on-failure --no-tests=error -R '^(run_testutils|run_threadsafe_execute)$')
             fi
 
             cmake -E make_directory "$build_dir"
