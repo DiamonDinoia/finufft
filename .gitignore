@@ -13,6 +13,7 @@ examples/example1d1f
 examples/example1d1cf
 examples/example2d1f
 examples/guru1d1f
+examples/quick-start/makefile/app
 fortran/examples/guru1d1
 fortran/examples/nufft1d_demo
 fortran/examples/nufft1d_demo_legacy
@@ -34,6 +35,9 @@ docs/_build
 docs/_generated/
 
 build/
+/_*/
+/*.log
+/cpm/
 
 cufinufft/python/cufinufft/docs/_build
 cufinufft/python/cufinufft/docs/_static

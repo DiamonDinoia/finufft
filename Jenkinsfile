@@ -287,8 +287,7 @@ catchError {
     def pageJob = {
       catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE',
                  catchInterruptions: true) {
-        // Covers a wait for a free node, then both CPU backends in turn.
-        timeout(time: 180, unit: 'MINUTES') {
+        timeout(time: 480, unit: 'MINUTES') {
           parallel 'page cpu': pageCpu,
                    'page gpu': pageGpu
           pagePost()
@@ -303,6 +302,50 @@ catchError {
     if (env.CHANGE_ID) measures << perfJob
     if (pagePublishes || (env.CHANGE_TITLE ?: '').contains('[perf page]')) measures << pageJob
     if (measures) jobs['measure'] = { for (measure in measures) measure() }
+
+    jobs['install cpu'] = {
+      runPod(tag: 'cuda12.8', cpus: 8, memory: '16Gi') {
+        stage('install cpu') {
+          for (arm in [['Static', 'ducc', 'ON'], ['Static', 'fftw', 'ON'],
+                       ['Shared', 'ducc', 'ON'], ['Shared', 'fftw', 'ON'],
+                       ['Static', 'ducc', 'OFF']]) {
+            def linking = arm[0]
+            def backend = arm[1]
+            def openmp = arm[2]
+            def controls = (linking == 'Static' && backend == 'fftw') ? '1' : '0'
+            withEnv(["HOME=$WORKSPACE", "LINKING=${linking}", "BACKEND=${backend}",
+                     "OPENMP=${openmp}", "CONTROLS=${controls}"]) {
+              sh 'tools/ci/install-test.sh'
+            }
+          }
+          withEnv(["HOME=$WORKSPACE", "CPM_SOURCE_CACHE=$WORKSPACE/.cpm"]) {
+            sh 'cmake -S . -B _quickstart -G Ninja -DCMAKE_BUILD_TYPE=Release' +
+               ' -DFINUFFT_BUILD_TESTS=ON -DFINUFFT_BUILD_QUICKSTART=ON'
+            sh 'ctest --test-dir _quickstart -L quickstart --no-tests=error --output-on-failure'
+          }
+        }
+      }
+    }
+
+    jobs['install cuda'] = {
+      runPod(tag: 'cuda12.8', cpus: 8, memory: '16Gi', gpus: 1) {
+        stage('install cuda') {
+          def arch = gpuArch()
+          if (!arch) {
+            error "nvidia-smi did not report compute_cap - the consumer would build for the wrong card"
+          }
+          withEnv(["HOME=$WORKSPACE", "CUDA=1", "CUDA_ARCH=${arch}", "CONTROLS=1",
+                   "LIBRARY_PATH=/usr/local/cuda/lib64/stubs"]) {
+            sh 'tools/ci/install-test.sh'
+            sh 'make cuexamples -j8 NVARCH="-arch=sm_$CUDA_ARCH"'
+            sh 'cmake --preset gpu -B _preset_gpu'
+            sh 'cmake --preset all -B _preset_all'
+            sh 'curl -fsSL https://github.com/conda-forge/miniforge/releases/download/26.5.3-0/Miniforge3-26.5.3-0-Linux-x86_64.sh -o mf.sh && echo "14db468222ad564658656f769506056209b6dc375f5e7dfd31eb5ebbf08fa529  mf.sh" | sha256sum -c - && bash mf.sh -b -u -p "$WORKSPACE/mf" && rm mf.sh'
+            sh 'PATH="$WORKSPACE/mf/bin:$PATH" bash examples/quick-start/conda/build.sh --gpu'
+          }
+        }
+      }
+    }
 
     parallel jobs
   }

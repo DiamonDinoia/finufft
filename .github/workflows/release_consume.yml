@@ -1,0 +1,193 @@
+name: released package
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  release:
+    types: [published]
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "examples/quick-start/**"
+      - ".github/workflows/release_consume.yml"
+      - ".gitattributes"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to consume (default: the latest release)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  target:
+    runs-on: ubuntu-latest
+    outputs:
+      repo: ${{ steps.pick.outputs.repo }}
+      ref: ${{ steps.pick.outputs.ref }}
+    steps:
+      - name: Pick what to consume
+        id: pick
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          PR_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_REF: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PR_REF:-}" ]; then
+            repo="$PR_REPO"
+            ref="$PR_REF"
+          else
+            repo="$GITHUB_REPOSITORY"
+            ref="${INPUT_TAG:-${EVENT_TAG:-}}"
+            [[ "$ref" =~ ^[0-9] ]] && ref="v$ref"
+            if [ -z "$ref" ]; then
+              ref=$(gh api "repos/flatironinstitute/finufft/releases/latest" -q .tag_name)
+            fi
+          fi
+          echo "repo=$repo" >>"$GITHUB_OUTPUT"
+          echo "ref=$ref" >>"$GITHUB_OUTPUT"
+          echo "consuming $repo at $ref"
+
+  cmake:
+    needs: target
+    name: ${{ matrix.route }} ${{ needs.target.outputs.ref }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2022, windows-2025, macos-15, macos-15-intel, macos-26]
+        route: [fetchcontent, cpm, tarball]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Cpp
+        uses: aminya/setup-cpp@v1
+        with:
+          compiler: ${{ startsWith(matrix.os, 'macos-') && 'llvm' || (startsWith(matrix.os, 'windows-') && 'msvc' || '') }}
+          vcvarsall: ${{ startsWith(matrix.os, 'windows-') }}
+          cmake: true
+          ninja: true
+
+      - name: Install libomp (macOS)
+        if: startsWith(matrix.os, 'macos-')
+        run: |
+          export HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_INSTALL_CLEANUP=1
+          brew install libomp
+          {
+            echo "LDFLAGS=-L$(brew --prefix libomp)/lib"
+            echo "CPPFLAGS=-I$(brew --prefix libomp)/include"
+            echo "LIBRARY_PATH=$(brew --prefix libomp)/lib"
+            echo "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib"
+            echo "CMAKE_PREFIX_PATH=$(brew --prefix libomp)"
+          } >> "$GITHUB_ENV"
+
+      - name: Consume ${{ needs.target.outputs.repo }} at ${{ needs.target.outputs.ref }}
+        shell: bash
+        env:
+          REPO: ${{ needs.target.outputs.repo }}
+          REF: ${{ needs.target.outputs.ref }}
+        run: |
+          set -euo pipefail
+          common=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DFINUFFT_USE_DUCC0=ON)
+          url="${GITHUB_SERVER_URL}/${REPO}.git"
+          case "${{ matrix.route }}" in
+          fetchcontent)
+            cmake -S examples/quick-start/fetchcontent -B _b "${common[@]}" \
+              -DFINUFFT_GIT_REPOSITORY="$url" -DFINUFFT_GIT_TAG="$REF"
+            ;;
+          cpm)
+            cmake -S examples/quick-start/cpm -B _b "${common[@]}" \
+              -DFINUFFT_SOURCE_DIR="$PWD" \
+              -DFINUFFT_GIT_REPOSITORY="$url" -DFINUFFT_GIT_TAG="$REF" \
+              -DCPM_SOURCE_CACHE="$PWD/cpm"
+            ;;
+          tarball)
+            curl -sSL -o src.tar.gz \
+              "${GITHUB_SERVER_URL}/${REPO}/archive/${REF}.tar.gz"
+            tar xzf src.tar.gz
+            src=$(echo finufft-*/)
+            cmake -S "$src" -B _rel "${common[@]}" -DCMAKE_INSTALL_PREFIX="$PWD/_stage"
+            cmake --build _rel
+            cmake --install _rel
+            cmake -S examples/quick-start/find_package -B _b "${common[@]}" \
+              -DCMAKE_PREFIX_PATH="$PWD/_stage"
+            ;;
+          esac
+          cmake --build _b
+          if [ -x _b/app.exe ]; then _b/app.exe; else _b/app; fi
+
+  wheel:
+    needs: target
+    name: pypi wheel (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, windows-2025, macos-15, macos-26]
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Resolve the expected version
+        id: expect
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ needs.target.outputs.ref }}
+        run: |
+          set -euo pipefail
+          ref="$REF"
+          if [[ ! "$ref" =~ ^v[0-9] ]]; then
+            ref=$(gh api "repos/flatironinstitute/finufft/releases/latest" -q .tag_name)
+          fi
+          echo "expected=${ref#v}" >>"$GITHUB_OUTPUT"
+      - name: Install and check the published wheels
+        shell: bash
+        env:
+          EXPECTED: ${{ steps.expect.outputs.expected }}
+        run: |
+          set -euo pipefail
+          install_wheel() {
+            pkg=$1; shift
+            for _ in $(seq 20); do
+              if python -m pip install --only-binary="$pkg" "$pkg==$EXPECTED" "$@"; then return 0; fi
+              echo "$pkg $EXPECTED is not on PyPI yet; waiting 60 s"
+              sleep 60
+            done
+            echo "$pkg $EXPECTED never appeared on PyPI: the release has no wheel"
+            return 1
+          }
+          assert_version() {
+            python -c "import importlib.metadata as m; v = m.version('$1'); print('$1', v); assert v == '$EXPECTED', v"
+          }
+          python -m pip install --upgrade pip
+          install_wheel finufft numpy
+          assert_version finufft
+          if [[ "$RUNNER_OS" == "Linux" || "$RUNNER_OS" == "Windows" ]]; then
+            install_wheel cufinufft
+            assert_version cufinufft
+          fi
+          python - <<'PY'
+          import numpy as np, finufft
+          rng = np.random.default_rng(0)
+          n, m = 32, 100
+          x = rng.uniform(-np.pi, np.pi, m)
+          c = rng.standard_normal(m) + 1j * rng.standard_normal(m)
+          f = finufft.nufft1d1(x, c, n, eps=1e-12, isign=1)
+          k = np.arange(-(n // 2), n - n // 2)
+          ref = np.exp(1j * k[:, None] * x[None, :]) @ c
+          err = np.max(np.abs(f - ref)) / np.max(np.abs(ref))
+          print("max relative error", err)
+          assert err < 1e-10, err
+          PY

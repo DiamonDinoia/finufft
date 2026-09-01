@@ -1,0 +1,66 @@
+name: cmake presets
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  configure:
+    name: preset ${{ matrix.preset }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [default, dev-ducc, ninja-multi, fortran, docs, dev-docs, gpu-fat, all-wrappers]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Cpp
+        uses: aminya/setup-cpp@v1
+        with:
+          cmake: true
+          ninja: true
+
+      - name: Set up Python
+        if: matrix.preset == 'docs' || matrix.preset == 'dev-docs'
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: docs/requirements.txt
+
+      - name: Install what the preset asks for
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libfftw3-dev
+          case "${{ matrix.preset }}" in
+          fortran | all-wrappers) sudo apt-get install -y gfortran ;;
+          docs | dev-docs) python -m pip install -r docs/requirements.txt ;;
+          esac
+
+      - name: CUDA toolkit
+        if: matrix.preset == 'gpu-fat'
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          method: network
+          sub-packages: '["nvcc", "cudart"]'
+          non-cuda-sub-packages: '["libcufft", "libcufft-dev"]'
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          extra=()
+          if [ "${{ matrix.preset }}" = "all-wrappers" ]; then
+            extra=(-DFINUFFT_BUILD_MATLAB=OFF -DFINUFFT_MATLAB_INSTALL=OFF)
+          fi
+          cmake --preset "${{ matrix.preset }}" "${extra[@]}"
+
+      - name: Build
+        if: matrix.preset == 'default'
+        run: cmake --build --preset default

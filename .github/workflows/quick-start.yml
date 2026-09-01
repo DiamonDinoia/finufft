@@ -1,0 +1,126 @@
+name: quick start routes
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "43 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  consume-test:
+    name: consume find_package (${{ matrix.os }}, ${{ matrix.linking }}, ${{ matrix.backend }})
+    runs-on: ${{ matrix.os }}
+    env:
+      CMAKE_GENERATOR: Ninja
+      CPM_SOURCE_CACHE: cpm
+      LINKING: ${{ matrix.linking }}
+      BACKEND: ${{ matrix.backend }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025, macos-15, macos-15-intel, macos-26]
+        linking: [Static, Shared]
+        backend: [ducc, fftw]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Restore Cache
+        uses: actions/cache/restore@v6
+        with:
+          key: cpm-cache-00-${{ runner.os == 'windows' && 'windows-' || '' }}${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+          enableCrossOsArchive: true
+          path: cpm
+      - name: Setup Cpp
+        uses: aminya/setup-cpp@v1
+        with:
+          compiler: ${{ startsWith(matrix.os, 'macos-') && 'llvm' || 'msvc' }}
+          vcvarsall: true
+          cmake: true
+          ninja: true
+      - name: Install toolchain + FFTW (macOS)
+        if: startsWith(matrix.os, 'macos-')
+        run: |
+          export HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_INSTALL_CLEANUP=1
+          brew install libomp fftw
+          {
+            echo "LDFLAGS=-L$(brew --prefix libomp)/lib"
+            echo "CPPFLAGS=-I$(brew --prefix libomp)/include"
+            echo "LIBRARY_PATH=$(brew --prefix libomp)/lib"
+            echo "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib"
+            echo "CMAKE_PREFIX_PATH=$(brew --prefix libomp)"
+          } >> "$GITHUB_ENV"
+      - name: Install FINUFFT and consume it
+        shell: bash
+        run: tools/ci/install-test.sh
+
+  docs-claims:
+    name: docs match the recipes
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Every literalinclude resolves
+        run: |
+          set -euo pipefail
+          python3 tools/ci/check-docs.py --selftest
+          python3 tools/ci/check-docs.py
+
+  vcpkg-port:
+    name: vcpkg overlay port (${{ matrix.os }}, ${{ matrix.triplet }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, triplet: x64-linux }
+          - { os: windows-2022, triplet: x64-windows-static-md }
+          - { os: windows-2025, triplet: x64-windows-static-md }
+          - { os: macos-15, triplet: arm64-osx }
+          - { os: macos-15-intel, triplet: x64-osx }
+    env:
+      TRIPLET: ${{ matrix.triplet }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Install libomp (macOS)
+        if: startsWith(matrix.os, 'macos-')
+        run: |
+          export HOMEBREW_NO_ANALYTICS=1 HOMEBREW_NO_INSTALL_CLEANUP=1
+          brew install libomp
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix libomp)" >> "$GITHUB_ENV"
+      - name: Install through vcpkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          vcpkg install "finufft:$TRIPLET" \
+            --overlay-ports=tools/vcpkg \
+            --x-install-root="${{ github.workspace }}/_vcpkg" \
+            --binarysource=clear
+      - name: Consume it
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S examples/quick-start/find_package -B _consume \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${{ github.workspace }}/_vcpkg/$TRIPLET;${CMAKE_PREFIX_PATH:-}" \
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+          cmake --build _consume --config Release
+          if [[ "$RUNNER_OS" == "Windows" ]]; then ./_consume/Release/app.exe; else ./_consume/app; fi
+
+  conda:
+    name: conda from source (macos-15)
+    runs-on: macos-15
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: conda-incubator/setup-miniconda@v4
+        with:
+          miniforge-version: 26.5.3-0
+      - name: Build and test the CPU package
+        run: bash examples/quick-start/conda/build.sh
