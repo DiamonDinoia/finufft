@@ -1,38 +1,23 @@
-cmake_minimum_required(VERSION 3.25)
+cmake_minimum_required(VERSION 3.26)
 project(finufft_consume_cpm LANGUAGES CXX)
 
-set(FINUFFT_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../../.." CACHE PATH "Checkout that supplies cmake/setupCPM.cmake")
-set(CPM_DOWNLOAD_VERSION "0.43.1" CACHE STRING "Version of CPM.cmake to use")
-include(${FINUFFT_SOURCE_DIR}/cmake/setupCPM.cmake)
+set(CPM_DOWNLOAD_VERSION 0.43.1)
+set(CPM_DOWNLOAD_LOCATION ${CMAKE_BINARY_DIR}/CPM_${CPM_DOWNLOAD_VERSION}.cmake)
+if(NOT EXISTS ${CPM_DOWNLOAD_LOCATION})
+    file(
+        DOWNLOAD https://github.com/cpm-cmake/CPM.cmake/releases/download/v${CPM_DOWNLOAD_VERSION}/CPM.cmake
+        ${CPM_DOWNLOAD_LOCATION}
+    )
+endif()
+include(${CPM_DOWNLOAD_LOCATION})
 
-set(FINUFFT_GIT_REPOSITORY "https://github.com/flatironinstitute/finufft.git" CACHE STRING "")
-set(FINUFFT_GIT_TAG "master" CACHE STRING "FINUFFT ref to fetch; set a release tag like v2.5.1 to pin")
-
-CPMAddPackage(
-    NAME
-    finufft
-    GIT_REPOSITORY
-    ${FINUFFT_GIT_REPOSITORY}
-    GIT_TAG
-    ${FINUFFT_GIT_TAG}
-    GIT_SHALLOW
-    YES
-    EXCLUDE_FROM_ALL
-    YES
-    SYSTEM
-)
+CPMAddPackage("gh:flatironinstitute/finufft#master")
 
 add_executable(app main.cpp)
 target_link_libraries(app PRIVATE finufft::finufft)
-target_compile_features(app PRIVATE cxx_std_17)
-
-if(WIN32)
-    get_target_property(_finufft_type finufft TYPE)
-    if(_finufft_type STREQUAL "SHARED_LIBRARY")
-        add_custom_command(
-            TARGET app
-            POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:finufft> $<TARGET_FILE_DIR:app>
-        )
-    endif()
-endif()
+add_custom_command(
+    TARGET app
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy -t $<TARGET_FILE_DIR:app> $<TARGET_RUNTIME_DLLS:app>
+    COMMAND_EXPAND_LISTS
+)

@@ -101,15 +101,23 @@ jobs:
           set -euo pipefail
           common=(-G Ninja -DCMAKE_BUILD_TYPE=Release -DFINUFFT_USE_DUCC0=ON)
           url="${GITHUB_SERVER_URL}/${REPO}.git"
+          # the recipes name the upstream URL and master; point them at the ref under test
+          clone_ref() {
+            git init -q _src
+            git -C _src remote add origin "$url"
+            git -C _src fetch -q --depth 1 origin "$REF"
+            git -C _src checkout -q FETCH_HEAD
+          }
           case "${{ matrix.route }}" in
           fetchcontent)
+            clone_ref
             cmake -S examples/quick-start/fetchcontent -B _b "${common[@]}" \
-              -DFINUFFT_GIT_REPOSITORY="$url" -DFINUFFT_GIT_TAG="$REF"
+              -DFETCHCONTENT_SOURCE_DIR_FINUFFT="$PWD/_src"
             ;;
           cpm)
+            clone_ref
             cmake -S examples/quick-start/cpm -B _b "${common[@]}" \
-              -DFINUFFT_SOURCE_DIR="$PWD" \
-              -DFINUFFT_GIT_REPOSITORY="$url" -DFINUFFT_GIT_TAG="$REF" \
+              -DCPM_finufft_SOURCE="$PWD/_src" \
               -DCPM_SOURCE_CACHE="$PWD/cpm"
             ;;
           tarball)

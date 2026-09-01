@@ -119,7 +119,7 @@ if [[ "$cuda" == "0" && "$backend" == "ducc" ]]; then
 		esac
 	fi
 	cmake -S examples/quick-start/cpm -B _cpm -DCMAKE_BUILD_TYPE=Release \
-		-DFINUFFT_SOURCE_DIR="$PWD" -DCPM_finufft_SOURCE="$PWD" "${cpm_cache[@]}" \
+		-DCPM_finufft_SOURCE="$PWD" "${cpm_cache[@]}" \
 		-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded \
 		"${install_flags[@]}"
 	cmake --build _cpm --config Release
