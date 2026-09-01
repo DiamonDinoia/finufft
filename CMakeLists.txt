@@ -73,6 +73,7 @@ endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(utils) # finds cmake/utils.cmake
+include(finufftPkgConfig)
 include(toolchain) # finds cmake/toolchain.cmake
 
 # Versions for dependencies
@@ -239,6 +240,10 @@ if(FINUFFT_ENABLE_INSTALL)
         FILES ${CMAKE_CURRENT_BINARY_DIR}/finufftConfig.cmake ${CMAKE_CURRENT_BINARY_DIR}/finufftConfigVersion.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/finufft
     )
+    if(FINUFFT_USE_CPU)
+        finufft_write_pkgconfig()
+        install(FILES ${CMAKE_CURRENT_BINARY_DIR}/finufft.pc DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+    endif()
     install(FILES ${PROJECT_SOURCE_DIR}/LICENSE DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/licenses/finufft)
     if(FINUFFT_USE_CPU)
         install(

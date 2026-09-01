@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-rm -rf _build _stage _makestage _consume _fetch _cpm _submod _leak _broken _broken_consume \
+rm -rf _build _stage _makestage _consume _fetch _cpm _submod _pkgconfig _leak _broken _broken_consume \
 	_nofetch _userfftw _deffftw broken.log nofetch.log userfftw.log deffftw.log \
-	examples/quick-start/makefile/app
+	examples/quick-start/makefile/app examples/quick-start/pkgconfig/app
 
 linking=${LINKING:-Static}
 backend=${BACKEND:-ducc}
@@ -102,6 +102,22 @@ cmake --build _consume --config Release
 export LD_LIBRARY_PATH="$stage/lib:$stage/lib64:${LD_LIBRARY_PATH:-}"
 export DYLD_LIBRARY_PATH="$stage/lib:${DYLD_LIBRARY_PATH:-}"
 run_app _consume
+
+# pkg-config is the only route that tells a plain compiler line what a *static*
+# libfinufft still needs, so run it both ways round.
+if [[ "$cuda" == "0" ]] && command -v pkg-config >/dev/null; then
+	pcdir=$stage/lib/pkgconfig
+	[[ -d "$pcdir" ]] || pcdir=$stage/lib64/pkgconfig
+	[[ -f "$pcdir/finufft.pc" ]] || {
+		echo "ERROR: the install shipped no finufft.pc, so the pkg-config route proves nothing"
+		exit 1
+	}
+	pcstatic=
+	[[ "$linking" == "Static" ]] && pcstatic=--static
+	PKG_CONFIG_PATH="$pcdir" make -C examples/quick-start/pkgconfig STATIC="$pcstatic" clean app
+	run_app examples/quick-start/pkgconfig
+	make -C examples/quick-start/pkgconfig clean
+fi
 
 cmake -S "$fetch_consumer" -B _fetch -DCMAKE_BUILD_TYPE=Release \
 	-DFETCHCONTENT_SOURCE_DIR_FINUFFT="$PWD" \

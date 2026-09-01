@@ -11,6 +11,8 @@ if(FINUFFT_USE_DUCC0)
 else()
     include(setupFFTW)
 endif()
+finufft_pc_fft_flags(FINUFFT_PC_FFT_FLAGS)
+set(FINUFFT_PC_FFT_FLAGS "${FINUFFT_PC_FFT_FLAGS}" PARENT_SCOPE)
 
 # Sources compiled per-precision (once for float, once for double).
 # spreadinterp_Nd.cpp files each instantiate spread_subproblem_Nd + interpSorted_Nd

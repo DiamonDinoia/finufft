@@ -1,0 +1,11 @@
+prefix=@FINUFFT_PC_PREFIX@
+libdir=@FINUFFT_PC_LIBDIR@
+includedir=@FINUFFT_PC_INCLUDEDIR@
+
+Name: finufft
+Description: Flatiron Institute Nonuniform Fast Fourier Transform library
+URL: https://finufft.readthedocs.io
+Version: @PROJECT_VERSION@
+Cflags: -I${includedir}
+Libs: -L${libdir} -lfinufft
+Libs.private: @FINUFFT_PC_LIBS_PRIVATE@
