@@ -1,0 +1,70 @@
+name: DIAG ducc0 xcode16 compile
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: diag-ducc0
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            osx_arch: arm64
+          - os: macos-15-intel
+            osx_arch: x86_64
+    name: ${{ matrix.os }} xcode16.4 ducc0
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup C++ toolchain
+        uses: aminya/setup-cpp@v1
+        with:
+          cmake: true
+          ninja: true
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.4'
+
+      - name: brew deps (mirror mex.yml wiring)
+        shell: bash
+        run: |
+          xcodebuild -version
+          brew install fftw libomp
+          echo "LDFLAGS=-L$(brew --prefix libomp)/lib" >> $GITHUB_ENV
+          echo "CPPFLAGS=-I$(brew --prefix libomp)/include" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=$(brew --prefix libomp)/lib" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix):$(brew --prefix libomp)" >> $GITHUB_ENV
+
+      - name: Configure (ducc0 ON, MATLAB off)
+        shell: bash
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFINUFFT_USE_DUCC0=ON \
+            -DFINUFFT_USE_OPENMP=ON \
+            -DFINUFFT_BUILD_MATLAB=OFF \
+            -DFINUFFT_BUILD_EXAMPLES=OFF \
+            -DFINUFFT_BUILD_TESTS=OFF \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.osx_arch }}
+
+      - name: Build ducc0 target (the ICE suspect)
+        shell: bash
+        run: cmake --build build --verbose --target ducc0 --parallel
+
+      - name: Build finufft
+        shell: bash
+        run: cmake --build build --verbose --target finufft --parallel
+
+      - name: tmate session (only if the build crashed)
+        if: failure()
+        uses: mxschmitt/action-tmate@v3
+        with:
+          timeout-minutes: 25
