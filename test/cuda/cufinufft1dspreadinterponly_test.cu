@@ -149,7 +149,6 @@ int run_test(int N1, int M, T tol, T checktol, int iflag, double upsampfac) {
   printf("\trel sup err %.3g\n", rel_sup_err);
 
   printf("type-3 test 1d:\n"); // ............................................
-  // gpu_spreadinterponly is defined for types 1,2 only; a type-3 plan must ignore it
   thrust::host_vector<T> s(N1);
   for (int i = 0; i < N1; i++) s[i] = N1 / 2 * randm11();
   thrust::device_vector<T> d_s = s;

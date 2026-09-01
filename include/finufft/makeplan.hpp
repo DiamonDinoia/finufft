@@ -336,7 +336,6 @@ FINUFFT_PLAN_T<TF>::FINUFFT_PLAN_T(int type_, int dim_, const BIGINT *n_modes, i
     printf("[%s] new plan: FINUFFT version " FINUFFT_VER " .................\n",
            __func__);
 
-  // spreadinterponly only affects type 1 & 2
   if (type == 3 && opts.spreadinterponly) {
     opts.spreadinterponly = 0;
   }

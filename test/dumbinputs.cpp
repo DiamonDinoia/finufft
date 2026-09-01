@@ -196,7 +196,6 @@ int main() {
     printf("1d3 XK prod too big:\twrong error code %d\n", ier);
     return 1;
   }
-  // spreadinterponly is defined for types 1,2 only; type 3 must ignore it
   opts.spreadinterponly = 1;
   ier                   = FINUFFT1D3(M, x, c, +1, acc, N, s, F, &opts);
   opts.spreadinterponly = 0;
