@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-rm -rf _build _stage _makestage _consume _fetch _cpm _submod _pkgconfig _leak _broken _broken_consume \
+rm -rf _build _stage _makestage _consume _fetch _cpm _submod _c _fortran _pkgconfig _leak _broken _broken_consume \
 	_nofetch _userfftw _deffftw broken.log nofetch.log userfftw.log deffftw.log \
 	examples/quick-start/makefile/app examples/quick-start/pkgconfig/app
 
@@ -9,6 +9,7 @@ linking=${LINKING:-Static}
 backend=${BACKEND:-ducc}
 cuda=${CUDA:-0}
 openmp=${OPENMP:-ON}
+fortran=0
 stage="$PWD/_stage"
 
 static=ON
@@ -27,6 +28,13 @@ else
 	fetch_consumer=examples/quick-start/fetchcontent
 	install_flags=(-DFINUFFT_USE_DUCC0=$ducc -DFINUFFT_STATIC_LINKING=$static
 		-DFINUFFT_USE_OPENMP=$openmp)
+	# The Fortran route consumes finufft.fh and the shims that only this option builds.
+	# Linux only: elsewhere gfortran belongs to a different toolchain than the C++
+	# compiler that built the install, and the mix is the user's to sort out.
+	if [[ "$(uname -s)" == "Linux" ]] && command -v gfortran >/dev/null; then
+		fortran=1
+		install_flags+=(-DFINUFFT_BUILD_FORTRAN=ON)
+	fi
 fi
 
 cmake -S . -B _build -DCMAKE_BUILD_TYPE=Release \
@@ -102,6 +110,22 @@ cmake --build _consume --config Release
 export LD_LIBRARY_PATH="$stage/lib:$stage/lib64:${LD_LIBRARY_PATH:-}"
 export DYLD_LIBRARY_PATH="$stage/lib:${DYLD_LIBRARY_PATH:-}"
 run_app _consume
+
+# The C API from C, not C++: MSVC has no C99 `double complex`, the same limit that
+# gates examples/simple1d1c.c.
+if [[ "$cuda" == "0" && "${RUNNER_OS:-}" != "Windows" ]]; then
+	cmake -S examples/quick-start/c -B _c -DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_PREFIX_PATH="$stage"
+	cmake --build _c --config Release
+	run_app _c
+fi
+
+if [[ "$cuda" == "0" && "$fortran" == "1" ]]; then
+	cmake -S examples/quick-start/fortran -B _fortran -DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_PREFIX_PATH="$stage"
+	cmake --build _fortran --config Release
+	run_app _fortran
+fi
 
 # pkg-config is the only route that tells a plain compiler line what a *static*
 # libfinufft still needs, so run it both ways round.

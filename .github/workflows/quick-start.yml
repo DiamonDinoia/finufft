@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, windows-2025, macos-15, macos-15-intel, macos-26]
+        os: [ubuntu-24.04, windows-2022, windows-2025, macos-15, macos-15-intel, macos-26]
         linking: [Static, Shared]
         backend: [ducc, fftw]
     steps:
@@ -38,8 +38,8 @@ jobs:
       - name: Setup Cpp
         uses: aminya/setup-cpp@v1
         with:
-          compiler: ${{ startsWith(matrix.os, 'macos-') && 'llvm' || 'msvc' }}
-          vcvarsall: true
+          compiler: ${{ startsWith(matrix.os, 'macos-') && 'llvm' || (startsWith(matrix.os, 'windows-') && 'msvc' || '') }}
+          vcvarsall: ${{ startsWith(matrix.os, 'windows-') }}
           cmake: true
           ninja: true
       - name: Install toolchain + FFTW (macOS)
