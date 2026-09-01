@@ -54,7 +54,7 @@ Using FINUFFT from your own project
 
 There are seven routes: CPM, FetchContent, an installed package, a git
 submodule, a plain compiler line, pkg-config, and the GNU make install. We
-recommend the first.
+recommend the first. vcpkg and conda have their own sections below.
 
 Each route is a standalone project under ``examples/quick-start``, one directory
 per route, and each carries its own copy of this program, the C and Fortran ones
@@ -63,10 +63,13 @@ translated into their own language:
 .. literalinclude:: ../examples/quick-start/find_package/main.cpp
    :language: cpp
 
-CI configures, builds and runs each route on every pull request, so a recipe
-that stops working is a failed build rather than a stale page. The Fortran one
-runs on Linux alone, where the Fortran and C++ compilers come from one
-toolchain. The blocks below
+CI configures, builds and runs these routes on every pull request, so a recipe
+that stops working is a failed build rather than a stale page. A route a runner
+cannot host is skipped and named in the log: the C one needs a compiler with
+C99 ``double complex``, which MSVC is not, the Fortran one runs on Linux alone,
+where the Fortran and C++ compilers come from one toolchain, and the pkg-config
+recipe is a POSIX compiler line, so it runs wherever a working ``pkg-config`` and
+such a driver exist. The blocks below
 are the project files themselves, so substitute your own target and sources for
 ``app`` and ``main.cpp``.
 
@@ -92,8 +95,9 @@ links it to your executable:
    :language: cmake
 
 Replace ``#master`` with ``@2.5.1`` to pin a release. Everything above
-``CPMAddPackage`` is CPM's own bootstrap, taken from that wiki page; a project
-that already has CPM keeps the ``CPMAddPackage`` line alone.
+``CPMAddPackage`` is CPM's own bootstrap, the same one FINUFFT uses in
+``cmake/setupCPM.cmake``; a project that already has CPM keeps the
+``CPMAddPackage`` line alone.
 
 2) **FetchContent**: this tool comes with CMake, and clones FINUFFT at configure
 time:
@@ -204,7 +208,9 @@ the OpenMP runtime and the C++ runtime to ``-lfinufft``.
 Run it with ``PKG_CONFIG_PATH=<install prefix>/lib/pkgconfig make``, adding
 ``STATIC=--static`` against a static install and using ``lib64`` where the
 install puts the library there. The file derives its prefix from its own
-location, so a moved install tree still resolves.
+location, so a moved install tree still resolves; an absolute
+``CMAKE_INSTALL_LIBDIR`` puts the file outside the prefix, and it then carries
+the configure-time prefix instead.
 
 7) **GNU make install**. The :ref:`GNU make route <gnumake>` installs the shared
 and static libraries and the public headers under ``PREFIX``, without CMake and
@@ -260,7 +266,8 @@ first need those three dependencies packaged.
 CMake based installation and compilation
 ----------------------------------------
 
-Make sure you have ``cmake`` version at least 3.25.
+Make sure you have ``cmake`` version at least 3.25, and 3.26 to run the
+quick-start recipes.
 
 .. _cmake-presets:
 

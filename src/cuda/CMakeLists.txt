@@ -98,12 +98,13 @@ set_target_properties(
         WINDOWS_EXPORT_ALL_SYMBOLS NO
 )
 
+# The interface stays at C++17 in every build, so the installed package asks a consumer
+# for the same standard whether or not it was built in CI.
+target_compile_features(cufinufft PUBLIC cxx_std_17)
 if(DEFINED ENV{GITHUB_ACTIONS} AND "$ENV{GITHUB_ACTIONS}" STREQUAL "true" AND MSVC)
     message(STATUS "GITHUB_ACTIONS on Windows using c++20 for cufinufft")
-    target_compile_features(cufinufft PUBLIC cxx_std_20)
-    target_compile_features(cufinufft PRIVATE cuda_std_20)
+    target_compile_features(cufinufft PRIVATE cxx_std_20 cuda_std_20)
 else()
-    target_compile_features(cufinufft PUBLIC cxx_std_17)
     target_compile_features(cufinufft PRIVATE cuda_std_17)
 endif()
 target_compile_options(cufinufft PUBLIC ${FINUFFT_CUDA_FLAGS})
@@ -129,7 +130,7 @@ target_link_libraries(
         $<BUILD_INTERFACE:poet::poet>
 )
 
-if(FINUFFT_ENABLE_INSTALL AND NOT FINUFFT_SHARED_LINKING)
+if(FINUFFT_ENABLE_INSTALL AND FINUFFT_STATIC_LINKING)
     target_link_libraries(
         cufinufft
         INTERFACE $<INSTALL_INTERFACE:CUDA::cudart> $<INSTALL_INTERFACE:CUDA::cufft> $<INSTALL_INTERFACE:finufft_common>

@@ -1,6 +1,5 @@
 cmake_minimum_required(VERSION 3.26)
-# CXX is enabled because finufft is a C++ library: its config file looks for the C++
-# OpenMP runtime, and a static libfinufft has to be linked with the C++ driver.
+# CXX is enabled because a static libfinufft links with the C++ driver.
 project(finufft_consume_fortran LANGUAGES Fortran CXX)
 
 find_package(finufft REQUIRED)

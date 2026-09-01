@@ -19,9 +19,16 @@ if(@FINUFFT_STATIC_LINKING@ AND @FINUFFT_USE_DUCC0@)
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/FindFFTW.cmake" AND NOT TARGET FFTW::Double)
+    # find_dependency() returns from this file when it fails, which would leave the
+    # module path prepended in the consumer, so the search runs through find_package.
     list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
-    find_dependency(FFTW)
+    find_package(FFTW QUIET)
     list(POP_FRONT CMAKE_MODULE_PATH)
+    if(NOT FFTW_FOUND)
+        set(finufft_FOUND FALSE)
+        set(finufft_NOT_FOUND_MESSAGE "finufft was built against FFTW, which was not found")
+        return()
+    endif()
 endif()
 
 if(@FINUFFT_USE_CUDA@)

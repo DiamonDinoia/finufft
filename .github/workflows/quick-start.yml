@@ -58,6 +58,25 @@ jobs:
         shell: bash
         run: tools/ci/install-test.sh
 
+  controls:
+    name: negative controls (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    env:
+      CMAKE_GENERATOR: Ninja
+      CONTROLS: "1"
+      LINKING: Static
+      BACKEND: fftw
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Install FFTW
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfftw3-dev
+      - name: Run the routes and the controls that prove the guards fire
+        shell: bash
+        run: tools/ci/install-test.sh
+
   docs-claims:
     name: docs match the recipes
     runs-on: ubuntu-24.04

@@ -1,6 +1,5 @@
-# Turn one resolved link item into pkg-config flags: a target built here becomes
-# -l<output name> because it is installed into ${libdir}, an imported one resolves to
-# the -L/-l pair for the file it points at, and a bare flag passes through.
+# Resolve one link item to pkg-config flags. A target built here installs into ${libdir}
+# and needs no -L of its own.
 function(finufft_pc_item item out_flags)
     set(flags ${${out_flags}})
     if(TARGET ${item})
@@ -33,11 +32,18 @@ function(finufft_pc_item item out_flags)
         endif()
     elseif(item MATCHES "^-")
         list(APPEND flags "${item}")
-    elseif(IS_ABSOLUTE "${item}" AND EXISTS "${item}")
+    elseif(IS_ABSOLUTE "${item}")
         get_filename_component(dir "${item}" DIRECTORY)
         get_filename_component(name "${item}" NAME_WE)
         string(REGEX REPLACE "^lib" "" name "${name}")
         list(APPEND flags "-L${dir}" "-l${name}")
+    elseif(item MATCHES "\\$<" OR item MATCHES "::")
+        # A generator expression, or a target this directory cannot see: neither has a
+        # name a linker could use.
+        message(WARNING "finufft.pc cannot name the link item ${item}")
+    else()
+        # A bare library name, which is what -DFINUFFT_FFTW_LIBRARIES=fftw3;fftw3f gives.
+        list(APPEND flags "-l${item}")
     endif()
     set(${out_flags} ${flags} PARENT_SCOPE)
 endfunction()
@@ -68,8 +74,16 @@ function(finufft_pc_libs_private out)
         finufft_pc_item(finufft_common flags)
     endif()
     list(APPEND flags ${FINUFFT_PC_FFT_FLAGS})
-    if(FINUFFT_USE_OPENMP AND OpenMP_CXX_FLAGS)
-        list(APPEND flags ${OpenMP_CXX_FLAGS})
+    if(FINUFFT_USE_OPENMP AND TARGET OpenMP::OpenMP_CXX)
+        # -fopenmp is a link flag for GCC and for clang that takes it directly. Apple clang
+        # reaches OpenMP only through -Xclang/-Xpreprocessor and needs the runtime named.
+        if(OpenMP_CXX_FLAGS MATCHES "-X(clang|preprocessor)")
+            foreach(lib ${OpenMP_CXX_LIBRARIES})
+                finufft_pc_item("${lib}" flags)
+            endforeach()
+        else()
+            list(APPEND flags ${OpenMP_CXX_FLAGS})
+        endif()
     elseif(CMAKE_THREAD_LIBS_INIT)
         # DUCC0 links Threads::Threads privately when OpenMP is off
         list(APPEND flags ${CMAKE_THREAD_LIBS_INIT})
@@ -87,15 +101,18 @@ endfunction()
 
 function(finufft_write_pkgconfig)
     # Derive the prefix from where the .pc file itself ends up, so `cmake --install
-    # --prefix` and a relocated install tree still resolve.
-    file(RELATIVE_PATH rel "${CMAKE_INSTALL_FULL_LIBDIR}/pkgconfig" "${CMAKE_INSTALL_PREFIX}")
-    if(rel STREQUAL "")
-        set(rel ".")
-    endif()
-    set(FINUFFT_PC_PREFIX "\${pcfiledir}/${rel}")
+    # --prefix` and a relocated install tree still resolve. An absolute libdir pins the
+    # file outside the prefix, so there is no relative path to walk and the prefix is
+    # whatever the configure step said.
     if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
+        set(FINUFFT_PC_PREFIX "${CMAKE_INSTALL_PREFIX}")
         set(FINUFFT_PC_LIBDIR "${CMAKE_INSTALL_LIBDIR}")
     else()
+        file(RELATIVE_PATH rel "${CMAKE_INSTALL_FULL_LIBDIR}/pkgconfig" "${CMAKE_INSTALL_PREFIX}")
+        if(rel STREQUAL "")
+            set(rel ".")
+        endif()
+        set(FINUFFT_PC_PREFIX "\${pcfiledir}/${rel}")
         set(FINUFFT_PC_LIBDIR "\${prefix}/${CMAKE_INSTALL_LIBDIR}")
     endif()
     if(IS_ABSOLUTE "${CMAKE_INSTALL_INCLUDEDIR}")

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 rm -rf _build _stage _makestage _consume _fetch _cpm _submod _c _fortran _pkgconfig _leak _broken _broken_consume \
-	_nofetch _userfftw _deffftw broken.log nofetch.log userfftw.log deffftw.log \
+	_nofetch _userfftw _deffftw _abslibdir broken.log nofetch.log userfftw.log deffftw.log abslibdir.log \
 	examples/quick-start/makefile/app examples/quick-start/pkgconfig/app
 
 linking=${LINKING:-Static}
@@ -43,6 +43,19 @@ cmake -S . -B _build -DCMAKE_BUILD_TYPE=Release \
 	"${install_flags[@]}"
 cmake --build _build --config Release
 cmake --install _build --prefix "$stage" --config Release
+
+# Plain strings, not arrays: macOS runners still ship bash 3.2, where an empty array
+# under `set -u` is an error.
+routes=
+skipped=
+skip() { # $1 = route, $2 = why it could not run here
+	skipped="$skipped $1"
+	if [[ "$cuda" == "1" ]]; then
+		echo "SKIP $1: CPU route, this arm builds CUDA only"
+	else
+		echo "SKIP $1: $2"
+	fi
+}
 
 run_app() { # $1 = the consumer's build directory
 	local app
@@ -110,6 +123,7 @@ cmake --build _consume --config Release
 export LD_LIBRARY_PATH="$stage/lib:$stage/lib64:${LD_LIBRARY_PATH:-}"
 export DYLD_LIBRARY_PATH="$stage/lib:${DYLD_LIBRARY_PATH:-}"
 run_app _consume
+routes="$routes find_package"
 
 # The C API from C, not C++: MSVC has no C99 `double complex`, the same limit that
 # gates examples/simple1d1c.c.
@@ -118,6 +132,9 @@ if [[ "$cuda" == "0" && "${RUNNER_OS:-}" != "Windows" ]]; then
 		-DCMAKE_PREFIX_PATH="$stage"
 	cmake --build _c --config Release
 	run_app _c
+	routes="$routes c"
+else
+	skip c "MSVC has no C99 double complex"
 fi
 
 if [[ "$cuda" == "0" && "$fortran" == "1" ]]; then
@@ -125,11 +142,15 @@ if [[ "$cuda" == "0" && "$fortran" == "1" ]]; then
 		-DCMAKE_PREFIX_PATH="$stage"
 	cmake --build _fortran --config Release
 	run_app _fortran
+	routes="$routes fortran"
+else
+	skip fortran "no gfortran from the toolchain that built the install"
 fi
 
-# pkg-config is the only route that tells a plain compiler line what a *static*
-# libfinufft still needs, so run it both ways round.
-if [[ "$cuda" == "0" ]] && command -v pkg-config >/dev/null; then
+# The recipe is a POSIX compiler line, so it needs a Unix-like driver. On the Windows
+# runners `command -v pkg-config` also finds Strawberry Perl's copy, which aborts on
+# every invocation, so the route asks it for its version before believing it.
+if [[ "$cuda" == "0" && "${RUNNER_OS:-}" != "Windows" ]] && pkg-config --version >/dev/null 2>&1; then
 	pcdir=$stage/lib/pkgconfig
 	[[ -d "$pcdir" ]] || pcdir=$stage/lib64/pkgconfig
 	[[ -f "$pcdir/finufft.pc" ]] || {
@@ -141,6 +162,9 @@ if [[ "$cuda" == "0" ]] && command -v pkg-config >/dev/null; then
 	PKG_CONFIG_PATH="$pcdir" make -C examples/quick-start/pkgconfig STATIC="$pcstatic" clean app
 	run_app examples/quick-start/pkgconfig
 	make -C examples/quick-start/pkgconfig clean
+	routes="$routes pkgconfig"
+else
+	skip pkgconfig "no working pkg-config, or a compiler line this recipe does not fit"
 fi
 
 cmake -S "$fetch_consumer" -B _fetch -DCMAKE_BUILD_TYPE=Release \
@@ -149,6 +173,7 @@ cmake -S "$fetch_consumer" -B _fetch -DCMAKE_BUILD_TYPE=Release \
 	"${install_flags[@]}"
 cmake --build _fetch --config Release
 run_app _fetch
+routes="$routes fetchcontent"
 
 if [[ "$cuda" == "0" && "$backend" == "ducc" ]]; then
 	cpm_cache=()
@@ -164,6 +189,9 @@ if [[ "$cuda" == "0" && "$backend" == "ducc" ]]; then
 		"${install_flags[@]}"
 	cmake --build _cpm --config Release
 	run_app _cpm
+	routes="$routes cpm"
+else
+	skip cpm "run once per platform, on the ducc backend"
 fi
 
 if [[ "$cuda" == "0" && "$backend" == "ducc" ]]; then
@@ -173,6 +201,9 @@ if [[ "$cuda" == "0" && "$backend" == "ducc" ]]; then
 		"${install_flags[@]}"
 	cmake --build _submod --config Release
 	run_app _submod
+	routes="$routes subdirectory"
+else
+	skip subdirectory "run once per platform, on the ducc backend"
 fi
 
 if [[ "$cuda" == "0" && "$linking" == "Shared" && "${RUNNER_OS:-}" != "Windows" ]]; then
@@ -181,6 +212,9 @@ if [[ "$cuda" == "0" && "$linking" == "Shared" && "${RUNNER_OS:-}" != "Windows" 
 	make -C examples/quick-start/makefile PREFIX="$stage" LIBDIR="$libdir" clean app
 	run_app examples/quick-start/makefile
 	make -C examples/quick-start/makefile clean
+	routes="$routes compiler-line"
+else
+	skip compiler-line "needs a shared libfinufft and a POSIX compiler driver"
 fi
 
 if [[ "$cuda" == "0" && "$backend" == "ducc" && "$linking" == "Shared" && "$(uname -s)" == "Linux" ]]; then
@@ -190,7 +224,13 @@ if [[ "$cuda" == "0" && "$backend" == "ducc" && "$linking" == "Shared" && "$(una
 	run_app examples/quick-start/makefile
 	make -C examples/quick-start/makefile clean
 	make objclean >/dev/null
+	routes="$routes gnu-make-install"
+else
+	skip gnu-make-install "the GNU makefile builds shared with DUCC0 on Linux"
 fi
+
+echo "ROUTES RUN:$routes"
+[[ -z "$skipped" ]] || echo "ROUTES SKIPPED:$skipped"
 
 [[ "${CONTROLS:-0}" == "1" ]] || exit 0
 
@@ -209,6 +249,7 @@ if [[ "$cuda" == "1" ]]; then
 			tail -30 broken.log
 			exit 1
 		}
+	echo "CONTROL ok: an emptied CUDA link interface breaks the consumer"
 	exit 0
 fi
 
@@ -224,6 +265,7 @@ grep -q "FINUFFT could not fetch FFTW" nofetch.log ||
 		tail -30 nofetch.log
 		exit 1
 	}
+echo "CONTROL ok: a disconnected FFTW fetch fails with the FINUFFT message"
 
 cmake -S . -B _userfftw -DFINUFFT_USE_DUCC0=OFF -DFINUFFT_STATIC_LINKING=ON \
 	-DFINUFFT_FFTW_LIBRARIES="fftw3;fftw3f" >userfftw.log 2>&1
@@ -233,9 +275,28 @@ grep -q "is supplied by hand" userfftw.log ||
 		tail -30 userfftw.log
 		exit 1
 	}
+grep -qE -- '-lfftw3( |$)' _userfftw/finufft.pc ||
+	{
+		echo "ERROR: a hand-supplied FFTW is missing from the static pkg-config line"
+		grep Libs _userfftw/finufft.pc
+		exit 1
+	}
+echo "CONTROL ok: a hand-supplied FFTW reaches Libs.private"
 cmake -S . -B _deffftw -DFINUFFT_USE_DUCC0=OFF -DFINUFFT_STATIC_LINKING=ON \
 	>deffftw.log 2>&1
 if grep -q "is supplied by hand" deffftw.log; then
 	echo "ERROR: DEFAULT warned as well, so the check proves nothing"
 	exit 1
 fi
+echo "CONTROL ok: the hand-supplied warning fires only when FFTW is hand-supplied"
+
+# An absolute libdir puts the .pc outside the prefix, so the relative ${pcfiledir} walk
+# cannot reach it and the file has to carry the prefix itself.
+cmake -S . -B _abslibdir -DCMAKE_INSTALL_LIBDIR=/opt/finufft/lib >abslibdir.log 2>&1
+grep -qE '^prefix=/' _abslibdir/finufft.pc ||
+	{
+		echo "ERROR: an absolute libdir left the .pc prefix unresolvable"
+		grep -E '^(prefix|libdir|includedir)=' _abslibdir/finufft.pc
+		exit 1
+	}
+echo "CONTROL ok: an absolute libdir still yields a resolvable prefix"
