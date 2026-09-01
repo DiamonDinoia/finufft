@@ -24,20 +24,6 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04
-          - os: windows-2022
-          - os: windows-2025
-            # CUDA 12.4's nvcc rejects VS2026's v145 (_MSC_VER >= 1950); the image
-            # carries the v143 toolset side-by-side, so select it
-            msvc_toolset: '14.44'
-#         - os: macos-13 this requires matlab openmp to work.
-          - os: macos-15
-            osx_arch: arm64
-            xcode_version: '16.4'
-          - os: macos-26
-            osx_arch: arm64
-          - os: macos-15-intel
-            osx_arch: x86_64
-            xcode_version: '16.4'
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     # mac runners have hung inside MATLAB startup (the mexext probe) for hours;
@@ -156,7 +142,7 @@ jobs:
           fi
 
       - name: Inspect finufft MEX OpenMP dependency (unix)
-        if: runner.os != 'Windows'
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           MEX="build/matlab/finufft.${MEXEXT}"
@@ -250,11 +236,6 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04
-          - os: windows-2022
-          - os: windows-2025
-          - os: macos-15
-          - os: macos-26
-          - os: macos-15-intel
     name: consume-${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45

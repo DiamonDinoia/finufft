@@ -14,7 +14,7 @@ endif()
 # (wmutschl/matlab_openmp_tls_bug) do the same, and it is what
 # make-platforms/make.inc.macosx_*_matlab has always done. Windows is excluded:
 # MSVC's /openmp targets the vcomp ABI, which libiomp5md does not answer.
-if(UNIX AND FINUFFT_BUILD_MATLAB AND FINUFFT_USE_OPENMP)
+if(APPLE AND FINUFFT_BUILD_MATLAB AND FINUFFT_USE_OPENMP)
     find_library(
         Matlab_OMP_LIBRARY
         NAMES omp iomp5
