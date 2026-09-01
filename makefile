@@ -170,7 +170,7 @@ COMMON_OBJS = src/fft.o src/c_interface.o fortran/finufftfort.o
 # all lib dual-precision objs (note DUCC_OBJS empty if unused)
 OBJS = $(SOBJS) $(PRECISION_OBJS) $(PRECISION_OBJS:%.o=%_f.o) $(COMMON_OBJS) $(DUCC_OBJS)
 
-.PHONY: usage lib cufinufft checkgpu examples test perftest spreadtest spreadtestall fortran matlab octave all mex python clean objclean pyclean mexclean wheel docker-wheel gurutime docs setup setupclean
+.PHONY: usage lib install cufinufft checkgpu examples cuexamples test perftest spreadtest spreadtestall fortran matlab octave all mex python clean objclean pyclean mexclean wheel docker-wheel gurutime docs web setup setupclean
 
 default: usage
 
@@ -179,8 +179,10 @@ all: test lib examples fortran matlab octave python spreadtest spreadtestsweep p
 usage:
 	@echo "Makefile for FINUFFT. Please specify your task:"
 	@echo " make lib - build the main CPU library (in lib/ and lib-static/)"
+	@echo " make install PREFIX=<dir> - install the CPU library and its headers"
 	@echo " make cufinufft - build the GPU library (needs the CUDA toolkit)"
 	@echo " make checkgpu - compile and run quick GPU math validation tests"
+	@echo " make cuexamples - compile and run the C examples in examples/cuda/"
 	@echo " make examples - compile and run all codes in examples/"
 	@echo " make test - compile and run quick math validation tests"
 	@echo " make fortran - compile and run Fortran tests and examples"
@@ -195,6 +197,7 @@ usage:
 	@echo " make clean - also remove all lib, MEX, py, and demo executables"
 	@echo " make setup - check (and possibly download) dependencies"
 	@echo " make setupclean - delete downloaded dependencies (try if errors)"
+	@echo " make web - build HTML docs and serve at http://localhost:8042"
 	@echo "For faster (multicore) compilation, append, for example, -j8"
 	@echo ""
 	@echo "Make options:"
@@ -260,21 +263,35 @@ endif
 # Also note -l libs come after objects, as per modern GCC requirement.
 
 
+# install (GNU make route) ---------------------------------------------------
+PREFIX ?= /usr/local
+PUBLIC_HEADERS = include/finufft.h include/finufft_opts.h include/finufft_errors.h
+install: lib
+	mkdir -p $(PREFIX)/lib $(PREFIX)/include/finufft $(PREFIX)/include/finufft_common
+	cp $(DYNLIB) $(STATICLIB) $(PREFIX)/lib
+	cp $(PUBLIC_HEADERS) $(PREFIX)/include
+	cp include/finufft/finufft_eitherprec.h $(PREFIX)/include/finufft
+	cp include/finufft_common/defines.h $(PREFIX)/include/finufft_common
+	@echo "installed $(LIBNAME) into $(PREFIX)"
+
 # GPU library (cuFINUFFT) ----------------------------------------------------
 # Needs the CUDA toolkit (nvcc + cuFFT); CMake remains the tested route, this
 # mirrors src/cuda/CMakeLists.txt for sites that build with the makefile.
 # Override NVCC/NVARCH (and CXX, used as nvcc's host compiler) in make.inc;
 # see make-platforms/make.inc.{FI,CIMS,nersc_perlmutter} for site examples.
 NVCC ?= nvcc
+CUDA_HOME ?= $(patsubst %/bin/,%,$(dir $(shell command -v $(NVCC))))
 # fat binary by default: no GPU is needed at build time and the result runs on
 # any device the toolkit supports. For one known GPU use eg NVARCH = -arch=sm_80
 NVARCH ?= -arch=all-major
 CUINCL = -Iinclude -Icontrib -I$(POET_DIR)/include -Isrc/cuda
-NVCCFLAGS := -O3 -std=c++17 $(NVARCH) $(CUINCL) -ccbin=$(CXX) --extended-lambda \
+CUDEFS = -DFINUFFT_DLL -Ddll_EXPORTS
+NVCCFLAGS := -O3 -std=c++17 $(NVARCH) $(CUINCL) $(CUDEFS) -ccbin=$(CXX) --extended-lambda \
 	     --extra-device-vectorization -Xcompiler "-fPIC -fvisibility=hidden" $(NVCCFLAGS)
-# pure-host TUs of the GPU lib (no kernels): -x c++ hands them straight to the
-# host compiler, but still with nvcc's include paths (cuda_runtime.h, CCCL)
-CUXXFLAGS := -x c++ -O3 -std=c++17 $(CUINCL) -ccbin=$(CXX) -Xcompiler "-fPIC -fvisibility=hidden" $(CUXXFLAGS)
+# pure-host TUs of the GPU lib (no kernels): the host compiler builds them, as
+# LANGUAGE CXX does in CMake. nvcc -x c++ still defines __CUDACC__, which sends
+# the CCCL headers down their device path and fails to find the device builtins.
+CUXXFLAGS := -O3 -std=c++17 $(CUINCL) $(CUDEFS) -I$(CUDA_HOME)/include -fPIC -fvisibility=hidden $(CUXXFLAGS)
 CULIBS = -lcufft -lcudart
 CULIBNAME = libcufinufft
 CUDYNLIB = lib/$(CULIBNAME).so
@@ -299,7 +316,7 @@ src/cuda/%_3d.o: src/cuda/%_inst.cu $(CUHEADERS)
 src/cuda/%.o: src/cuda/%.cu $(CUHEADERS)
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 src/cuda/%.o: src/cuda/%.cpp $(CUHEADERS)
-	$(NVCC) $(CUXXFLAGS) -c $< -o $@
+	$(CXX) $(CUXXFLAGS) -c $< -o $@
 
 cufinufft: $(CUSTATICLIB) $(CUDYNLIB)
 $(CUSTATICLIB): $(CUOBJS)
@@ -320,6 +337,14 @@ checkgpu: $(CUTESTS)
 	test/cuda/cufinufft2d_test 0 1 2e2 2e2 4e3 1e-8 1e-7 d 2.0
 	test/cuda/cufinufft3d_test 0 1 20 40 30 4e3 1e-8 1e-7 d 2.0
 	@echo "GPU math tests passed"
+
+CUEXAMPLES = examples/cuda/simple1d1c
+examples/cuda/%: examples/cuda/%.c $(CUDYNLIB)
+	$(CC) $(CFLAGS) -I$(CUDA_HOME)/include ${LDFLAGS} $< $(ABSCUDYNLIB) \
+	    -L$(CUDA_HOME)/lib64 $(CULIBS) $(LIBS) $(CLINK) -o $@
+cuexamples: $(CUEXAMPLES)
+	for i in $(CUEXAMPLES); do echo $$i...; ./$$i; done
+	@echo "Done running: $(CUEXAMPLES)"
 
 
 # examples (C++/C) -----------------------------------------------------------
@@ -642,6 +667,22 @@ docs/matlabhelp.doc: docs/genmatlabhelp.sh matlab/*.sh matlab/*.docsrc matlab/*.
 	(cd matlab; ./addmhelp.sh)
 	(cd docs; ./genmatlabhelp.sh)
 
+web:
+	make -C docs html || { \
+		echo ""; \
+		echo "Doc build failed - missing sphinx deps? Set up an environment with uv:"; \
+		echo "  uv venv ~/.venvs/finufft-docs   # skip if the venv already exists"; \
+		echo "  uv pip install --python ~/.venvs/finufft-docs/bin/python sphinx -r docs/requirements.txt"; \
+		echo "  source ~/.venvs/finufft-docs/bin/activate"; \
+		echo "or with plain pip:"; \
+		echo "  python3 -m venv ~/.venvs/finufft-docs   # skip if the venv already exists"; \
+		echo "  ~/.venvs/finufft-docs/bin/pip install sphinx -r docs/requirements.txt"; \
+		echo "  source ~/.venvs/finufft-docs/bin/activate"; \
+		echo "then re-run 'make web' with the venv active."; \
+		exit 1; }
+	@echo "Serving docs at http://localhost:8042 (Ctrl-C to stop)"
+	@$(PYTHON) -m http.server 8042 -d docs/_build/html
+
 
 
 # =============================== CLEAN UP ==================================
@@ -652,7 +693,7 @@ ifneq ($(MINGW),ON)
 	rm -f $(STATICLIB) $(DYNLIB) $(CUSTATICLIB) $(CUDYNLIB)
 	rm -f matlab/finufft.mex*
 	rm -f $(TESTS) $(CUTESTS) test/results/*.out perftest/results/*.out
-	rm -f $(EXAMPLES) $(FE) $(ST) $(STF) $(STA) $(STAF) $(GTT) $(GTTF)
+	rm -f $(EXAMPLES) $(CUEXAMPLES) $(FE) $(ST) $(STF) $(STA) $(STAF) $(GTT) $(GTTF)
 	rm -f perftest/manysmallprobs perftest/big2d2f
 	rm -f examples/core test/core perftest/core $(FE_DIR)/core
 	rm -f fortran/examples/finufft_mod.mod
