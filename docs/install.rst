@@ -52,18 +52,36 @@ MATLAB-only users can similarly skip building from source by installing a precom
 Using FINUFFT from your own project
 -----------------------------------
 
-There are six routes: CPM, FetchContent, an installed package, a git submodule,
-a plain compiler line, and the GNU make install. We recommend the first.
+There are seven routes: CPM, FetchContent, an installed package, a git
+submodule, a plain compiler line, pkg-config, and the GNU make install. We
+recommend the first.
 
 Each route is a standalone project under ``examples/quick-start``, one directory
-per route, and each carries its own copy of this program:
+per route, and each carries its own copy of this program, the C and Fortran ones
+translated into their own language:
 
 .. literalinclude:: ../examples/quick-start/find_package/main.cpp
    :language: cpp
 
 CI configures, builds and runs each route on every pull request, so a recipe
-that stops working is a failed build rather than a stale page. The blocks below are the project files themselves, so substitute
-your own target and sources for ``app`` and ``main.cpp``.
+that stops working is a failed build rather than a stale page. The Fortran one
+runs on Linux alone, where the Fortran and C++ compilers come from one
+toolchain. The blocks below
+are the project files themselves, so substitute your own target and sources for
+``app`` and ``main.cpp``.
+
+``finufft::finufft`` and ``finufft::cufinufft`` carry the C++17 requirement on
+their interface, so a consumer sets no language standard of its own.
+
+The ``add_custom_command`` closing each recipe is the snippet from the
+`CMake manual <https://cmake.org/cmake/help/latest/manual/cmake-generator-expressions.7.html#genex:TARGET_RUNTIME_DLLS>`_,
+copied verbatim. On Windows it places beside the executable every DLL its
+dependencies need, FINUFFT's and the FFT backend's alike; on every other
+platform ``TARGET_RUNTIME_DLLS`` is empty and the command does nothing, so one
+recipe runs everywhere. Two cases do not need it at all: FINUFFT's default
+build is static, which produces no DLLs, and a consumer of a shared *install*
+can put ``<prefix>/bin`` on ``PATH`` instead. It needs CMake 3.26 for
+``cmake -E copy -t``, which is what lets the command accept an empty list.
 
 1) **CPM**. First include `CPM <https://github.com/cpm-cmake/CPM.cmake>`_ in your
 project, by following the `instructions <https://github.com/cpm-cmake/CPM.cmake/wiki/Downloading-CPM.cmake-in-CMake>`_
@@ -73,11 +91,9 @@ links it to your executable:
 .. literalinclude:: ../examples/quick-start/cpm/CMakeLists.txt
    :language: cmake
 
-The shortest form of the same thing is
-``CPMAddPackage("gh:flatironinstitute/finufft#master")`` (replace ``#master``
-with ``@2.5.1`` to pin a release). ``FINUFFT_SOURCE_DIR`` above only says where
-to find the CPM bootstrap CI reuses; your project adds the four lines from the
-CPM wiki instead.
+Replace ``#master`` with ``@2.5.1`` to pin a release. Everything above
+``CPMAddPackage`` is CPM's own bootstrap, taken from that wiki page; a project
+that already has CPM keeps the ``CPMAddPackage`` line alone.
 
 2) **FetchContent**: this tool comes with CMake, and clones FINUFFT at configure
 time:
@@ -124,6 +140,26 @@ have to enable the ``CUDA`` language: the public headers are plain C++ and a
 static ``cufinufft`` carries ``CUDA::cudart`` and ``CUDA::cufft`` on its link
 interface.
 
+The same installed package serves C and Fortran. Both enable ``CXX`` next to
+their own language, because ``find_package(finufft)`` looks for the C++ OpenMP
+runtime and a static ``libfinufft.a`` has to be linked with the C++ driver:
+
+.. literalinclude:: ../examples/quick-start/c/CMakeLists.txt
+   :language: cmake
+
+.. literalinclude:: ../examples/quick-start/c/main.c
+   :language: c
+
+The Fortran interface is the ``finufft.fh`` header, which
+``-DFINUFFT_BUILD_FORTRAN=ON`` installs. It is fixed-form, so include it from
+fixed-form source:
+
+.. literalinclude:: ../examples/quick-start/fortran/CMakeLists.txt
+   :language: cmake
+
+.. literalinclude:: ../examples/quick-start/fortran/main.f
+   :language: fortran
+
 4) **Git submodule**. A submodule reaches CMake as a plain ``add_subdirectory``,
 which is the build ``FetchContent_MakeAvailable`` above performs as well::
 
@@ -132,16 +168,16 @@ which is the build ``FetchContent_MakeAvailable`` above performs as well::
 .. literalinclude:: ../examples/quick-start/subdirectory/CMakeLists.txt
    :language: cmake
 
-``FINUFFT_SOURCE_DIR`` defaults to the checkout the recipe lives in; a submodule
-user writes ``add_subdirectory(extern/finufft)`` and needs no cache variable.
-CPM is the one route that differs from these two: ``CPMAddPackage`` passes
-``EXCLUDE_FROM_ALL`` and ``SYSTEM``, which keep the FINUFFT targets out of your
-``all`` target and turn its headers into system includes. With this route and
-with FetchContent, nothing excludes them, so the FINUFFT targets join your
-``all`` target and its install rules join your project's: ``cmake --install`` on
-your project installs FINUFFT as well. Add ``EXCLUDE_FROM_ALL`` to
-``add_subdirectory`` (or to ``FetchContent_Declare``, which takes it from CMake
-3.28), or set ``-DFINUFFT_ENABLE_INSTALL=OFF``, if that is not what you want.
+``FINUFFT_SOURCE_DIR`` names the checkout so that CI can point the recipe at
+another one; a submodule user writes ``add_subdirectory(extern/finufft)``
+directly and needs no cache variable.
+
+FINUFFT installs itself only when it is the top-level project, so with this
+route, with FetchContent and with CPM, ``cmake --install`` on your project
+installs your project alone. Configure with ``-DFINUFFT_ENABLE_INSTALL=ON`` to
+install FINUFFT from a subproject build. Its targets do join your ``all``
+target; add ``EXCLUDE_FROM_ALL`` to ``add_subdirectory`` (or to
+``FetchContent_Declare``, which takes it from CMake 3.28) to keep them out.
 
 5) **No CMake at all**. A shared install is usable from a plain compiler line,
 which is what ``examples/quick-start/makefile`` does:
@@ -153,12 +189,24 @@ Run it with ``make PREFIX=<install prefix>``, and add
 ``LIBDIR=<install prefix>/lib64`` where the install puts the library in ``lib64``
 rather than ``lib``, as RHEL-style prefixes do.
 
-This route needs a *shared* FINUFFT. A static ``libfinufft.a`` leaves its FFT
-and OpenMP dependencies to whoever links it, and ``finufftTargets.cmake`` is the
-only thing that knows what those are, so use one of the CMake routes above for a
-static install.
+This route needs a *shared* FINUFFT: a static ``libfinufft.a`` leaves its FFT
+and OpenMP dependencies to whoever links it, and this Makefile names none of
+them. The next route does.
 
-6) **GNU make install**. The :ref:`GNU make route <gnumake>` installs the shared
+6) **pkg-config**. A CMake install also ships
+``<libdir>/pkgconfig/finufft.pc``, which is the one non-CMake route that knows
+what a *static* ``libfinufft.a`` still needs: ``--static`` adds the FFT backend,
+the OpenMP runtime and the C++ runtime to ``-lfinufft``.
+
+.. literalinclude:: ../examples/quick-start/pkgconfig/Makefile
+   :language: make
+
+Run it with ``PKG_CONFIG_PATH=<install prefix>/lib/pkgconfig make``, adding
+``STATIC=--static`` against a static install and using ``lib64`` where the
+install puts the library there. The file derives its prefix from its own
+location, so a moved install tree still resolves.
+
+7) **GNU make install**. The :ref:`GNU make route <gnumake>` installs the shared
 and static libraries and the public headers under ``PREFIX``, without CMake and
 without a package config::
 

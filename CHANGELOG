@@ -3,11 +3,25 @@ If not stated, FINUFFT is assumed (old cuFINUFFT <=1.3 is listed separately).
 
 v2.6.0-dev
 
+* FINUFFT now carries the parts of a consumer's CMake that were boilerplate:
+  `finufft::finufft` and `finufft::cufinufft` carry the C++17 requirement on their
+  interface, so a consumer sets no language standard, and `FINUFFT_ENABLE_INSTALL`
+  defaults to OFF when FINUFFT is a subproject, so a FetchContent, CPM or
+  `add_subdirectory` consumer no longer installs FINUFFT along with its own project.
+  The quick-start recipes drop their hand-written Windows DLL-copy blocks for the
+  `$<TARGET_RUNTIME_DLLS>` snippet from the CMake manual, which is a no-op off
+  Windows and needs no `if(WIN32)`. (Barbone)
+* A CMake install now ships `<libdir>/pkgconfig/finufft.pc`. `pkg-config --static`
+  prints the FFT backend, the OpenMP runtime and the C++ runtime that a static
+  `libfinufft.a` still needs, which no other non-CMake route knows. The file locates
+  its own prefix, so a relocated install tree still resolves. (Barbone)
 * Every documented way to consume FINUFFT is now a standalone project under
   `examples/quick-start`, one directory per route (CPM, FetchContent, `find_package`,
-  a submodule, a plain compiler line, and the same for cuFINUFFT), each with its own
-  copy of a minimal program that checks one mode against a direct sum.
-  `tools/ci/install-test.sh` and the `quickstart` ctest label build and run them, and
+  a submodule, a plain compiler line, pkg-config, and the same for cuFINUFFT), each
+  with its own copy of a minimal program that checks one mode against a direct sum.
+  The C API from plain C and the Fortran `finufft.fh` header are two more such
+  projects, so an install that ships a broken header fails a build here rather than a
+  user's. `tools/ci/install-test.sh` and the `quickstart` ctest label run them, and
   `docs/install.rst` embeds the project files themselves, so the page cannot drift from
   what CI runs. (Barbone)
 * `examples/cuda/simple1d1c.c` calls cuFINUFFT from plain C, mirroring
