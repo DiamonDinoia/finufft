@@ -49,79 +49,165 @@ MATLAB-only users can similarly skip building from source by installing a precom
     On Windows the default CMake generator is Visual Studio (multi-config); see :ref:`multi-config` for the required ``--config`` flag, or use a :ref:`preset <cmake-presets>`.
 
 
-Including FINUFFT into your own CMake project
----------------------------------------------
+Using FINUFFT from your own project
+-----------------------------------
 
-This is the easiest way to install and use FINUFFT if you already use
-CMake in your own project, since CMake automates all aspects of
-installation and compilation.
-There are two options: CPM or FetchContent.
-We recommend the first.
+There are six routes: CPM, FetchContent, an installed package, a git submodule,
+a plain compiler line, and the GNU make install. We recommend the first.
 
-1) **CPM**. First include `CPM <https://github.com/cpm-cmake/CPM.cmake>`_ to your project, by following the `instructions <https://github.com/cpm-cmake/CPM.cmake/wiki/Downloading-CPM.cmake-in-CMake>`_ to automatically add CPM to CMake.
-Then add the following to your ``CMakeLists.txt``:
+Each route is a standalone project under ``examples/quick-start``, one directory
+per route, and each carries its own copy of this program:
 
-.. code-block:: cmake
+.. literalinclude:: ../examples/quick-start/find_package/main.cpp
+   :language: cpp
 
-  # short version
-  CPMAddPackage("gh:flatironinstitute/finufft@2.5.0")
+CI configures, builds and runs each route on every pull request, so a recipe
+that stops working is a failed build rather than a stale page. The blocks below are the project files themselves, so substitute
+your own target and sources for ``app`` and ``main.cpp``.
 
-  # alternative in case custom options are needed
-  CPMAddPackage(
-    NAME             Finufft
-    GIT_REPOSITORY   https://github.com/flatironinstitute/finufft.git
-    GIT_TAG          2.5.0
-    GIT_SHALLOW      Yes
-    GIT_PROGRESS     Yes
-    EXCLUDE_FROM_ALL Yes
-    SYSTEM
-  )
+1) **CPM**. First include `CPM <https://github.com/cpm-cmake/CPM.cmake>`_ in your
+project, by following the `instructions <https://github.com/cpm-cmake/CPM.cmake/wiki/Downloading-CPM.cmake-in-CMake>`_
+to add CPM to CMake automatically. Then ``CPMAddPackage`` downloads FINUFFT and
+links it to your executable:
 
-  target_link_libraries(your_executable [PUBLIC|PRIVATE|INTERFACE] finufft::finufft)
+.. literalinclude:: ../examples/quick-start/cpm/CMakeLists.txt
+   :language: cmake
 
-Then CMake will automatically download FINUFFT and link it to your executable.
+The shortest form of the same thing is
+``CPMAddPackage("gh:flatironinstitute/finufft#master")`` (replace ``#master``
+with ``@2.5.1`` to pin a release). ``FINUFFT_SOURCE_DIR`` above only says where
+to find the CPM bootstrap CI reuses; your project adds the four lines from the
+CPM wiki instead.
 
-2) **FetchContent**: This tool is provided directly by CMake.
-Add the following to your ``CMakeLists.txt``:
+2) **FetchContent**: this tool comes with CMake, and clones FINUFFT at configure
+time:
 
-.. code-block:: cmake
-
-    include(FetchContent)
-
-    # Define the finufft library
-    FetchContent_Declare(
-      finufft
-      GIT_REPOSITORY https://github.com/flatironinstitute/finufft.git
-      GIT_TAG 2.5.0
-    )
-
-    # Make the content available
-    FetchContent_MakeAvailable(finufft)
-
-    # Optionally, link the finufft library to your target
-    target_link_libraries(your_executable [PUBLIC|PRIVATE|INTERFACE] finufft::finufft)
-
-Then CMake will automatically download FINUFFT and link it to your executable.
+.. literalinclude:: ../examples/quick-start/fetchcontent/CMakeLists.txt
+   :language: cmake
 
 3) **Installed package via** ``find_package``. If FINUFFT has been built and
-installed (see :ref:`below <cmake-install>`), a downstream project can consume
-the installed package directly:
+installed (see :ref:`below <cmake-install>`), a downstream project consumes the
+installed package directly:
 
-.. code-block:: cmake
-
-    find_package(finufft REQUIRED)
-    target_link_libraries(your_executable [PUBLIC|PRIVATE|INTERFACE] finufft::finufft)
+.. literalinclude:: ../examples/quick-start/find_package/CMakeLists.txt
+   :language: cmake
 
 Point CMake at the install prefix when configuring your project, e.g.
 ``-DCMAKE_PREFIX_PATH=/path/to/install`` (or ``-Dfinufft_DIR=/path/to/install/lib/cmake/finufft``).
 The package config pulls in the required dependencies automatically
 (OpenMP, and for a *static* install the FFT backend). A **shared** install is
-fully self-contained — everything, including the FFT backend, is baked into the
+fully self-contained: everything, including the FFT backend, is baked into the
 library (``libfinufft.so``/``.dylib`` or ``finufft.dll``), so only the OpenMP
-runtime is needed at link time. For a **static** install built with the bundled
-DUCC0 backend, the backend archive is installed and exported alongside FINUFFT;
-a static install built against **FFTW** instead requires the consumer to make
-FFTW discoverable themselves (a shared build avoids this).
+runtime is needed at link time. A **static** install carries its FFT backend as
+well: DUCC0 and a FINUFFT-downloaded FFTW are installed and exported as archives
+alongside FINUFFT, and a static install against a *system* FFTW installs the
+``FindFFTW`` module that located it, which ``find_package(finufft)`` re-runs to
+find the same FFTW in the consumer.
+
+The GPU library is exported as ``finufft::cufinufft`` by the same package, so a
+build configured with ``-DFINUFFT_USE_CUDA=ON`` gives:
+
+.. literalinclude:: ../examples/quick-start/cuda/find_package/CMakeLists.txt
+   :language: cmake
+
+against this program:
+
+.. literalinclude:: ../examples/quick-start/cuda/find_package/main.cpp
+   :language: cpp
+
+``examples/quick-start/cuda/fetchcontent`` is the same for a FetchContent build,
+and Jenkins runs both against a device on every pull request.
+
+``find_package(finufft)`` runs ``find_dependency(CUDAToolkit)`` for it, so the
+CUDA toolkit has to be visible to the consumer as well. The consumer does not
+have to enable the ``CUDA`` language: the public headers are plain C++ and a
+static ``cufinufft`` carries ``CUDA::cudart`` and ``CUDA::cufft`` on its link
+interface.
+
+4) **Git submodule**. A submodule reaches CMake as a plain ``add_subdirectory``,
+which is the build ``FetchContent_MakeAvailable`` above performs as well::
+
+  git submodule add https://github.com/flatironinstitute/finufft.git extern/finufft
+
+.. literalinclude:: ../examples/quick-start/subdirectory/CMakeLists.txt
+   :language: cmake
+
+``FINUFFT_SOURCE_DIR`` defaults to the checkout the recipe lives in; a submodule
+user writes ``add_subdirectory(extern/finufft)`` and needs no cache variable.
+CPM is the one route that differs from these two: ``CPMAddPackage`` passes
+``EXCLUDE_FROM_ALL`` and ``SYSTEM``, which keep the FINUFFT targets out of your
+``all`` target and turn its headers into system includes. With this route and
+with FetchContent, nothing excludes them, so the FINUFFT targets join your
+``all`` target and its install rules join your project's: ``cmake --install`` on
+your project installs FINUFFT as well. Add ``EXCLUDE_FROM_ALL`` to
+``add_subdirectory`` (or to ``FetchContent_Declare``, which takes it from CMake
+3.28), or set ``-DFINUFFT_ENABLE_INSTALL=OFF``, if that is not what you want.
+
+5) **No CMake at all**. A shared install is usable from a plain compiler line,
+which is what ``examples/quick-start/makefile`` does:
+
+.. literalinclude:: ../examples/quick-start/makefile/Makefile
+   :language: make
+
+Run it with ``make PREFIX=<install prefix>``, and add
+``LIBDIR=<install prefix>/lib64`` where the install puts the library in ``lib64``
+rather than ``lib``, as RHEL-style prefixes do.
+
+This route needs a *shared* FINUFFT. A static ``libfinufft.a`` leaves its FFT
+and OpenMP dependencies to whoever links it, and ``finufftTargets.cmake`` is the
+only thing that knows what those are, so use one of the CMake routes above for a
+static install.
+
+6) **GNU make install**. The :ref:`GNU make route <gnumake>` installs the shared
+and static libraries and the public headers under ``PREFIX``, without CMake and
+without a package config::
+
+  make -j lib
+  make install PREFIX=$HOME/local
+
+The same ``examples/quick-start/makefile`` recipe then consumes that prefix, and
+CI runs exactly that pair on Linux. The install carries no dependency
+information, so a static link from this prefix is again the consumer's to
+resolve.
+
+Running the recipes
+~~~~~~~~~~~~~~~~~~~
+
+The three routes that need no install also run from a FINUFFT build::
+
+  cmake -S . -B build -G Ninja -DFINUFFT_BUILD_TESTS=ON -DFINUFFT_BUILD_QUICKSTART=ON
+  ctest --test-dir build -L quickstart --no-tests=error
+
+Each test configures, builds and runs one recipe as a separate project, with the
+FFT backend, linking and generator of the build it is started from, so it
+rebuilds FINUFFT. ``--no-tests=error`` is what makes the label a check: ``ctest``
+exits 0 when a label matches nothing, so a build configured without
+``FINUFFT_BUILD_QUICKSTART`` would otherwise report success.
+
+
+vcpkg
+~~~~~
+
+``tools/vcpkg/finufft`` is a vcpkg port that builds and installs the package
+above. vcpkg does not carry FINUFFT itself, so use the directory as an overlay,
+from the root of a FINUFFT checkout::
+
+  vcpkg install finufft --overlay-ports=tools/vcpkg
+
+The port builds that checkout rather than a released tarball, so it always
+matches the sources beside it. vcpkg keys its binary cache on the portfile and
+not on those sources, so add ``--editable`` after editing FINUFFT itself.
+
+On Windows add ``--triplet x64-windows-static-md``, which is the triplet the CI
+covers. The default ``x64-windows`` triplet fails inside vcpkg's own ``fftw3``
+port, which cannot link ``fftw3_omp.dll`` (``LNK1120``, 32 unresolved externals).
+
+The port keeps the ``fftw`` and ``openmp`` features on by default and offers
+``ducc0`` as an alternative FFT backend. It builds ``xsimd``, ``poet`` and the
+``findFFTW`` module from their upstream repositories at configure time, so the
+build needs network access even though vcpkg normally forbids it. That is also
+why the port is not submitted to the vcpkg registry: an upstream port would
+first need those three dependencies packaged.
 
 CMake based installation and compilation
 ----------------------------------------
@@ -149,24 +235,26 @@ The recommended developer workflow is three commands:
 List all available presets with ``cmake --list-presets all``. The most
 useful ones are:
 
-==================  =================================================================
-Preset              When to use it
-==================  =================================================================
-``default``         End-user Release build (Ninja, single-config).
-``dev``             Contributor default: RelWithDebInfo, tests and examples on.
-``dev-ducc``        Same as ``dev`` but uses DUCC0 instead of FFTW.
-``ninja-multi``     Multi-config build; works the same on every OS (see below).
-``sanitizers``      Debug build with ASAN/UBSAN enabled.
-``static-analysis`` clang-tidy + cppcheck inline (matches the CI static-analysis job).
-``fortran``         Build the Fortran wrappers and examples.
-``matlab``          Build the MATLAB MEX interface.
-``gpu``             Build the cuFINUFFT GPU library (CUDA toolchain required).
-``gpu-fat``         GPU build for mixed GPU models, or a login node with no GPU
-                    (see :ref:`HPC clusters <install_gpu_sites>`).
-``gpu-perlmutter``  GPU build on NERSC Perlmutter (Cray wrappers, A100).
-``all``             CPU + GPU + tests in one configuration.
-``all-wrappers``    Every CPU language wrapper at once (MATLAB + Fortran + DUCC0).
-==================  =================================================================
+=================== =================================================================
+Preset               When to use it
+=================== =================================================================
+``default``          End-user Release build (Ninja, single-config).
+``dev``              Contributor default: RelWithDebInfo, tests and examples on.
+``dev-ducc``         Same as ``dev`` but uses DUCC0 instead of FFTW.
+``ninja-multi``      Multi-config build; works the same on every OS (see below).
+``sanitizers``       Debug build with ASAN/UBSAN enabled.
+``static-analysis``  clang-tidy + cppcheck inline (matches the CI static-analysis job).
+``fortran``          Build the Fortran wrappers and examples.
+``matlab``           Build the MATLAB MEX interface.
+``docs``             Build the sphinx HTML docs; the ``web`` target serves them.
+``dev-docs``         Same as ``dev`` plus the sphinx docs targets.
+``gpu``              Build the cuFINUFFT GPU library (CUDA toolchain required).
+``gpu-fat``          GPU build for mixed GPU models, or a login node with no GPU
+                     (see :ref:`HPC clusters <install_gpu_sites>`).
+``gpu-perlmutter``   GPU build on NERSC Perlmutter (Cray wrappers, A100).
+``all``              CPU + GPU + tests in one configuration.
+``all-wrappers``     Every CPU language wrapper at once (MATLAB + Fortran + DUCC0).
+=================== =================================================================
 
 See the `cmake-presets(7) <https://cmake.org/cmake/help/latest/manual/cmake-presets.7.html>`_
 manual for the full preset reference.
@@ -195,7 +283,7 @@ To instead build a shared library, see the ``FINUFFT_STATIC_LINKING`` CMake opti
 .. _multi-config:
 
 Multi-configuration generators (Visual Studio, Xcode, Ninja Multi-Config)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 CMake generators come in two flavors. *Single-config* generators
 (Unix Makefiles, Ninja) bake the build type into the build directory:
@@ -292,6 +380,8 @@ These apply to CMake (as above), or GNU make (as below).
 
   Intel compilers (unlike GPU compilers) currently engage ``fastmath`` behavior with ``-O2`` or ``-O3``. This may interfere with our use of ``std::isfinite`` in our source and test codes. For this reason in the Intel presets ``icx`` and ``icc`` have set ``-fp-model=strict``. You may get more speed if you remove this flag, or try ``-fno-finite-math-only``.
 
+
+.. _gnumake:
 
 Classic GNU make based route
 ----------------------------
@@ -402,6 +492,12 @@ In older distros you may have to compile ``octave`` from source to get the neede
 You should then compile and test the library via various ``make`` tasks, as discussed above.
 The make tasks (eg ``make lib``) compiles double and single precision functions,
 which live simultaneously in ``libfinufft``, with distinct function names.
+
+``make install PREFIX=<dir>`` then copies ``lib/libfinufft.so``,
+``lib-static/libfinufft.a`` and the public headers into ``<dir>``. That prefix
+carries no CMake package config and no dependency information, so a consumer
+links it by hand; ``examples/quick-start/makefile`` is that compiler line, and
+CI runs the pair on every pull request.
 
 The make variable ``OMP=OFF`` builds a single-threaded library without
 reference to OpenMP.
@@ -644,6 +740,45 @@ An additional performance test you could then do is::
 
    As of v2.0.1, our python interface is quite different from Dan Foreman-Mackey's original repo that wrapped finufft: `python-finufft <https://github.com/dfm/python-finufft>`_, or Jeremy Magland's wrapper. The interface is simpler, and the existing shared binary is linked to (no recompilation). Under the hood we achieve this via ``ctypes`` instead of ``pybind11``.
 
+
+Building inside a conda environment
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+conda is not an officially supported way to install FINUFFT, and
+``pip install finufft`` needs none of it. Building from source inside a conda
+environment is still worth doing when the wheel does not fit: to use the CPU the
+machine actually has, to get the GPU package, or because conda already owns the
+compilers and libraries there.
+
+From the root of a checkout, with conda on PATH:
+
+.. code-block:: bash
+
+  bash examples/quick-start/conda/build.sh          # CPU package, then its tests
+  bash examples/quick-start/conda/build.sh --gpu    # and the GPU package
+
+That script is the recipe, and CI runs it on every pull request: a GitHub runner
+for the CPU package, and a Jenkins pod with a card for the GPU one.
+
+.. literalinclude:: ../examples/quick-start/conda/build.sh
+   :language: bash
+
+``pip install python/finufft`` names a path, not a package, so pip builds this
+checkout and never consults PyPI. The environment carries the compilers and the
+OpenMP runtime as well, because FINUFFT is C and C++ and asks for OpenMP with
+``REQUIRED``, and the macOS system clang ships no OpenMP runtime. FFTW comes from
+conda-forge because the source build looks for one and otherwise downloads and
+builds its own; pass
+``--config-settings=cmake.define.FINUFFT_USE_DUCC0=ON`` to use the FFT that
+ships with FINUFFT instead. Building ``cufinufft`` needs the CUDA toolkit only,
+while its tests need a device; the script runs them when ``nvidia-smi`` finds a
+card and skips them when it does not. Those tests take a ``--framework``
+argument and are parametrized on it, so ``pytest python/cufinufft/tests`` on its
+own reports every test as skipped.
+
+This recipe comes from
+`@remy-abergel <https://github.com/flatironinstitute/finufft/discussions/649#discussioncomment-12969277>`_
+(issue #668).
 
 A few words about python environments
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

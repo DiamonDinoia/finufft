@@ -63,11 +63,12 @@ Inputs:
 Returns ``0`` on success, otherwise an error code (see ``finufft_errors.h``).
 
 A complete example, equivalent to the 4-step calls from the
-:ref:`Getting started <c_gpu>` walkthrough below, is:
+:ref:`Getting started <c_gpu>` walkthrough below, is
+``examples/cuda/simple1d1c.c``. It is the GPU twin of
+``examples/simple1d1c.c`` and ``make cuexamples`` builds and runs it:
 
-.. code-block:: c
-
-    cufinufftf1d1(M, d_x, d_c, 1, 1e-6f, N, d_f, NULL);
+.. literalinclude:: ../examples/cuda/simple1d1c.c
+   :language: c
 
 This single call is equivalent to the
 ``makeplan``/``setpts``/``execute``/``destroy`` sequence required with the plan
@@ -214,7 +215,10 @@ Finally, we'll want to deallocate the arrays once we're done with them.
     free(c);
     free(f);
 
-The complete listing can be found in ``examples/cuda/getting_started.cpp``.
+The complete listing is ``examples/cuda/getting_started.cpp``:
+
+.. literalinclude:: ../examples/cuda/getting_started.cpp
+   :language: c
 
 Full documentation
 ------------------
