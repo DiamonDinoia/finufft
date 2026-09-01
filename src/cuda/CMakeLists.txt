@@ -100,9 +100,11 @@ set_target_properties(
 
 if(DEFINED ENV{GITHUB_ACTIONS} AND "$ENV{GITHUB_ACTIONS}" STREQUAL "true" AND MSVC)
     message(STATUS "GITHUB_ACTIONS on Windows using c++20 for cufinufft")
-    target_compile_features(cufinufft PRIVATE cxx_std_20 cuda_std_20)
+    target_compile_features(cufinufft PUBLIC cxx_std_20)
+    target_compile_features(cufinufft PRIVATE cuda_std_20)
 else()
-    target_compile_features(cufinufft PRIVATE cxx_std_17 cuda_std_17)
+    target_compile_features(cufinufft PUBLIC cxx_std_17)
+    target_compile_features(cufinufft PRIVATE cuda_std_17)
 endif()
 target_compile_options(cufinufft PUBLIC ${FINUFFT_CUDA_FLAGS})
 

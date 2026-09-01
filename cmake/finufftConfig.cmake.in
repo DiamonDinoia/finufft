@@ -5,6 +5,7 @@ include(CMakeFindDependencyMacro)
 # Re-discover the dependencies that the exported targets reference. For a SHARED
 # build everything is baked into the library, so only the (interface-propagated)
 # OpenMP runtime needs to be found. For a STATIC build the FFT backend and its
+# threading runtime are separate archives that the consumer must also link.
 if(@FINUFFT_USE_CPU@ AND @FINUFFT_USE_OPENMP@)
     find_dependency(OpenMP COMPONENTS CXX)
 endif()

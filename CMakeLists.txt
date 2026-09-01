@@ -45,7 +45,13 @@ set(FINUFFT_FFTW_SUFFIX "DEFAULT" CACHE STRING "Suffix for FFTW libraries (e.g. 
 set(FINUFFT_ARCH_FLAGS "native" CACHE STRING "Compiler flags for specifying target architecture, defaults to -march=native")
 # sphinx tag (don't remove): @cmake_opts_end
 set_property(CACHE FINUFFT_USE_SANITIZERS PROPERTY STRINGS OFF ON MEMSAN TSAN)
-cmake_dependent_option(FINUFFT_ENABLE_INSTALL "Disable installation in the case of python builds" ON "NOT FINUFFT_BUILD_PYTHON" OFF)
+cmake_dependent_option(
+    FINUFFT_ENABLE_INSTALL
+    "Install FINUFFT. Defaults to ON for a top-level build and OFF when FINUFFT is a subproject."
+    ${PROJECT_IS_TOP_LEVEL}
+    "NOT FINUFFT_BUILD_PYTHON"
+    OFF
+)
 cmake_dependent_option(FINUFFT_STATIC_LINKING "Disable static libraries in the case of python builds" ON "NOT FINUFFT_BUILD_PYTHON" OFF)
 cmake_dependent_option(FINUFFT_SHARED_LINKING "Shared should be the opposite of static linking" ON "NOT FINUFFT_STATIC_LINKING" OFF)
 cmake_dependent_option(FINUFFT_INTERPROCEDURAL_OPTIMIZATION "LTO should be the opposite of static linking" ON "NOT FINUFFT_STATIC_LINKING" OFF)
