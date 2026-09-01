@@ -68,11 +68,13 @@ jobs:
         shell: bash
         run: |
           xcodebuild -version
-          # brew libomp is neither needed (MEX builds without OpenMP) nor safe to
-          # expose here: exporting DYLD_LIBRARY_PATH at it wedges MATLAB on maca64
-          # (run 33508066886: dyld-pointed probes red, clean-env green).
-          brew install fftw
+          # brew libomp supplies omp.h and the -fopenmp flags AppleClang needs;
+          # matlab/CMakeLists.txt then swaps the runtime for the copy MATLAB
+          # bundles. Never put brew's libomp on DYLD_LIBRARY_PATH: MATLAB loads it
+          # ahead of its own and wedges on maca64 (run 33508066886).
+          brew install fftw libomp
           echo "CMAKE_PREFIX_PATH=$(brew --prefix)" >> $GITHUB_ENV
+          echo "OpenMP_ROOT=$(brew --prefix libomp)" >> $GITHUB_ENV
           ver="${{ matrix.os }}"; ver="${ver#macos-}"; ver="${ver%%-*}"
           echo "MACOSX_DEPLOYMENT_TARGET=${ver}.0" >> "$GITHUB_ENV"
 
@@ -128,17 +130,10 @@ jobs:
           EXTRA_MACOS_FLAGS="-DCMAKE_OSX_ARCHITECTURES=${{ matrix.osx_arch }}"
           fi
 
-          # No OpenMP in the mac MEX: LLVM libomp refuses to coexist with the copy
-          # MATLAB bundles and initializes (OMP #15/#179; static embedding refused
-          # the same way). ducc0 stays ON everywhere via its std::threads fallback.
-          OMP_FLAG=""
-          if [ "${RUNNER_OS}" = "macOS" ]; then OMP_FLAG="-DFINUFFT_USE_OPENMP=OFF"; fi
-
           DUCC0_FLAG="-DFINUFFT_USE_DUCC0=ON"
 
           cmake --preset matlab -B build \
             ${EXTRA_MACOS_FLAGS} \
-            ${OMP_FLAG} \
             ${DUCC0_FLAG} \
             -DMatlab_MEX_EXTENSION="${MEXEXT}" \
             -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" \
@@ -148,6 +143,29 @@ jobs:
 
           if [ "${RUNNER_OS}" != "macOS" ]; then
             cmake --build build --verbose --target cufinufft_mex --parallel
+          fi
+
+      - name: Inspect finufft MEX OpenMP dependency (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          MEX="build/matlab/finufft.${MEXEXT}"
+          if [ "${RUNNER_OS}" = "macOS" ]; then
+            otool -L "${MEX}" | tee deps.txt
+          else
+            ldd "${MEX}" | tee deps.txt
+          fi
+          # The MEX must use the OpenMP runtime inside MATLAB and no other. A second
+          # runtime in the MATLAB process aborts on mac (OMP #15 / #179) and corrupts
+          # the heap when R2024b or newer unloads the MEX on Linux. R2023b, which this
+          # workflow installs, survives the Linux case, so only this check catches it.
+          if grep -qE 'libgomp|(/opt/homebrew|/usr/local)/.*lib(omp|iomp5)' deps.txt; then
+            echo "::error::MEX depends on a non-MATLAB OpenMP runtime"
+            exit 1
+          fi
+          if [ "$(grep -cE 'lib(omp|iomp5)[^/]*\.(dylib|so)' deps.txt)" -gt 1 ]; then
+            echo "::error::MEX depends on more than one OpenMP runtime"
+            exit 1
           fi
 
       - name: Inspect cufinufft MEX dynamic dependencies

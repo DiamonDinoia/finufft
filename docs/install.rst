@@ -353,6 +353,19 @@ After a CMake MATLAB build, the MEX executable and associated M-files will be in
 cd to ``matlab/test`` and run ``fullmathtest`` which should run for 1 second
 and pass.
 
+On macOS and Linux a MATLAB build links the OpenMP runtime that MATLAB ships
+(``bin/maca64/libomp.dylib`` on Apple silicon, ``sys/os/maci64/libiomp5.dylib``
+on Intel macOS, ``sys/os/glnxa64/libiomp5.so`` on Linux) instead of the system
+one. MATLAB loads and initializes its own copy before any MEX. A second runtime
+in the same process aborts on macOS with ``OMP: Error #15`` or ``#179``, and on
+Linux corrupts the heap when MATLAB R2024b or newer unloads the MEX
+(``free(): chunks in smallbin corrupted``). GCC's ``-fopenmp`` code runs on
+``libiomp5``, which exports the ``GOMP_*`` entry points it calls, so no compiler
+change is needed. On macOS, Homebrew's ``libomp`` is still required for
+``omp.h`` and the compiler flags; point CMake at it with
+``-DOpenMP_ROOT=$(brew --prefix libomp)``, and never put it on
+``DYLD_LIBRARY_PATH``.
+
 
 Notes on compiler flags for various systems
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
