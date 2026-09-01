@@ -130,10 +130,20 @@ jobs:
           EXTRA_MACOS_FLAGS="-DCMAKE_OSX_ARCHITECTURES=${{ matrix.osx_arch }}"
           fi
 
+          # The packaged MEX runs on machines other than the builder, so target a
+          # baseline ISA and never the builder's own: an /arch:AVX512 build died
+          # with an illegal instruction on the Zen 3 consume runner (windows-2022,
+          # run 33534146217). Same policy as the wheels, python/finufft/pyproject.toml.
+          ARCH_FLAG="-DFINUFFT_ARCH_FLAGS="
+          if [ "${RUNNER_OS}" = "Linux" ] || [ "${{ matrix.osx_arch }}" = "x86_64" ]; then
+            ARCH_FLAG="-DFINUFFT_ARCH_FLAGS=-march=x86-64"
+          fi
+
           DUCC0_FLAG="-DFINUFFT_USE_DUCC0=ON"
 
           cmake --preset matlab -B build \
             ${EXTRA_MACOS_FLAGS} \
+            ${ARCH_FLAG} \
             ${DUCC0_FLAG} \
             -DMatlab_MEX_EXTENSION="${MEXEXT}" \
             -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" \
