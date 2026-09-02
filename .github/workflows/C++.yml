@@ -45,8 +45,12 @@ jobs:
 
     - name: Install omp and fftw
       run: |
+        # sphinx tag (don't remove): @macos_brew_start
         brew install libomp fftw
+        # sphinx tag (don't remove): @macos_brew_end
+        # sphinx tag (don't remove): @macos_clang_inc_start
         cp make-platforms/make.inc.macosx_clang make.inc
+        # sphinx tag (don't remove): @macos_clang_inc_end
 
     - name: Compile C++ code
       run: |
@@ -62,8 +66,10 @@ jobs:
 
     - name: Install gcc and fftw
       run: |
+        # sphinx tag (don't remove): @macos_gcc_inc_start
         brew install gcc@15 fftw
         cp make-platforms/make.inc.macosx_gcc-15 make.inc
+        # sphinx tag (don't remove): @macos_gcc_inc_end
 
     - name: Compile C++ code
       run: |

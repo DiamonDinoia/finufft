@@ -108,10 +108,10 @@ jobs:
       - name: Install the exact CMake minimum
         run: |
           set -euo pipefail
-          # doc:start cmake-min
+          # sphinx tag (don't remove): @cmake_min_start
           pip install "cmake==3.25.*"
           cmake --version
-          # doc:end cmake-min
+          # sphinx tag (don't remove): @cmake_min_end
           # a newer cmake on PATH would make this arm prove nothing
           cmake --version | grep -q "version 3\.25\." || exit 1
       - name: Build and run the quick-start recipes with it

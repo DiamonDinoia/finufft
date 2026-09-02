@@ -272,8 +272,14 @@ CMake based installation and compilation
 ----------------------------------------
 
 Make sure you have ``cmake`` version at least 3.25. That is the version the
-library, the presets and every quick-start recipe require, and one CI arm
-builds with exactly it.
+library, the presets and every quick-start recipe require. One CI arm installs
+exactly that version and builds the whole tree with it:
+
+.. literalinclude:: ../.github/workflows/quick-start.yml
+   :language: bash
+   :start-after: @cmake_min_start
+   :end-before: @cmake_min_end
+   :dedent: 10
 
 .. _cmake-presets:
 
@@ -459,7 +465,7 @@ PowerPC. The general procedure to download, then compile for a particular platfo
 Have a look in ``make-platforms/`` to see what is available, and/or edit your ``make.inc`` based on looking in the ``makefile`` and quirks of your local platform. We have continuous integration which tests the default (linux) settings in this ``makefile``, plus those in three OS-specific settings, currently::
 
   make-platforms/make.inc.macosx_clang
-  make-platforms/make.inc.macosx_gcc-14
+  make-platforms/make.inc.macosx_gcc-15
   make-platforms/make.inc.windows_msys
 
 Thus, those are the recommended files for OSX or Windows users to try as their ``make.inc``.
@@ -479,10 +485,11 @@ Quick linux GNU make install instructions
 Unless you select ``FFT=DUCC``, make sure you have packages ``fftw3`` and ``fftw3-dev`` (or their equivalent on your distro) installed.
 Then ``cd`` into your FINUFFT directory and do ``make test -j``.
 This should compile the dynamic library in ``lib/`` (taking around 10-30 seconds, mostly due to templated SIMD code), some C++ test drivers in ``test/``, then run them,
-printing some terminal output ending in::
-
-  0 segfaults out of 11 tests done
-  0 fails out of 11 tests done
+printing terminal output that ends in a ``0 segfaults`` line and a ``0 fails`` line.
+The test count in those two lines is 13 for double precision on linux or macOS:
+``test/check_finufft.sh`` runs 11 tests unconditionally, adds ``error_handling``
+in double precision only, and adds ``threadsafe_execute`` everywhere except
+Windows. Single precision therefore reports 12, and Windows one fewer again.
 
 As of v2.5 the tests have become more extensive, and now take around 10-20 seconds to run.
 This output repeats for double then single precision (hence, scroll up to check the double also gave no fails).
@@ -546,7 +553,7 @@ Alternatively, on Ubuntu linux, base dependencies are::
 
 and for Fortran, Python, and Octave language interfaces also do::
 
-  sudo apt-get gfortran python3 python3-pip octave liboctave-dev
+  sudo apt-get install gfortran python3 python3-pip octave liboctave-dev
 
 In older distros you may have to compile ``octave`` from source to get the needed >=4.4 version.
 
@@ -629,9 +636,13 @@ Then, also as an administrator,
 install Homebrew by pasting the installation command from
 https://brew.sh
 
-Then do::
+Then install the packages the macOS clang CI arm installs:
 
-  brew install libomp fftw
+.. literalinclude:: ../.github/workflows/C++.yml
+   :language: bash
+   :start-after: @macos_brew_start
+   :end-before: @macos_brew_end
+   :dedent: 8
 
 This happens to also install the latest GCC (which was 8.2.0 in Mojave,
 and 10.2.0 in Catalina, in our tests).
@@ -660,9 +671,13 @@ MATLAB (and currently have MATLAB installed). If so, do::
 
   cp make-platforms/make.inc.macosx_clang_matlab make.inc
 
-Else if you don't have MATLAB, do::
+Else if you don't have MATLAB, copy the file the CI arm copies:
 
-  cp make-platforms/make.inc.macosx_clang make.inc
+.. literalinclude:: ../.github/workflows/C++.yml
+   :language: bash
+   :start-after: @macos_clang_inc_start
+   :end-before: @macos_clang_inc_end
+   :dedent: 8
 
 .. note::
 
@@ -691,19 +706,24 @@ The GCC route
 ~~~~~~~~~~~~~~
 
 This is less recommended, unless you need to link from ``gfortran``, when it
-appears to be essential. The basic idea is::
+appears to be essential. The macOS GCC CI arm installs the compiler and copies
+the matching ``make.inc``:
 
-  cp make-platforms/make.inc.macosx_gcc-14 make.inc
-  make test -j
-  make fortran
+.. literalinclude:: ../.github/workflows/C++.yml
+   :language: bash
+   :start-after: @macos_gcc_inc_start
+   :end-before: @macos_gcc_inc_end
+   :dedent: 8
 
-which also compiles and tests the fortran interfaces.
-You may need to edit to ``g++-13``, or whatever your GCC version is,
+Then ``make test -j`` as above, which CI also runs. ``make fortran`` compiles
+and tests the fortran interfaces; CI reaches those through
+``cmake --preset fortran`` instead, so that target is not covered here.
+You may need to edit to whatever GCC version you have installed
 in your ``make.inc``.
 
 .. note::
 
-   A problem between GCC and the new XCode 15 requires a workaround to add ``LDFLAGS+=-ld64`` to force the old linker to be used. See the above file ``make.inc.macosx_gcc-14``.
+   A problem between GCC and the new XCode 15 requires a workaround to add ``LDFLAGS+=-ld64`` to force the old linker to be used. See the above file ``make.inc.macosx_gcc-15``.
 
 We find python may be built as :ref:`below<install-python>`.
 We found that octave interfaces do not work with GCC; please help.
@@ -849,8 +869,10 @@ There can be confusion and conflicts between various versions of python and inst
   virtualenv -p /usr/bin/python3 env1
   source env1/bin/activate
 
-Now you are in a virtual environment that starts from scratch. All pip installed packages will go inside the ``env1`` directory. (You can get out of the environment by typing ``deactivate``). Also see documentation for ``conda``. In both cases ``python`` will call the version of python you set up. To get the packages FINUFFT needs::
+Now you are in a virtual environment that starts from scratch. All pip installed packages will go inside the ``env1`` directory. (You can get out of the environment by typing ``deactivate``). Also see documentation for ``conda``. In both cases ``python`` will call the version of python you set up. To get the packages FINUFFT needs, install the requirements of whichever
+interface you want, ``python/finufft/requirements.txt`` for the CPU package or
+``python/cufinufft/requirements.txt`` for the GPU one::
 
-  pip install -r python/requirements.txt
+  pip install -r python/finufft/requirements.txt
 
 Then ``pip install finufft`` or build as above.
