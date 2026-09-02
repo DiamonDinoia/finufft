@@ -19,33 +19,31 @@ It is currently being tested on the Linux platform, but you should be able to ad
 CMake installation
 ------------------
 
-To automate the installation process, we use ``cmake``. To use this, run
+To automate the installation process, we use ``cmake``. This is the configure and
+build that ``tools/ci/cuda-build-test.sh`` runs on every GPU CI pod:
 
-.. code-block:: bash
+.. literalinclude:: ../tools/ci/cuda-build-test.sh
+   :language: bash
+   :start-after: @gpu_build_start
+   :end-before: @gpu_build_end
 
-    mkdir build
-    cd build
-    cmake -D FINUFFT_USE_CUDA=ON ..
-    cmake --build . --parallel
+``libcufinufft.so`` is then in your ``build`` directory. For this to work you must
+have the Nvidia CUDA toolchain installed, ``nvcc`` among others. The two testing
+flags and ``FINUFFT_BUILD_EXAMPLES`` are only needed to build the test and example
+binaries; drop them for a library-only build. ``FINUFFT_USE_CPU=OFF`` skips the CPU
+library ``libfinufft.so``, and ``-j`` without a number uses every thread.
 
-The ``libcufinufft.so`` (along with ``libfinufft.so``) will now be present in your ``build`` directory. Note that for this to work, you must have the Nvidia CUDA toolchain installed (such as the ``nvcc`` compiler, among others). To speed up the compilation, you could replace the last command by ``cmake --build . -j`` to use all threads,
-or ``cmake --build . -j8`` to specify using 8 threads, for example.
-To avoid building the CPU library (``libfinufft.so``), you can set the ``FINUFFT_USE_CPU`` flag to ``OFF``.
+``CMAKE_CUDA_ARCHITECTURES`` selects the compute capability, for instance ``80`` for
+the Nvidia A100. To read the capability off the card instead of looking it up, use
+the line the CI script uses:
 
-In order to configure cuFINUFFT for a specific compute capability, use the ``CMAKE_CUDA_ARCHITECTURES`` flag. For example, to compile for compute capability 8.0 (supported by Nvidia A100), replace the 3rd command above by
+.. literalinclude:: ../tools/ci/cuda-build-test.sh
+   :language: bash
+   :start-after: @gpu_arch_start
+   :end-before: @gpu_arch_end
 
-.. code-block:: bash
-
-    cmake -D FINUFFT_USE_CUDA=ON -D CMAKE_CUDA_ARCHITECTURES=80 ..
-
-To find out your own device's compute capability without having to look it up on the web, use:
-
-.. code-block:: bash
-
-    nvidia-smi --query-gpu=compute_cap --format=csv,noheader
-
-This will return a text string such as ``8.6`` which would incidate
-``sm_86`` architecture, thus to use ``CMAKE_CUDA_ARCHITECTURES=86``.
+``nvidia-smi`` returns a string such as ``8.6``, meaning ``sm_86``; stripping the dot
+gives the ``86`` that ``CMAKE_CUDA_ARCHITECTURES`` wants.
 
 
 Note that by default the ``CMAKE_CUDA_ARCHITECTURES`` flag is set to ``native``, which means that the code will be compiled for the compute capability of the GPU on which the code is being compiled.
@@ -145,17 +143,13 @@ the Python/MATLAB GPU interfaces; use CMake for those.
 Testing
 -------
 
-To test your cuFINUFFT package, configure it with the ``BUILD_TESTING`` and ``FINUFFT_BUILD_TESTS`` flags set to ``ON``. In other words, run
+The configure above already sets ``BUILD_TESTING`` and ``FINUFFT_BUILD_TESTS`` to
+``ON``, which is what builds the test binaries. Run them the way CI does:
 
-.. code-block:: bash
-
-    cmake -D FINUFFT_USE_CUDA=ON -D BUILD_TESTING=ON -D FINUFFT_BUILD_TESTS=ON ..
-
-Then after compiling as above with ``cmake --build . --parallel``, you execute the tests using
-
-.. code-block:: bash
-
-    cmake --build . -t test
+.. literalinclude:: ../tools/ci/cuda-build-test.sh
+   :language: bash
+   :start-after: @gpu_test_start
+   :end-before: @gpu_test_end
 
 This runs a suite of GPU accuracy (mathematical correctness) and interface API tests. See the ``test/cuda/`` directory for individual usage and documentation of these tests.
 
