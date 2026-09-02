@@ -43,6 +43,16 @@ filter_supported_compiler_flags(FINUFFT_CXX_FLAGS_RELEASE FINUFFT_CXX_FLAGS_RELE
 message(STATUS "FINUFFT Release flags: ${FINUFFT_CXX_FLAGS_RELEASE}")
 set(FINUFFT_CXX_FLAGS_RELWITHDEBINFO ${FINUFFT_CXX_FLAGS_RELEASE})
 
+# xsimd emulates floor/ceil/trunc on pre-SSE4.1 x86 through an int64 -> double cast that
+# only holds under exact FP semantics, and guards that cast with an inline-asm barrier it
+# enables from __FAST_MATH__ or __ASSOCIATIVE_MATH__. Neither clang nor gcc defines either
+# for a standalone -fassociative-math, so xsimd asks the caller to say so. Without this,
+# xsimd::floor returns 0 in an -march=x86-64 build, so fold_rescale overshoots by N for
+# every point outside [-pi,pi) and the bin sort indexes past its counts array.
+if("-fassociative-math" IN_LIST FINUFFT_CXX_FLAGS_RELEASE)
+    add_compile_definitions(XSIMD_REASSOCIATIVE_MATH=1)
+endif()
+
 set(FINUFFT_CXX_FLAGS_DEBUG
     -g
     -g3
