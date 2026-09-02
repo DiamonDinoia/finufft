@@ -15,6 +15,7 @@ int main()
    To compile, see README.  Usage: ./many1d1
 */
 {
+  // sphinx tag (don't remove): @many1d1_start
   int ntrans         = 3;                // how many stacked transforms to do
   int M              = 1e6;              // nonuniform points (same for all transforms)
   int N              = 1e6;              // number of modes (same for all transforms)
@@ -34,6 +35,7 @@ int main()
 
   // call the NUFFT (with iflag=+1): note pointers (not STL vecs) passed...
   int ier = finufft1d1many(ntrans, M, &x[0], &c[0], +1, tol, N, &F[0], NULL);
+  // sphinx tag (don't remove): @many1d1_end
 
   int k     = 142519;     // check the answer just for this mode...
   int trans = ntrans - 1; // ...in this transform

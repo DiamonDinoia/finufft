@@ -16,6 +16,7 @@ c     Alex Barnett and Libin Lu 5/28/20, fix ptrs 10/6/21
 c     our fortran-header, always needed
       include 'finufft.fh'
 
+C sphinx tag (don't remove): @fort_simple1d1_default_start
 c     note some inputs are int (int*4) but others BIGINT (int*8)
       integer ier,iflag
       integer*8 N,ktest,M,j,k,ktestindex,t1,t2,crate
@@ -54,6 +55,7 @@ c     tolerance
 c     Do transform: writes to fk (mode coeffs), and ier (status flag).
 c     use default options:
       call finufft1d1(M,xj,cj,iflag,tol,N,fk,defopts,ier)
+C sphinx tag (don't remove): @fort_simple1d1_default_end
       call system_clock(t2,crate)
       t = (t2-t1)/float(crate)
       if (ier.eq.0) then
@@ -81,6 +83,7 @@ c     compute inf norm of fk coeffs for use in rel err
 c     do another transform, but now first setting some options...
       print *,''
       print *, 'setting new options, rerun simple interface...'
+C sphinx tag (don't remove): @fort_simple1d1_opts_start
       call finufft_default_opts(opts)
 c     fields of derived type opts may be queried/set as usual...
       opts%debug = 2
@@ -89,6 +92,7 @@ c     fields of derived type opts may be queried/set as usual...
       print *,opts
       call system_clock(t1)
       call finufft1d1(M,xj,cj,iflag,tol,N,fk,opts,ier)
+C sphinx tag (don't remove): @fort_simple1d1_opts_end
       call system_clock(t2,crate)
       t = (t2-t1)/float(crate)
       if (ier.eq.0) then

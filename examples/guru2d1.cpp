@@ -41,6 +41,7 @@ int main() {
   // output array for the Fourier modes
   vector<complex<double>> F(N1 * N2);
 
+  // sphinx tag (don't remove): @ex_guru2d1_plan_start
   int type = 1, dim = 2, ntrans = 1; // you could also do ntrans>1
   int64_t Ns[] = {N1, N2};           // N1,N2 as 64-bit int array
   // step 1: make a plan...
@@ -54,6 +55,7 @@ int main() {
   // ...
   // step 4: free the memory used by the plan...
   finufft_destroy(plan);
+  // sphinx tag (don't remove): @ex_guru2d1_plan_end
 
   int k1 = round(0.45 * N1); // check the answer for mode frequency (k1,k2)
   int k2 = round(-0.35 * N2);

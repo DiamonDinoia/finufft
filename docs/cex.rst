@@ -12,46 +12,32 @@ Here's how to perform a 1D type-1 transform
 in double precision from C++, using STL complex vectors.
 First include our header, and some others needed for the demo:
 
-.. code-block:: C++
+.. literalinclude:: ../examples/simple1d1.cpp
+   :language: cpp
+   :start-after: @ex_simple1d1_include_start
+   :end-before: @ex_simple1d1_include_end
 
-  #include "finufft.h"
-  #include <vector>
-  #include <complex>
-  #include <stdlib.h>
+We need ``M`` nonuniform points ``x`` and complex strengths ``c``, and with ``N`` as the
+desired number of Fourier mode coefficients we also allocate their output array ``F``.
+Random data, and default options, look like:
 
-We need nonuniform points ``x`` and complex strengths ``c``. Let's create random ones for now:
+.. literalinclude:: ../examples/simple1d1.cpp
+   :language: cpp
+   :start-after: @ex_simple1d1_setup_start
+   :end-before: @ex_simple1d1_setup_end
 
-.. code-block:: C++
-
-  int M = 1e7;                                   // number of nonuniform points
-  vector<double> x(M);
-  vector<complex<double> > c(M);
-  complex<double> I = complex<double>(0.0,1.0);  // the imaginary unit
-  for (int j=0; j<M; ++j) {
-    x[j] = M_PI*(2*((double)rand()/RAND_MAX)-1); // uniform random in [-pi,pi)
-    c[j] = 2*((double)rand()/RAND_MAX)-1 + I*(2*((double)rand()/RAND_MAX)-1);
-  }
-
-With ``N`` as the desired number of Fourier mode coefficients,
-allocate their output array:
-
-.. code-block:: C++
-
-  int N = 1e6;                                   // number of output modes
-  vector<complex<double> > F(N);
-
-Now do the NUFFT (with default options, indicated by the ``NULL`` in the following call). Since the interface is
+Now do the NUFFT. Since the interface is
 C-compatible, we pass pointers to the start of the arrays (rather than
 C++-style vector objects), and also pass ``N``:
 
-.. code-block:: C++
-
-  int ier = finufft1d1(M,&x[0],&c[0],+1,1e-9,N,&F[0],NULL);
+.. literalinclude:: ../examples/simple1d1.cpp
+   :language: cpp
+   :start-after: @ex_simple1d1_call_start
+   :end-before: @ex_simple1d1_call_end
 
 This fills ``F`` with the output modes, in increasing ordering
 with the integer frequency indices from ``-N/2`` up to ``N/2-1``
 (since ``N`` is even; for odd is would be ``-(N-1)/2`` up to ``(N-1)/2``).
-The transform (:math:`10^7` points to :math:`10^6` modes) takes 0.4 seconds on a laptop.
 The index is thus offset by ``N/2`` (this is integer division in the odd case), so that frequency ``k`` is output in
 ``F[N/2 + k]``.
 Here ``+1`` sets the sign of :math:`i` in the exponentials
@@ -63,20 +49,14 @@ which is zero if successful (otherwise see :ref:`error codes <error>`).
 
    FINUFFT works with a periodicity of :math:`2\pi` for type 1 and 2 transforms; see :ref:`definitions <math>`. For example, nonuniform points :math:`x=\pm\pi` are equivalent. Points must lie in the input domain :math:`[-3\pi,3\pi)`, which allows the user to assume a convenient periodic domain such as  :math:`[-\pi,\pi)` or :math:`[0,2\pi)`. To handle points outside of :math:`[-3\pi,3\pi)` the user must fold them back into this domain before passing to FINUFFT. FINUFFT does not handle this case, for speed reasons. To use a different periodicity, linearly rescale your coordinates.
 
-If instead you want to change some options, first
-put default values in a ``finufft_opts`` struct,
-make your changes, then pass the pointer to FINUFFT:
-
-.. code-block:: C++
-
-  finufft_opts* opts = new finufft_opts;
-  finufft_default_opts(opts);
-  opts->debug = 1;                                // prints timing/debug info
-  int ier = finufft1d1(M,&x[0],&c[0],+1,tol,N,&F[0],opts);
+If instead you want to change some options, create a ``finufft_opts`` struct, set it to
+default values with ``finufft_default_opts``, change whichever fields you wish (for
+instance ``opts.debug`` or ``opts.upsampfac``, as shown in the 2D and guru examples
+below), then pass its address to FINUFFT.
 
 .. warning::
    - Without the ``finufft_default_opts`` call, options may take on arbitrary values which may cause a crash.
-   - Note that, as of version 2.0, ``opts`` is passed as a pointer in both places.
+   - Note that, as of version 2.0, ``opts`` is a plain struct (never allocated with ``new``), passed by address.
 
 See ``examples/simple1d1.cpp`` for a simple full working demo of the above, including a test of the math. If you instead use single-precision arrays,
 replace the tag ``finufft`` by ``finufftf`` in each command; see ``examples/simple1d1f.cpp``.
@@ -106,33 +86,12 @@ Thus, to use from C, the above example only needs to replace the C++
 ``vector`` with C-style array creation. Using C99 style, the
 above code, with options setting, becomes:
 
-.. code-block:: C
+.. literalinclude:: ../examples/simple1d1c.c
+   :language: c
 
-  #include <finufft.h>
-  #include <stdlib.h>
-  #include <complex.h>
-
-  int M = 1e7;            // number of nonuniform points
-  double* x = (double *)malloc(sizeof(double)*M);
-  double complex* c = (double complex*)malloc(sizeof(double complex)*M);
-  for (int j=0; j<M; ++j) {
-    x[j] = M_PI*(2*((double)rand()/RAND_MAX)-1);  // uniform random in [-pi,pi)
-    c[j] = 2*((double)rand()/RAND_MAX)-1 + I*(2*((double)rand()/RAND_MAX)-1);
-  }
-  int N = 1e6;            // number of modes
-  double complex* F = (double complex*)malloc(sizeof(double complex)*N);
-  finufft_opts opts;                      // make an opts struct
-  finufft_default_opts(&opts);          // set default opts (must do this)
-  opts.debug = 2;                       // more debug/timing to stdout
-  int ier = finufft1d1(M,x,c,+1,1e-9,N,F,&opts);
-
-  // (now do something with F here!...)
-
-  free(x); free(c); free(F);
-
-See ``examples/simple1d1c.c`` and ``examples/simple1d1cf.c`` for
-double- and single-precision C examples, including the math check to insure
-the correct indexing of output modes. Don't forget to compile your C code with
+This full file (with the math check that confirms the indexing above) is
+``examples/simple1d1c.c``; ``examples/simple1d1cf.c`` is its single-precision
+counterpart. Don't forget to compile your C code with
 ``-lstdc++`` when linking against FINUFFT.
 
 
@@ -144,27 +103,20 @@ to C-style arrays of pointers; this allows the widest compatibility with other
 languages. Assuming the same headers as above, we first create points
 :math:`(x_j,y_j)` in the square :math:`[-\pi,\pi)^2`, and strengths as before:
 
-.. code-block:: C++
+.. literalinclude:: ../examples/simple2d1.cpp
+   :language: cpp
+   :start-after: @ex_simple2d1_points_start
+   :end-before: @ex_simple2d1_points_end
 
-  int M = 1e7;                                   // number of nonuniform points
-  vector<double> x(M), y(M);
-  vector<complex<double> > c(M);
-  for (int j=0; j<M; ++j) {
-    x[j] = M_PI*(2*((double)rand()/RAND_MAX)-1);
-    y[j] = M_PI*(2*((double)rand()/RAND_MAX)-1);
-    c[j] = 2*((double)rand()/RAND_MAX)-1 + I*(2*((double)rand()/RAND_MAX)-1);
-  }
+We pick the numbers ``N1``, ``N2`` of output Fourier coefficients from a target total,
+allocate the output array, and do the transform (here also changing ``upsampfac`` away
+from its default, to show a non-default run):
 
-Let's say we want ``N1=1000`` by ``N2=2000`` 2D Fourier coefficients.
-We allocate and do the (default options) transform thus:
+.. literalinclude:: ../examples/simple2d1.cpp
+   :language: cpp
+   :start-after: @ex_simple2d1_modes_start
+   :end-before: @ex_simple2d1_modes_end
 
-.. code-block:: C++
-
-  int N1=1000, N2=2000;
-  vector<complex<double> > F(N1*N2);
-  int ier = finufft2d1(M,&x[0],&y[0], &c[0], +1, 1e-6, N1, N2, &F[0], NULL);
-
-This transform takes 0.6 seconds on a laptop.
 The modes have increasing ordering
 of integer frequency indices from ``-N1/2`` up to ``N1/2-1``
 in the fast (``x``) dimension,
@@ -193,33 +145,25 @@ it can be faster to use a "vectorized"
 interface (which does the entire stack in one call)
 than to repeatedly call the above "simple" interfaces.
 This is especially true for many small problems.
-Here we show how to do a stack of ``ntrans=10`` 1D type 1 NUFFT transforms, in C++,
+Here we show how to do a stack of ``ntrans`` 1D type 1 NUFFT transforms, in C++,
 assuming the same headers as in the first example above.
 The strength data vectors are taken to be contiguous (the whole
 first vector, followed by the second, etc, rather than interleaved.)
 Ie, viewed as a matrix in Fortran storage, each column is a strength vector.
+This is ``examples/many1d1.cpp``, which CI compiles and runs:
 
-.. code-block:: C++
+.. literalinclude:: ../examples/many1d1.cpp
+   :language: cpp
+   :start-after: @many1d1_start
+   :end-before: @many1d1_end
+   :dedent: 2
 
-  int ntrans = 10;                               // how many transforms
-  int M = 1e7;                                   // number of nonuniform points
-  vector<double> x(M);
-  vector<complex<double> > c(M*ntrans);          // ntrans strength vectors
-  complex<double> I = complex<double>(0.0,1.0);  // the imaginary unit
-  for (int j=0; j<M; ++j)
-    x[j] = M_PI*(2*((double)rand()/RAND_MAX)-1);
-  for (int j=0; j<M*ntrans; ++j)                 // fill all ntrans vectors...
-    c[j] = 2*((double)rand()/RAND_MAX)-1 + I*(2*((double)rand()/RAND_MAX)-1);
-  int N = 1e6;                                   // number of output modes
-  vector<complex<double> > F(N*trans);           // ntrans output vectors
-  int ier = finufft1d1(M,&x[0],&c[0],+1,1e-9,N,&F[0],NULL);    // default opts
+Note ``finufft1d1many``, not ``finufft1d1``, and the leading ``ntrans``
+argument. The frequency index ``k`` in transform number ``t``
+(zero-indexing the transforms) is in ``F[k + (int)N/2 + N*t]``.
 
-This takes 2.6 seconds on a laptop, around 1.4x faster than
-making 10 separate "simple" calls.
-The frequency index ``k`` in transform number ``t`` (zero-indexing the transforms) is in ``F[k + (int)N/2 + N*t]``.
-
-See ``examples/many1d1.cpp`` and ``test/finufft?dmany_test.cpp``
-for more examples.
+See ``test/finufft?dmany_test.cpp`` for more examples, and
+``examples/gurumany1d1.cpp`` for the same stack through the guru interface.
 
 
 Guru interface examples
@@ -240,26 +184,13 @@ Finally, you may execute *adjoints* of the planned transforms without
 re-planning, making forward-adjoint transform pairs very convenient.
 Now we redo the above 2D type 1 C++ example with the guru interface.
 
-One first makes a plan giving transform parameters, but no data:
+(We assume ``x``, ``y``, ``c`` are filled, and ``F`` allocated, as in the 2D example
+above.) One first makes a plan giving transform parameters, but no data:
 
-.. code-block:: C++
-
-  // (assume x, y, c are filled, and F allocated, as in the 2D code above...)
-  int type=1, dim=2, ntrans=1;
-  int64_t Ns[] = {1000,2000};                    // N1,N2 as 64-bit int array
-  // step 1: make a plan...
-  finufft_plan plan;
-  int ier = finufft_makeplan(type, dim, Ns, +1, ntrans, 1e-6, &plan, NULL);
-  // step 2: send in pointers to M nonuniform points (just x, y in this case)...
-  finufft_setpts(plan, M, &x[0], &y[0], NULL, 0, NULL, NULL, NULL);
-  // (user should not change x, y nonuniform point arrays here!)
-  // step 3: do the planned transform to the c strength data, output to F...
-  finufft_execute(plan, &c[0], &F[0]);
-  // ... you could now send in new points, and/or do transforms with new c data
-  // ... or even adjoint transforms with the same points but now mapping F to c.
-  // ...
-  // step 4: when done, free the memory used by the plan...
-  finufft_destroy(plan);
+.. literalinclude:: ../examples/guru2d1.cpp
+   :language: cpp
+   :start-after: @ex_guru2d1_plan_start
+   :end-before: @ex_guru2d1_plan_end
 
 This writes the Fourier coefficients to ``F`` just as in the earlier 2D example.
 One difference from the above simple and vectorized interfaces

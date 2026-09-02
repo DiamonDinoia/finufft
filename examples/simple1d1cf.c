@@ -31,6 +31,7 @@ int main()
   // allocate complex output array for the Fourier modes
   float complex *F = (float complex *)malloc(sizeof(float complex) * N);
 
+  // sphinx tag (don't remove): @opts_use_start
   finufft_opts opts;            // opts struct (not ptr)
   finufftf_default_opts(&opts); // set default opts (must do this)
   opts.debug = 2;               // show how to override a default
@@ -38,6 +39,7 @@ int main()
 
   // call the NUFFT (with iflag=+1), passing pointers...
   int ier    = finufftf1d1(M, x, c, +1, tol, N, F, &opts);
+  // sphinx tag (don't remove): @opts_use_end
 
   int k      = 1425;                     // check the answer just for this mode...
   assert(k >= -(double)N / 2 && k < (double)N / 2);

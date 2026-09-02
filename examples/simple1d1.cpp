@@ -1,3 +1,4 @@
+// sphinx tag (don't remove): @ex_simple1d1_include_start
 // this is all you must include for the finufft lib...
 #include <finufft.h>
 
@@ -8,6 +9,7 @@
 #include <stdlib.h>
 #include <vector>
 using namespace std;
+// sphinx tag (don't remove): @ex_simple1d1_include_end
 
 static const double PI = 3.141592653589793238462643383279502884;
 
@@ -20,6 +22,7 @@ int main()
    Usage: ./simple1d1
 */
 {
+  // sphinx tag (don't remove): @ex_simple1d1_setup_start
   int M              = 1e6;                      // number of nonuniform points
   int N              = 1e6;                      // number of modes
   double acc         = 1e-9;                     // desired accuracy
@@ -37,9 +40,12 @@ int main()
   }
   // allocate output array for the Fourier modes...
   vector<complex<double>> F(N);
+  // sphinx tag (don't remove): @ex_simple1d1_setup_end
 
   // call the NUFFT (with iflag=+1): note pointers (not STL vecs) passed...
+  // sphinx tag (don't remove): @ex_simple1d1_call_start
   int ier = finufft1d1(M, &x[0], &c[0], +1, acc, N, &F[0], &opts);
+  // sphinx tag (don't remove): @ex_simple1d1_call_end
 
   int k = 142519; // check the answer just for this mode frequency...
   assert(k >= -(double)N / 2 && k < (double)N / 2);

@@ -20,20 +20,10 @@ with strengths ``cj``, to ``N`` output modes whose coefficients will be written
 into the ``fk`` array, using 9-digit tolerance, the $+i$ imaginary sign,
 and default options, the declarations and call are
 
-.. code-block:: fortran
-
-      integer ier,iflag
-      integer*8 N,M
-      real*8, allocatable :: xj(:)
-      real*8 tol
-      complex*16, allocatable :: cj(:),fk(:)
-      integer*8, allocatable :: null
-
- !    (...allocate xj, cj, and fk, and fill xj and cj here...)
-
-      tol = 1.0D-9
-      iflag = +1
-      call finufft1d1(M,xj,cj,iflag,tol,N,fk,null,ier)
+.. literalinclude:: ../fortran/examples/simple1d1.f
+   :language: fortran
+   :start-after: @fort_simple1d1_default_start
+   :end-before: @fort_simple1d1_default_end
 
 which writes the output to ``fk``, and the status to the integer ``ier``.
 Since the default is CMCL mode ordering, the output for frequency index ``k``
@@ -41,8 +31,9 @@ is found in ``fk(k+N/2+1)``.
 ``ier=0`` indicates success, otherwise error codes are
 as in :ref:`here <error>`.
 All available OMP threads are used, unless FINUFFT was built single-threaded.
-(Note that here the unallocated ``null`` is simply a way to pass
-a NULL pointer to our C++ wrapper; another would be ``%val(0_8)``.)
+To pass default options, use a null pointer to the ``finufft_opts`` derived
+type, declared as ``type(finufft_opts), pointer :: defopts => null()``;
+this is the idiom every ``fortran/examples/`` file uses.
 For a minimally complete test code demonstrating the above see
 ``fortran/examples/simple1d1.f``.
 
@@ -85,17 +76,10 @@ To choose non-default options in the above example, create an options
 derived type, set it to default values, change whichever you wish, and pass
 it to FINUFFT, for instance
 
-.. code-block:: fortran
-
-      include 'finufft.fh'
-      type(finufft_opts) opts
-
- !    (...declare, allocate, and fill stuff as above...)
-
-      call finufft_default_opts(opts)
-      opts%debug = 2
-      opts%upsampfac = 1.25d0
-      call finufft1d1(M,xj,cj,iflag,tol,N,fk,opts,ier)
+.. literalinclude:: ../fortran/examples/simple1d1.f
+   :language: fortran
+   :start-after: @fort_simple1d1_opts_start
+   :end-before: @fort_simple1d1_opts_end
 
 See ``fortran/examples/simple1d1.f`` for the complete code,
 and below for the complete list of Fortran subroutines available,
@@ -159,7 +143,7 @@ These routines and arguments are, in double-precision:
 
  !    guru interface
       call finufft_makeplan(type,dim,n_modes,iflag,ntrans,tol,plan,opts,ier)
-      call finufft_setpts(plan,M,xj,yj,zj,Nk,sk,yk,uk,ier)
+      call finufft_setpts(plan,M,xj,yj,zj,Nk,sk,tk,uk,ier)
       call finufft_execute(plan,cj,fk,ier)
       call finufft_execute_adjoint(plan,cj,fk,ier)
       call finufft_destroy(plan,ier)

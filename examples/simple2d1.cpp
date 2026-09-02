@@ -17,6 +17,7 @@ int main() {
      To compile, see README. Usage:  ./simple2d1
   */
 
+  // sphinx tag (don't remove): @ex_simple2d1_points_start
   int M      = 1e6;  // number of nonuniform points
   int N      = 1e6;  // approximate total number of modes (N1*N2)
   double tol = 1e-6; // desired accuracy
@@ -36,7 +37,9 @@ int main() {
     c[i] =
         2 * ((double)rand() / RAND_MAX - 1) + I * (2 * ((double)rand() / RAND_MAX) - 1);
   }
+  // sphinx tag (don't remove): @ex_simple2d1_points_end
 
+  // sphinx tag (don't remove): @ex_simple2d1_modes_start
   // choose numbers of output Fourier coefficients in each dimension
   int N1 = round(2.0 * sqrt(N));
   int N2 = round(N / N1);
@@ -47,6 +50,7 @@ int main() {
   // call the NUFFT (with iflag += 1): note passing in pointers...
   opts.upsampfac = 1.25;
   int ier        = finufft2d1(M, &x[0], &y[0], &c[0], 1, tol, N1, N2, &F[0], &opts);
+  // sphinx tag (don't remove): @ex_simple2d1_modes_end
 
   int k1 = round(0.45 * N1); // check the answer for mode frequency (k1,k2)
   int k2 = round(-0.35 * N2);
