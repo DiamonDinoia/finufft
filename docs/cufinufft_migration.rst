@@ -10,6 +10,9 @@ A summary of the API changes will be found below.
 C and C++ interface
 -------------------
 
+The "old" listings below describe the removed 1.3 API: nothing in the current tree
+compiles against them, and they are kept only for historical reference.
+
 The following function signatures were updated during the API change:
 
 - ``cufinufft_makeplan``, which previously had the signature
@@ -22,12 +25,10 @@ The following function signatures were updated during the API change:
 
   and now has the signature
 
-    .. code-block:: c
-
-      int cufinufft_makeplan(int type, int dim, const int64_t *n_modes,
-          int iflag, int ntr, double eps, cufinufft_plan *d_plan_ptr,
-          cufinufft_opts *opts);
-
+    .. literalinclude:: ../include/cufinufft.h
+       :language: c
+       :start-after: @cuapi_makeplan_start
+       :end-before: @cuapi_makeplan_end
 
   In other words, the ``n_modes`` argument now takes the type ``int64_t`` to accomodate larger arrays and the ``maxbatchsize`` argument has been removed (and can now be found as part of ``cufinufft_opts``).
   The ``tol`` and ``ntransf`` arguments have also been renamed to ``eps`` and ``ntr``, respectively.
@@ -42,11 +43,10 @@ The following function signatures were updated during the API change:
 
   and now has the signature
 
-    .. code-block:: c
-
-      int cufinufft_setpts(cufinufft_plan d_plan, int M, double *d_x,
-          double *d_y, double *d_z, int N, double *d_s, double *d_t, double *d_u);
-
+    .. literalinclude:: ../include/cufinufft.h
+       :language: c
+       :start-after: @cuapi_setpts_start
+       :end-before: @cuapi_setpts_end
 
   Aside from name changes, main difference here is that the ``plan`` is now the first argument, not the last.
 
@@ -58,9 +58,10 @@ The following function signatures were updated during the API change:
 
   and now has the signature
 
-    .. code-block:: c
-
-      int cufinufft_execute(cufinufft_plan d_plan, cuDoubleComplex *d_c, cuDoubleComplex *d_fk);
+    .. literalinclude:: ../include/cufinufft.h
+       :language: c
+       :start-after: @cuapi_execute_start
+       :end-before: @cuapi_execute_end
 
   Again, the names have changed slightly and the plan argument is moved to be the first argument.
 
@@ -74,9 +75,10 @@ The following function signatures were updated during the API change:
 
   but now has the signature
 
-    .. code-block:: c
-
-      void cufinufft_default_opts(cufinufft_opts *opts);
+    .. literalinclude:: ../include/cufinufft.h
+       :language: c
+       :start-after: @cuapi_default_opts_start
+       :end-before: @cuapi_default_opts_end
 
   Consequently, you no longer need to specify the type and dimension when filling out the default options structure.
 

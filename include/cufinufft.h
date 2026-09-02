@@ -13,29 +13,39 @@ typedef struct cufinufft_fplan_s *cufinufftf_plan;
 #ifdef __cplusplus
 extern "C" {
 #endif
+// sphinx tag (don't remove): @cuapi_default_opts_start
 FINUFFT_EXPORT void cufinufft_default_opts(cufinufft_opts *opts);
+// sphinx tag (don't remove): @cuapi_default_opts_end
 
+// sphinx tag (don't remove): @cuapi_makeplan_start
 FINUFFT_EXPORT int cufinufft_makeplan(
     int type, int dim, const int64_t *n_modes, int iflag, int ntr, double eps,
     cufinufft_plan *d_plan_ptr, const cufinufft_opts *opts);
 FINUFFT_EXPORT int cufinufftf_makeplan(
     int type, int dim, const int64_t *n_modes, int iflag, int ntr, float eps,
     cufinufftf_plan *d_plan_ptr, const cufinufft_opts *opts);
+// sphinx tag (don't remove): @cuapi_makeplan_end
 
+// sphinx tag (don't remove): @cuapi_setpts_start
 FINUFFT_EXPORT int cufinufft_setpts(
     cufinufft_plan d_plan, int64_t M, const double *d_x, const double *d_y,
     const double *d_z, int N, const double *d_s, const double *d_t, const double *d_u);
 FINUFFT_EXPORT int cufinufftf_setpts(
     cufinufftf_plan d_plan, int64_t M, const float *d_x, const float *d_y,
     const float *d_z, int N, const float *d_s, const float *d_t, const float *d_u);
+// sphinx tag (don't remove): @cuapi_setpts_end
 
+// sphinx tag (don't remove): @cuapi_execute_start
 FINUFFT_EXPORT int cufinufft_execute(cufinufft_plan d_plan, cuDoubleComplex *d_c,
                                      cuDoubleComplex *d_fk);
 FINUFFT_EXPORT int cufinufftf_execute(cufinufftf_plan d_plan, cuFloatComplex *d_c,
                                       cuFloatComplex *d_fk);
+// sphinx tag (don't remove): @cuapi_execute_end
 
+// sphinx tag (don't remove): @cuapi_destroy_start
 FINUFFT_EXPORT int cufinufft_destroy(cufinufft_plan d_plan);
 FINUFFT_EXPORT int cufinufftf_destroy(cufinufftf_plan d_plan);
+// sphinx tag (don't remove): @cuapi_destroy_end
 
 // Simple (one-shot) interfaces. Pointers are device pointers. Behavior matches
 // the 4-step plan API above. 36 entry points (3 dims x 3 types x {single,many}
@@ -51,9 +61,11 @@ FINUFFT_EXPORT int cufinufftf1d1many(
 FINUFFT_EXPORT int cufinufft1d1(int64_t nj, const double *xj, const cuDoubleComplex *cj,
                                 int iflag, double eps, int64_t ms, cuDoubleComplex *fk,
                                 const cufinufft_opts *opts);
+// sphinx tag (don't remove): @cuapi_simple1d1_start
 FINUFFT_EXPORT int cufinufftf1d1(int64_t nj, const float *xj, const cuFloatComplex *cj,
                                  int iflag, float eps, int64_t ms, cuFloatComplex *fk,
                                  const cufinufft_opts *opts);
+// sphinx tag (don't remove): @cuapi_simple1d1_end
 
 FINUFFT_EXPORT int cufinufft1d2many(
     int n_transf, int64_t nj, const double *xj, cuDoubleComplex *cj, int iflag,

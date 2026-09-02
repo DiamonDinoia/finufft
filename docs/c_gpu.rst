@@ -42,11 +42,10 @@ This gives 36 entry points in total. The full prototypes are declared in
 ``include/cufinufft.h``. As an example, the 1D type-1 simple call in single
 precision is:
 
-.. code-block:: c
-
-    int cufinufftf1d1(int64_t nj, const float *xj, const cuFloatComplex *cj,
-                      int iflag, float eps, int64_t ms, cuFloatComplex *fk,
-                      const cufinufft_opts *opts);
+.. literalinclude:: ../include/cufinufft.h
+   :language: c
+   :start-after: @cuapi_simple1d1_start
+   :end-before: @cuapi_simple1d1_end
 
 Inputs:
 
@@ -64,8 +63,9 @@ Returns ``0`` on success, otherwise an error code (see ``finufft_errors.h``).
 
 A complete example, equivalent to the 4-step calls from the
 :ref:`Getting started <c_gpu>` walkthrough below, is
-``examples/cuda/simple1d1c.c``. It is the GPU twin of
-``examples/simple1d1c.c`` and ``make cuexamples`` builds and runs it:
+``examples/cuda/simple1d1c.c``, in double precision, so it calls
+``cufinufft1d1`` rather than the ``cufinufftf1d1`` declared above. It is the GPU
+twin of ``examples/simple1d1c.c``, and ``make cuexamples`` builds and runs it:
 
 .. literalinclude:: ../examples/cuda/simple1d1c.c
    :language: c
@@ -90,26 +90,17 @@ Getting started
 Let us consider applying a 1D type-1 transform in single precision.
 First we need to include some headers
 
-.. code-block:: c
-
-    #include <cufinufft.h>
-    #include <stdlib.h>
-    #include <stdio.h>
-    #include <math.h>
-    #include <complex.h>
-    #include <cuComplex.h>
+.. literalinclude:: ../examples/cuda/getting_started.cpp
+   :language: c
+   :start-after: @cuex_getting_started_includes_start
+   :end-before: @cuex_getting_started_includes_end
 
 Inside our ``main`` function, we first define the problem parameters and some pointers for the data arrays:
 
-.. code-block:: c
-
-    const int M = 100000, N = 10000;
-
-    int64_t modes[1] = {N};
-
-    float *x;
-    float _Complex *c;
-    float _Complex *f;
+.. literalinclude:: ../examples/cuda/getting_started.cpp
+   :language: c
+   :start-after: @cuex_getting_started_params_start
+   :end-before: @cuex_getting_started_params_end
 
 Here ``M`` is the number of nonuniform points, ``N`` is the size of our 1D grid. cuFINUFFT expets the grid size to be given as an array, so we also define the ``modes`` integer array. Finally we have the nonuniform points ``x``, the coefficients (or strengths) ``c`` and the output values ``f`` on the grid.
 
@@ -118,107 +109,79 @@ For the former, we can use ``float complex`` while the latter would accept ``std
 
 We also define the corresponding data pointers on the device (GPU) as well as the cuFINUFFT plan:
 
-.. code-block:: c
-
-    float *d_x;
-    cuFloatComplex *d_c, *d_f;
-
-    cufinufftf_plan plan;
+.. literalinclude:: ../examples/cuda/getting_started.cpp
+   :language: c
+   :start-after: @cuex_getting_started_device_ptrs_start
+   :end-before: @cuex_getting_started_device_ptrs_end
 
 Finally, we'll need some variables to compute the NUDFT at some arbitrary point to check the accuracy of the cuFINUFFT call:
 
-.. code-block:: c
-
-    int idx;
-    float _Complex f0;
+.. literalinclude:: ../examples/cuda/getting_started.cpp
+   :language: c
+   :start-after: @cuex_getting_started_manual_vars_start
+   :end-before: @cuex_getting_started_manual_vars_end
 
 Now the actual work can begin. First, we allocate the host (CPU) arrays and fill the ``x`` and ``c`` arrays with appropriate values (``f`` will hold the output of the cuFINUFFT call). The frequencies in ``x`` are interpreted with periodicity :math:`2\pi`, while the coefficients ``c`` can be any value. Here we draw the frequencies and coefficients from the uniform distributions on :math:`[-\pi, \pi]` and :math:`[-1, 1]^2` respectively.
 
-.. code-block:: c
+.. literalinclude:: ../examples/cuda/getting_started.cpp
+   :language: c
+   :start-after: @cuex_getting_started_fill_host_start
+   :end-before: @cuex_getting_started_fill_host_end
 
-    x = (float *) malloc(M * sizeof(float));
-    c = (float _Complex *) malloc(M * sizeof(float _Complex));
-    f = (float _Complex *) malloc(N * sizeof(float _Complex));
-
-    srand(0);
-
-    for(int j = 0; j < M; ++j) {
-        x[j] = 2 * M_PI * (((float) rand()) / RAND_MAX - 1);
-        c[j] = (2 * ((float) rand()) / RAND_MAX - 1)
-               + I * (2 * ((float) rand()) / RAND_MAX - 1);
-    }
+(``PI`` is a ``double`` constant defined near the top of the example file.)
 
 Now that the data is generated, we must transfer it to the device. For this, we first allocate the necessary arrays using ``cudaMalloc`` and then transfer the data using ``cudaMemcpy``.
 
-.. code-block:: c
-
-    cudaMalloc(&d_x, M * sizeof(float));
-    cudaMalloc(&d_c, M * sizeof(float _Complex));
-    cudaMalloc(&d_f, N * sizeof(float _Complex));
-
-    cudaMemcpy(d_x, x, M * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_c, c, M * sizeof(float _Complex), cudaMemcpyHostToDevice);
+.. literalinclude:: ../examples/cuda/getting_started.cpp
+   :language: c
+   :start-after: @cuex_getting_started_alloc_copy_start
+   :end-before: @cuex_getting_started_alloc_copy_end
 
 It's finally time to put cuFINUFFT to work. First, we create a plan using ``cufinufftf_makeplan`` (the prefix ``cufinufftf_`` is replaced with ``cufinufft_`` when working in double precision).
 
-.. code-block:: c
+.. literalinclude:: ../examples/cuda/getting_started.cpp
+   :language: c
+   :start-after: @cuex_getting_started_makeplan_start
+   :end-before: @cuex_getting_started_makeplan_end
 
-    cufinufftf_makeplan(1, 1, modes, 1, 1, 1e-6, &plan, NULL);
+The first argument gives the type, while the second gives the number of dimensions. After this, we have the grid size as an integer array, followed by the sign in the complex exponential (here positive) and the number of transforms to compute simultaneously (here just one). Then there's the tolerance (six digits) and finally there's a pointer to the plan and a non-mandatory options structure. The return value is stored in ``ier``: any value above ``1`` is an error, so we check it and return early.
 
-The first argument gives the type, while the second gives the number of dimensions. After this, we have the grid size as an integer array, followed by the sign in the complex exponential (here positive) and the number of transforms to compute simultaneously (here just one). Then there's the tolerance (six digits) and finally there's a pointer to the plan and a non-mandatory options structure.
-
-Once the plan is created, we set the points and execute the plan.
-
-.. code-block:: c
-
-    cufinufftf_setpts(plan, M, d_x, NULL, NULL, 0, NULL, NULL, NULL);
-
-    cufinufftf_execute(plan, d_c, d_f);
-
-Once the results are calculated, we transfer the data back onto the host, destroy the plan, and free the device arrays.
-
-.. code-block:: c
-
-    cudaMemcpy(f, d_f, N * sizeof(float _Complex), cudaMemcpyDeviceToHost);
-
-    cufinufftf_destroy(plan);
-
-    cudaFree(d_x);
-    cudaFree(d_c);
-    cudaFree(d_f);
-
-The result is now in the host array ``f`` and we can print out its value at a particular index.
-
-.. code-block:: c
-
-    idx = 4 * N / 7;
-
-    printf("f[%d] = %lf + %lfi\n", idx, crealf(f[idx]), cimagf(f[idx]));
-
-If we want, we can complare this to the value obtained using the type-1 NUDFT formula.
-
-.. code-block:: c
-
-    f0 = 0;
-
-    for(int j = 0; j < M; ++j) {
-        f0 += c[j] * cexp(I * x[j] * (idx - N / 2));
-    }
-
-    printf("f0[%d] = %lf + %lfi\n", idx, crealf(f0), cimagf(f0));
-
-Finally, we'll want to deallocate the arrays once we're done with them.
-
-.. code-block:: c
-
-    free(x);
-    free(c);
-    free(f);
-
-The complete listing is ``examples/cuda/getting_started.cpp``:
+Once the plan is created, we set the points and execute the plan, checking ``ier`` after each call as above.
 
 .. literalinclude:: ../examples/cuda/getting_started.cpp
    :language: c
+   :start-after: @cuex_getting_started_setpts_execute_start
+   :end-before: @cuex_getting_started_setpts_execute_end
+
+Once the results are calculated, we transfer the data back onto the host, destroy the plan, and free the device arrays.
+
+.. literalinclude:: ../examples/cuda/getting_started.cpp
+   :language: c
+   :start-after: @cuex_getting_started_copyback_destroy_start
+   :end-before: @cuex_getting_started_copyback_destroy_end
+
+The result is now in the host array ``f`` and we can print out its value at a particular index.
+
+.. literalinclude:: ../examples/cuda/getting_started.cpp
+   :language: c
+   :start-after: @cuex_getting_started_print_start
+   :end-before: @cuex_getting_started_print_end
+
+If we want, we can complare this to the value obtained using the type-1 NUDFT formula.
+
+.. literalinclude:: ../examples/cuda/getting_started.cpp
+   :language: c
+   :start-after: @cuex_getting_started_manual_nudft_start
+   :end-before: @cuex_getting_started_manual_nudft_end
+
+Finally, we'll want to deallocate the arrays once we're done with them.
+
+.. literalinclude:: ../examples/cuda/getting_started.cpp
+   :language: c
+   :start-after: @cuex_getting_started_free_start
+   :end-before: @cuex_getting_started_free_end
+
+The complete listing can be found in ``examples/cuda/getting_started.cpp``.
 
 Full documentation
 ------------------
@@ -228,39 +191,36 @@ Plan
 
 Given the user's desired dimension, number of Fourier modes in each direction, sign in the exponential, number of transforms, tolerance, and desired batch size, and (possibly) an options struct, this creates a new plan object.
 
-.. code-block:: c
+.. literalinclude:: ../include/cufinufft.h
+   :language: c
+   :start-after: @cuapi_makeplan_start
+   :end-before: @cuapi_makeplan_end
 
-    int cufinufft_makeplan(int type, int dim, int64_t* nmodes, int iflag,
-            int ntr, double eps, cufinufft_plan *plan, cufinufft_opts *opts)
+Inputs:
 
-    int cufinufftf_makeplan(int type, int dim, int64_t* nmodes, int iflag,
-            int ntr, float tol, cufinufftf_plan *plan, cufinufft_opts *opts)
+* ``type`` — type of the transform, 1, 2 or 3
+* ``dim`` — overall dimension of the transform, 1, 2 or 3
+* ``n_modes`` — a length-``dim`` integer array: ``n_modes[d]`` is the number of Fourier
+  modes in (zero-indexed) direction ``d``. Specifically,
+  in 1D: ``n_modes[0]=N1``,
+  in 2D: ``n_modes[0]=N1, n_modes[1]=N2``,
+  in 3D: ``n_modes[0]=N1, n_modes[1]=N2, n_modes[2]=N3``.
+* ``iflag`` — if >=0, uses + sign in complex exponential, otherwise - sign
+* ``ntr`` — number of transforms to be performed in the execute stage (>=1). This
+  controls the number of input/output data expected for ``c`` and ``fk``.
+* ``eps`` — relative tolerance requested
+  (must be >1e-16 for double precision, >1e-8 for single precision)
+* ``opts`` — optional pointer to options-setting struct. If NULL, uses defaults.
+  See ``cufinufft_default_opts`` below for the non-NULL case.
 
-    Inputs:
+Input/Output:
 
-    type            type of the transform, 1, 2 or 3
-    dim             overall dimension of the transform, 1, 2 or 3
-    nmodes          a length-dim integer array: nmodes[d] is the number of Fourier modes in
-                    (zero-indexed) direction d. Specifically,
-                    in 1D: nmodes[0]=N1,
-                    in 2D: nmodes[0]=N1, nmodes[1]=N2,
-                    in 3D: nmodes[0]=N1, nmodes[1]=N2, nmodes[2]=N3.
-    iflag           if >=0, uses + sign in complex exponential, otherwise - sign
-    ntransf         number of transforms to performed in the execute stage (>=1). This
-                    controls the number of input/output data expected for c and fk.
-    tol             relative tolerance requested
-                    (must be >1e-16 for double precision, >1e-8 for single precision)
-    opts            optional pointer to options-setting struct. If NULL, uses defaults.
-                    See cufinufft_default_opts below for the non-NULL case.
+* ``d_plan_ptr`` — a pointer to an instance of a ``cufinufft_plan`` (in double precision)
+  or ``cufinufftf_plan`` (in single precision).
 
-    Input/Output:
+Returns:
 
-    plan            a pointer to an instance of a cufinufft_plan (in double precision)
-                    or cufinufftf_plan (in single precision).
-
-    Returns:
-
-    status          zero if success, otherwise an error occurred
+* zero if success, otherwise an error occurred
 
 
 Note: under the hood, in double precision, a ``cufinufft_plan`` object is simply a pointer to a ``cufinufft_plan_s`` struct (or in single precision, a ``cufinufftf_plan`` is a pointer to a ``cufinufftf_plan_s`` struct).
@@ -274,31 +234,27 @@ Set nonuniform points
 This tells cuFINUFFT where to look for the coordinates of nonuniform points, and, if appropriate, creates an internal sorting index array to choose a good order to sweep through these points.
 For type 1 these points are "sources", but for type 2, "targets".
 
-.. code-block:: c
+.. literalinclude:: ../include/cufinufft.h
+   :language: c
+   :start-after: @cuapi_setpts_start
+   :end-before: @cuapi_setpts_end
 
-    int cufinufft_setpts(cufinufft_plan plan, int M, double* x, double* y,
-            double* z, int N, double* s, double* t, double *u)
+Input:
 
-    int cufinufftf_setpts(cufinufftf_plan plan, int M, float* x, float* y,
-            float* z, int N, float* s, float* t, float *u)
+* ``M`` — number of nonuniform points
+* ``d_x, d_y, d_z`` — length-``M`` GPU arrays of x (in 1D), x, y (in 2D), or x, y, z
+  (in 3D) coordinates of nonuniform points. In each dimension they refer to a periodic
+  domain [-pi,pi), but values outside will be folded back correctly into this domain.
+  In dimension 1, ``d_y`` and ``d_z`` are ignored. In dimension 2, ``d_z`` is ignored.
+* ``N, d_s, d_t, d_u`` — (unused for types 1 or 2 transforms; reserved for future type 3)
 
-    Input:
+Input/Output:
 
-    M           number of nonuniform points
-    x, y, z     length-M GPU arrays of x (in 1D), x, y (in 2D), or x, y, z (in 3D) coordinates of
-                nonuniform points. In each dimension they refer to a periodic domain
-                [-pi,pi), but values outside will be folded back correctly
-                into this domain. In dimension 1, y and z are ignored. In dimension 2, z is
-                ignored.
-    N, s, t, u  (unused for types 1 or 2 transforms; reserved for future type 3)
+* ``d_plan`` — the plan object from the above plan stage
 
-    Input/Output:
+Returns:
 
-    plan        the plan object from the above plan stage
-
-    Returns:
-
-    status      zero if success, otherwise an error occurred
+* zero if success, otherwise an error occurred
 
 Note: The user must not change the contents of the GPU arrays ``x``, ``y``, or ``z`` between this step and the below execution step. They are read in the execution step also.
 
@@ -311,31 +267,30 @@ This reads the strength (for type 1) or coefficient (for type 2) data and carrie
 Multiple transforms use the same set of nonuniform points.
 The result is written into whichever array was not the input (the roles of these two swap for type 1 vs type 2 transforms).
 
-.. code-block:: c
+.. literalinclude:: ../include/cufinufft.h
+   :language: c
+   :start-after: @cuapi_execute_start
+   :end-before: @cuapi_execute_end
 
-    int cufinufft_execute(cufinufft_plan plan, cuDoubleComplex* c, cuDoubleComplex* f)
+Input/Output:
 
-    int cufinufftf_execute(cufinufftf_plan plan, cuFloatComplex* c, cuFloatComplex* f)
+* ``d_plan`` — the plan object
+* ``d_c`` — If type 1, the input strengths at the nonuniform point sources
+  (size M*ntransf complex array).
+  If type 2, the output values at the nonuniform point targets
+  (size M*ntransf complex array).
+  If type 3, the input strengths at the nonuniform point sources
+  (size M*ntransf complex array).
+* ``d_fk`` — If type 1, the output Fourier mode coefficients (size N1*N2*ntransf
+  or N1*N2*N3*ntransf complex array, when dim = 2 or 3 respectively).
+  If type 2, the input Fourier mode coefficients (size N1*N2*ntransf
+  or N1*N2*N3*ntransf complex array, when dim = 2 or 3 respectively).
+  If type 3, the output Fourier mode coefficients (size N1*N2*ntransf
+  or N1*N2*N3*ntransf complex array, when dim = 2 or 3 respectively).
 
-    Input/Output:
+Returns:
 
-    plan     the plan object
-    c        If type 1, the input strengths at the nonuniform point sources
-             (size M*ntransf complex array).
-             If type 2, the output values at the nonuniform point targets
-             (size M*ntransf complex array).
-             If type 3, the input strengths at the nonuniform point sources
-             (size M*ntransf complex array).
-    f        If type 1, the output Fourier mode coefficients (size N1*N2*ntransf
-             or N1*N2*N3*ntransf complex array, when dim = 2 or 3 respectively).
-             If type 2, the input Fourier mode coefficients (size N1*N2*ntransf
-             or N1*N2*N3*ntransf complex array, when dim = 2 or 3 respectively).
-             If type 3, the output Fourier mode coefficients (size N1*N2*ntransf
-             or N1*N2*N3*ntransf complex array, when dim = 2 or 3 respectively).
-
-    Returns:
-
-    status   zero if success, otherwise an error occurred
+* zero if success, otherwise an error occurred
 
 Note: The contents of the arrays ``x``, ``y``, and ``z`` must not have changed since the ``cufinufft_setpts`` call that read them.
 The execution rereads them (this way of doing business saves RAM).
@@ -345,19 +300,18 @@ Note: ``f`` and ``c`` are contiguous Fortran-style (row-major) arrays with the t
 Destroy
 ~~~~~~~
 
-.. code-block:: c
+.. literalinclude:: ../include/cufinufft.h
+   :language: c
+   :start-after: @cuapi_destroy_start
+   :end-before: @cuapi_destroy_end
 
-    int cufinufft_destroy(cufinufft_plan plan)
+Input:
 
-    int cufinufftf_destroy(cufinufftf_plan plan)
+* ``d_plan`` — the cufinufft plan object
 
-    Input:
+Returns:
 
-    plan     the cufinufft plan object
-
-    Returns:
-
-    status   zero if success, otherwise an error occurred
+* zero if success, otherwise an error occurred
 
 This deallocates all arrays inside the ``plan`` struct, freeing all internal memory used in the above three stages.
 Note: the plan (being just a pointer to the plan struct) is not actually "destroyed"; rather, its internal struct is destroyed.
@@ -371,10 +325,10 @@ Options for GPU code
 The last argument in the above plan stage accepts a pointer to an options structure, which is the same in both single and double precision.
 To create such a structure, use:
 
-.. code-block:: c
-
-    cufinufft_opts opts;
-    cufinufft_default_opts(&opts);
+.. literalinclude:: ../examples/cuda/example2d2many.cpp
+   :language: c
+   :start-after: @cuex_default_opts_start
+   :end-before: @cuex_default_opts_end
 
 Then you may change fields of ``opts`` by hand, finally pass ``&opts`` in as the last argument to ``cufinufft_makeplan`` or ``cufinufftf_makeplan``. Here are the options, with the important user-controllable ones documented. For their default values, scroll to the bottom.
 
@@ -443,13 +397,10 @@ You may notice a lack of debugging/timing options in the GPU code. This is to av
 CUDA streams
 ------------
 
-Set ``opts.gpu_stream`` before ``cufinufft_makeplan`` to run a plan on your own
-stream::
-
-    cudaStream_t stream;
-    cudaStreamCreate(&stream);
-    cufinufft_default_opts(&opts);
-    opts.gpu_stream = (void *)stream;
+Create a stream with ``cudaStreamCreate``, fill in the rest of ``opts`` with
+``cufinufft_default_opts``, then set ``opts.gpu_stream`` to that stream (cast
+to ``void *``) before calling ``cufinufft_makeplan`` to run a plan on your own
+stream.
 
 The handle is read once, at plan creation; changing ``opts`` afterwards has no
 effect. Every kernel and memory operation issued by ``setpts`` and ``execute``

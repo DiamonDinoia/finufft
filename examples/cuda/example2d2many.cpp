@@ -83,8 +83,10 @@ int main()
   nmodes[1] = N2;
   nmodes[2] = 1;
 
+  // sphinx tag (don't remove): @cuex_default_opts_start
   cufinufft_opts opts;
   cufinufft_default_opts(&opts);
+  // sphinx tag (don't remove): @cuex_default_opts_end
   opts.gpu_maxbatchsize = maxbatchsize;
 
   ier = cufinufft_makeplan(type, dim, nmodes, iflag, ntransf, tol, &dplan, &opts);

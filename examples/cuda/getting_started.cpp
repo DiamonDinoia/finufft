@@ -17,6 +17,7 @@
 
  */
 
+// sphinx tag (don't remove): @cuex_getting_started_includes_start
 #include <complex.h>
 #include <cuComplex.h>
 #include <cuda_runtime.h>
@@ -24,10 +25,12 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+// sphinx tag (don't remove): @cuex_getting_started_includes_end
 
 static const double PI = 3.141592653589793238462643383279502884;
 
 int main() {
+  // sphinx tag (don't remove): @cuex_getting_started_params_start
   // Problem size: number of nonuniform points (M) and grid size (N).
   const int M = 100000, N = 10000;
 
@@ -38,18 +41,24 @@ int main() {
   float *x;
   float _Complex *c;
   float _Complex *f;
+  // sphinx tag (don't remove): @cuex_getting_started_params_end
 
+  // sphinx tag (don't remove): @cuex_getting_started_device_ptrs_start
   // Device pointers.
   float *d_x;
   cuFloatComplex *d_c, *d_f;
 
   // Store cufinufft plan.
   cufinufftf_plan plan;
+  // sphinx tag (don't remove): @cuex_getting_started_device_ptrs_end
 
+  // sphinx tag (don't remove): @cuex_getting_started_manual_vars_start
   // Manual calculation at a single point idx.
   int idx;
   float _Complex f0;
+  // sphinx tag (don't remove): @cuex_getting_started_manual_vars_end
 
+  // sphinx tag (don't remove): @cuex_getting_started_fill_host_start
   // Allocate the host arrays.
   x = (float *)malloc(M * sizeof(float));
   c = (float _Complex *)malloc(M * sizeof(float _Complex));
@@ -64,7 +73,9 @@ int main() {
     c[j] =
         (2 * ((float)rand()) / RAND_MAX - 1) + I * (2 * ((float)rand()) / RAND_MAX - 1);
   }
+  // sphinx tag (don't remove): @cuex_getting_started_fill_host_end
 
+  // sphinx tag (don't remove): @cuex_getting_started_alloc_copy_start
   // Allocate the device arrays and copy the x and c arrays.
   cudaMalloc(&d_x, M * sizeof(float));
   cudaMalloc(&d_c, M * sizeof(float _Complex));
@@ -72,13 +83,17 @@ int main() {
 
   cudaMemcpy(d_x, x, M * sizeof(float), cudaMemcpyHostToDevice);
   cudaMemcpy(d_c, c, M * sizeof(float _Complex), cudaMemcpyHostToDevice);
+  // sphinx tag (don't remove): @cuex_getting_started_alloc_copy_end
 
+  // sphinx tag (don't remove): @cuex_getting_started_makeplan_start
   // Make the cufinufft plan for a 1D type-1 transform with six digits of
   // tolerance. Any ier above 1 is an error; 1 is a warning and the result is
   // still usable.
   int ier = cufinufftf_makeplan(1, 1, modes, 1, 1, 1e-6, &plan, NULL);
   if (ier > 0) return ier;
+  // sphinx tag (don't remove): @cuex_getting_started_makeplan_end
 
+  // sphinx tag (don't remove): @cuex_getting_started_setpts_execute_start
   // Set the frequencies of the nonuniform points.
   ier = cufinufftf_setpts(plan, M, d_x, NULL, NULL, 0, NULL, NULL, NULL);
   if (ier > 0) return ier;
@@ -87,7 +102,9 @@ int main() {
   // in the d_f array.
   ier = cufinufftf_execute(plan, d_c, d_f);
   if (ier > 0) return ier;
+  // sphinx tag (don't remove): @cuex_getting_started_setpts_execute_end
 
+  // sphinx tag (don't remove): @cuex_getting_started_copyback_destroy_start
   // Copy the result back onto the host.
   cudaMemcpy(f, d_f, N * sizeof(float _Complex), cudaMemcpyDeviceToHost);
 
@@ -97,12 +114,16 @@ int main() {
   cudaFree(d_x);
   cudaFree(d_c);
   cudaFree(d_f);
+  // sphinx tag (don't remove): @cuex_getting_started_copyback_destroy_end
 
+  // sphinx tag (don't remove): @cuex_getting_started_print_start
   // Pick an index to check the result of the calculation.
   idx = 4 * N / 7;
 
   printf("f[%d] = %lf + %lfi\n", idx, crealf(f[idx]), cimagf(f[idx]));
+  // sphinx tag (don't remove): @cuex_getting_started_print_end
 
+  // sphinx tag (don't remove): @cuex_getting_started_manual_nudft_start
   // Calculate the result manually using the formula for the type-1
   // transform.
   f0 = 0;
@@ -112,11 +133,14 @@ int main() {
   }
 
   printf("f0[%d] = %lf + %lfi\n", idx, crealf(f0), cimagf(f0));
+  // sphinx tag (don't remove): @cuex_getting_started_manual_nudft_end
 
+  // sphinx tag (don't remove): @cuex_getting_started_free_start
   // Finally free the host arrays.
   free(x);
   free(c);
   free(f);
+  // sphinx tag (don't remove): @cuex_getting_started_free_end
 
   return 0;
 }
