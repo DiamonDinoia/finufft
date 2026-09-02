@@ -88,6 +88,44 @@ jobs:
           python3 tools/ci/check-docs.py --selftest
           python3 tools/ci/check-docs.py
 
+  cmake-minimum:
+    name: the CMake minimum (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    env:
+      CMAKE_GENERATOR: Ninja
+      CPM_SOURCE_CACHE: cpm
+      LINKING: Static
+      BACKEND: fftw
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install FFTW and Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfftw3-dev ninja-build
+      - name: Install the exact CMake minimum
+        run: |
+          set -euo pipefail
+          # doc:start cmake-min
+          pip install "cmake==3.25.*"
+          cmake --version
+          # doc:end cmake-min
+          # a newer cmake on PATH would make this arm prove nothing
+          cmake --version | grep -q "version 3\.25\." || exit 1
+      - name: Build and run the quick-start recipes with it
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DFINUFFT_BUILD_TESTS=ON -DFINUFFT_BUILD_QUICKSTART=ON
+          cmake --build build -j
+          ctest --test-dir build -L quickstart --output-on-failure --no-tests=error
+      - name: Consume the installed package with it
+        shell: bash
+        run: tools/ci/install-test.sh
+
   vcpkg-port:
     name: vcpkg overlay port (${{ matrix.os }}, ${{ matrix.triplet }})
     runs-on: ${{ matrix.os }}

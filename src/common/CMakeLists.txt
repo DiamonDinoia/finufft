@@ -1,16 +1,9 @@
-cmake_minimum_required(VERSION 3.24)
-
 # Build a small static helper library for CPU-only kernel parameter helpers
-# Source is in ../kernel.cpp as requested
 set(FINUFFT_COMMON_SOURCES kernel.cpp utils.cpp pswf.cpp)
 
 add_library(finufft_common STATIC ${FINUFFT_COMMON_SOURCES})
 
-# The public include directory is the top-level include/
-target_include_directories(
-    finufft_common
-    PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>
-)
+target_include_directories(finufft_common PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
 set_target_properties(finufft_common PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Visibility and compile options consistent with finufft

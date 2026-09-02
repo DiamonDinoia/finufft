@@ -76,15 +76,20 @@ are the project files themselves, so substitute your own target and sources for
 ``finufft::finufft`` and ``finufft::cufinufft`` carry the C++17 requirement on
 their interface, so a consumer sets no language standard of its own.
 
-The ``add_custom_command`` closing each recipe is the snippet from the
-`CMake manual <https://cmake.org/cmake/help/latest/manual/cmake-generator-expressions.7.html#genex:TARGET_RUNTIME_DLLS>`_,
-copied verbatim. On Windows it places beside the executable every DLL its
-dependencies need, FINUFFT's and the FFT backend's alike; on every other
-platform ``TARGET_RUNTIME_DLLS`` is empty and the command does nothing, so one
-recipe runs everywhere. Two cases do not need it at all: FINUFFT's default
-build is static, which produces no DLLs, and a consumer of a shared *install*
-can put ``<prefix>/bin`` on ``PATH`` instead. It needs CMake 3.26 for
-``cmake -E copy -t``, which is what lets the command accept an empty list.
+The ``add_custom_command`` closing each recipe is the
+`CMake manual <https://cmake.org/cmake/help/latest/manual/cmake-generator-expressions.7.html#genex:TARGET_RUNTIME_DLLS>`_
+snippet for ``TARGET_RUNTIME_DLLS``. On Windows it places beside the executable
+every DLL its dependencies need, FINUFFT's and the FFT backend's alike. On every
+other platform ``TARGET_RUNTIME_DLLS`` is empty and the command copies nothing,
+so one recipe runs everywhere. Two cases do not need it at all: FINUFFT's
+default build is static, which produces no DLLs, and a consumer of a shared
+*install* can put ``<prefix>/bin`` on ``PATH`` instead.
+
+The manual writes the copy as ``cmake -E copy -t``, which takes an empty file
+list but needs CMake 3.26. The recipes use ``copy_if_different``, available
+since 3.5, and list the executable itself alongside the DLLs so that the
+command still has a source argument when the DLL list is empty. Copying the
+executable into its own directory compares equal and does nothing.
 
 1) **CPM**. First include `CPM <https://github.com/cpm-cmake/CPM.cmake>`_ in your
 project, by following the `instructions <https://github.com/cpm-cmake/CPM.cmake/wiki/Downloading-CPM.cmake-in-CMake>`_
@@ -266,8 +271,9 @@ first need those three dependencies packaged.
 CMake based installation and compilation
 ----------------------------------------
 
-Make sure you have ``cmake`` version at least 3.25, and 3.26 to run the
-quick-start recipes.
+Make sure you have ``cmake`` version at least 3.25. That is the version the
+library, the presets and every quick-start recipe require, and one CI arm
+builds with exactly it.
 
 .. _cmake-presets:
 

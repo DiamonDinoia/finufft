@@ -23,29 +23,26 @@ foreach(TEST ${TESTS})
     finufft_link_test(${TEST}f)
 endforeach()
 
-# copy the DLLs to the build directory so that the tests can find them there fix
-# for windows
-copy_dll(finufft basicpassfail)
+# On Windows the tests run beside DLLs they do not carry, so the same
+# TARGET_RUNTIME_DLLS copy the quick-start recipes use puts them there. Every test
+# executable in this directory shares basicpassfail's output directory.
+add_custom_command(
+    TARGET basicpassfail
+    POST_BUILD
+    COMMAND
+        ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:basicpassfail> $<TARGET_FILE:basicpassfail>
+        $<TARGET_FILE_DIR:basicpassfail>
+    COMMAND_EXPAND_LISTS
+)
 
-# Small C error-handling test for the public C API.
-include(CheckCSourceCompiles)
-# gersemi: off
-check_c_source_compiles("
-        #include <complex.h>
-        int main() {
-            float complex z = 1.0f + 2.0f*I;
-            float x = crealf(z);
-            return 0;
-        }
-    " HAS_C_COMPLEX)
-# gersemi: on
-
+# Small C error-handling test for the public C API. HAS_C_COMPLEX is probed once in
+# cmake/toolchain.cmake.
 if(HAS_C_COMPLEX)
     add_executable(error_handling error_handling.c)
     target_compile_features(error_handling PRIVATE c_std_99)
     finufft_link_test(error_handling)
     add_test(NAME run_error_handling COMMAND error_handling WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
-        # the deprecated-opts case must warn, not error (non-C++ wrappers rely on it)
+    # the deprecated-opts case must warn, not error (non-C++ wrappers rely on it)
     set_tests_properties(
         run_error_handling
         PROPERTIES PASS_REGULAR_EXPRESSION "opts.spread_thread is deprecated and ignored"

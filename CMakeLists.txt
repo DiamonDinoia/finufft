@@ -98,7 +98,7 @@ mark_as_advanced(
 
 include(setupCPM)
 
-if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME AND FINUFFT_BUILD_DOCS)
+if(PROJECT_IS_TOP_LEVEL AND FINUFFT_BUILD_DOCS)
     include(setupSphinx)
 endif()
 
@@ -208,10 +208,10 @@ if(FINUFFT_ENABLE_INSTALL)
     install(
         TARGETS ${INSTALL_TARGETS}
         EXPORT finufftTargets
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} # .dll on Windows
-        FILE_SET HEADERS DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+        FILE_SET HEADERS
+        # every target in the export gets <prefix>/${CMAKE_INSTALL_INCLUDEDIR} on its
+        # interface; the archive, library and header destinations are the GNUInstallDirs
+        # defaults for those artifacts.
         INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     )
     # Static builds expose finufft's private FFT backend on the install interface

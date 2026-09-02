@@ -62,24 +62,6 @@ function(check_msvc_arch_support)
     message(STATUS "Using MSVC flags: ${FINUFFT_ARCH_FLAGS}")
 endfunction()
 
-function(copy_dll source_target destination_target)
-    if(NOT WIN32)
-        return()
-    endif()
-    # Place the shared library next to the consuming executable so it is found at
-    # runtime. Use a POST_BUILD copy_if_different (not a configure-time guard) so a
-    # rebuilt DLL is refreshed instead of leaving a stale copy in place.
-    get_target_property(DESTINATION_DIR ${destination_target} BINARY_DIR)
-    add_custom_command(
-        TARGET ${destination_target}
-        POST_BUILD
-        COMMAND
-            ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:${source_target}>
-            ${DESTINATION_DIR}/$<TARGET_FILE_NAME:${source_target}>
-        COMMENT "Copying ${source_target} DLL next to ${destination_target}"
-    )
-endfunction()
-
 if(FINUFFT_INTERPROCEDURAL_OPTIMIZATION)
     include(CheckIPOSupported)
     check_ipo_supported(RESULT LTO_SUPPORTED OUTPUT LTO_ERROR)

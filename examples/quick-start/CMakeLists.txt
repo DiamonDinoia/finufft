@@ -2,6 +2,10 @@ set(quickstart_common
     -DCMAKE_BUILD_TYPE=$<CONFIG>
     -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
     -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+    # macOS finds libomp only through CMAKE_PREFIX_PATH, and the three source routes
+    # each re-download FINUFFT's dependencies without a shared CPM cache.
+    -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}
+    -DCPM_SOURCE_CACHE=${CPM_SOURCE_CACHE}
     -DFINUFFT_USE_DUCC0=${FINUFFT_USE_DUCC0}
     -DFINUFFT_STATIC_LINKING=${FINUFFT_STATIC_LINKING}
     -DFINUFFT_USE_OPENMP=${FINUFFT_USE_OPENMP}
@@ -19,8 +23,8 @@ foreach(route IN ITEMS fetchcontent cpm subdirectory)
         NAME quickstart_${route}
         COMMAND
             ${CMAKE_CTEST_COMMAND} --build-config $<CONFIG> --build-and-test ${CMAKE_CURRENT_SOURCE_DIR}/${route}
-            ${CMAKE_CURRENT_BINARY_DIR}/${route} --build-generator ${CMAKE_GENERATOR} --build-options
-            ${quickstart_common} ${quickstart_redirect} --test-command
+            ${CMAKE_CURRENT_BINARY_DIR}/${route} --build-generator ${CMAKE_GENERATOR} --build-makeprogram
+            ${CMAKE_MAKE_PROGRAM} --build-options ${quickstart_common} ${quickstart_redirect} --test-command
             "${CMAKE_CURRENT_BINARY_DIR}/${route}/$<$<BOOL:${CMAKE_CONFIGURATION_TYPES}>:$<CONFIG>/>app"
     )
     set_tests_properties(quickstart_${route} PROPERTIES LABELS quickstart TIMEOUT 3600)

@@ -128,8 +128,6 @@ if(MATH_LIBRARY)
     target_link_libraries(finufft PRIVATE $<BUILD_INTERFACE:${MATH_LIBRARY}>)
 endif()
 
-target_include_directories(finufft SYSTEM INTERFACE $<INSTALL_INTERFACE:include>)
-
 enable_asan(finufft)
 
 target_sources(

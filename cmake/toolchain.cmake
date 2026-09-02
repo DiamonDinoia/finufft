@@ -155,7 +155,22 @@ if(FINUFFT_SANITIZER_FLAGS)
     set(FINUFFT_SANITIZER_FLAGS $<$<CONFIG:Debug,RelWithDebInfo>:${FINUFFT_SANITIZER_FLAGS}>)
 endif()
 
-if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
+# ---- C99 complex support -----------------------------------------------------
+# MSVC has no C99 `double complex`, so the C examples and the C error-handling test
+# cannot be built there. https://en.cppreference.com/w/c/numeric/complex.html
+include(CheckCSourceCompiles)
+# gersemi: off
+check_c_source_compiles("
+        #include <complex.h>
+        int main() {
+            double complex z = 1.0 + 2.0*I;
+            float complex w = 1.0f + 2.0f*I;
+            return creal(z) == 0.0 && crealf(w) == 0.0f;
+        }
+    " HAS_C_COMPLEX)
+# gersemi: on
+
+if(PROJECT_IS_TOP_LEVEL)
     include(CTest)
     if(FINUFFT_BUILD_TESTS)
         enable_testing()
