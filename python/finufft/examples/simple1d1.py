@@ -7,6 +7,7 @@ import time
 
 np.random.seed(42)
 
+# sphinx tag (don't remove): @py_simple1d1_start
 # number of nonuniform points
 M = 100000
 
@@ -23,6 +24,7 @@ N = 1000000
 t0 = time.time()
 f = finufft.nufft1d1(x, c, N, eps=1e-9)
 print("finufft1d1 done in {0:.2g} s.".format(time.time() - t0))
+# sphinx tag (don't remove): @py_simple1d1_end
 
 n = 142519  # do a math check, for a single output mode index n
 assert (n >= -N / 2.0) & (n < N / 2.0)

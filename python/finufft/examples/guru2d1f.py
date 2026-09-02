@@ -20,6 +20,7 @@ K = 4
 # generate K stacked strength arrays
 c = np.random.standard_normal(size=(K, M)) + 1j * np.random.standard_normal(size=(K, M))
 
+# sphinx tag (don't remove): @py_guru2d1f_start
 # convert input data to single precision
 x = x.astype("float32")
 y = y.astype("float32")
@@ -45,6 +46,7 @@ f = plan.execute(c)
 print(
     "vectorized guru single-prec finufft2d1 done in {0:.2g} s.".format(time.time() - t0)
 )
+# sphinx tag (don't remove): @py_guru2d1f_end
 
 print(f.dtype)
 print(f.shape)

@@ -1,3 +1,4 @@
+# sphinx tag (don't remove): @pygpu_getting_started_start
 import cupy as cp
 
 import cufinufft
@@ -17,3 +18,4 @@ f_gpu = cufinufft.nufft1d1(x_gpu, c_gpu, (N,))
 
 # move results off the GPU
 f = f_gpu.get()
+# sphinx tag (don't remove): @pygpu_getting_started_end

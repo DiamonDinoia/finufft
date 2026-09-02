@@ -14,6 +14,7 @@ M = 100000
 x = 2 * np.pi * np.random.uniform(size=M)
 y = 2 * np.pi * np.random.uniform(size=M)
 
+# sphinx tag (don't remove): @py_many2d1_start
 # number of transforms
 K = 4
 
@@ -29,6 +30,7 @@ t0 = time.time()
 f = finufft.nufft2d1(x, y, c, (N1, N2), eps=1e-9)
 print("vectorized finufft2d1 done in {0:.2g} s.".format(time.time() - t0))
 print(f.shape)
+# sphinx tag (don't remove): @py_many2d1_end
 
 k1 = 376  # do a math check, for a single output mode index (k1,k2)
 k2 = -1000

@@ -24,6 +24,7 @@ c = np.random.standard_normal(size=(K, M)) + 1j * np.random.standard_normal(size
 N1 = 1000
 N2 = 2000
 
+# sphinx tag (don't remove): @py_guru2d1_start
 # specify type 1 transform
 nufft_type = 1
 
@@ -37,6 +38,7 @@ plan.setpts(x, y)
 # execute the plan (K transforms together, note c.shape must match)
 f = plan.execute(c)
 print("vectorized guru finufft2d1 done in {0:.2g} s.".format(time.time() - t0))
+# sphinx tag (don't remove): @py_guru2d1_end
 
 print(f.dtype)
 print(f.shape)
