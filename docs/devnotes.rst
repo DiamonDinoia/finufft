@@ -25,7 +25,17 @@ Developer notes
   - ``matlab/Contents.m`` for the MATLAB/Octave help
   - ``CHANGELOG``: don't forget to describe the new features and changes, folding lines at 80 chars.
 
-* There are some sphinx tags in the source code, indicated by @ in comments. Please leave these alone since they are needed by the doc generation.
+* The docs embed regions of the source rather than copying them, so each region is
+  marked by a pair of comments in the language of the file::
+
+    <comment leader> sphinx tag (don't remove): @<name>_start
+    <comment leader> sphinx tag (don't remove): @<name>_end
+
+  ``<name>`` is lower snake_case, unique across the tree, and names what the region is.
+  ``tools/ci/check-docs.py`` fails if a tag is unpaired, if a name is marked in two
+  files, if a tag lacks the ``sphinx tag (don't remove):`` prefix, if a marked region is
+  embedded by no page, or if an embedded file is one that no CI configuration runs.
+  Please leave the tags alone; the doc build needs them.
 
 * Source code is now in clang format, and Python in ruff format. The pre-commit hooks do this for you, on the staged hunks only, so you can just write code and commit; run ``pre-commit install`` once to enable them. To format by hand instead, use ``clang-format -i --style=.clang-format <editedfile>`` or ``ruff format <editedfile>``, or set up your editor to do it. To bypass the hooks use ``git commit --no-verify``, or ``SKIP=<hook-id> git commit`` for a single one.
 

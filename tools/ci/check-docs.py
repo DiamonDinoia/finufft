@@ -12,14 +12,44 @@ import tempfile
 from pathlib import Path
 
 BLOCK = re.compile(r"^\.\.\s+literalinclude::\s*(\S+)\s*$")
-OPTION = re.compile(r"^\s+:(start-after|end-before):\s*(\S+)\s*$")
+OPTION = re.compile(r"^\s+:(start-after|end-before):\s*(.+?)\s*$")
+# The tag convention: a docs page embeds a region of a source file marked
+#     <comment> sphinx tag (don't remove): @<name>_start ... @<name>_end
+# <name> is lower snake_case, names its own file or the thing embedded, and is
+# unique tree-wide. tags() enforces the pairing, the uniqueness and the prose
+# prefix, so a region cannot be marked one way here and another way there.
+MARKER = re.compile(r"sphinx tag[^@]*@(\w+)_(start|end)\b")
+TAG = re.compile(r"^@(\w+)_(start|end)$")
+# Suffixes a marked region can live in. A tag outside these is invisible to the gate.
+TAGGED = (
+    "*.h",
+    "*.hpp",
+    "*.c",
+    "*.cpp",
+    "*.cu",
+    "*.cuh",
+    "*.f",
+    "*.f90",
+    "*.m",
+    "*.py",
+    "*.sh",
+    "*.yml",
+    "*.txt",
+    "*.cmake",
+    "makefile",
+    "Jenkinsfile",
+    "make.inc*",
+)
+# Directories with no sources of their own: build trees, vendored copies, the docs,
+# and .claude, which holds nested git worktrees whose tags would look like duplicates.
+SKIP = (".git", ".claude", "docs", "__pycache__", "_deps", "_html")
 COPIES = ("examples/quick-start/*/main.cpp", "examples/quick-start/cuda/*/main.cpp")
 # Pages the docs embed verbatim from a command's output, so the command stays the one
 # place the text is written.
 GENERATED = {"docs/makefile.doc": ("make", "usage")}
 # Directories whose files are programs or scripts, so a docs embed of one is a claim
 # that CI builds or runs it.
-RUNNABLE = ("examples/", "tutorial/", "tools/ci/")
+RUNNABLE = ("examples/", "tutorial/", "tools/ci/", "test/")
 # Files that name what CI does, so a runnable embed must appear in one of them.
 RUNNERS = (
     ".github/workflows/*.yml",
@@ -34,8 +64,6 @@ RUNNERS = (
 # Runnable embeds that nothing builds or runs. The gate prints them, so a silent
 # exemption cannot grow.
 NOT_RUN = {
-    "tutorial/nfft2d1_test.c": "needs libnfft3-dev, which no CI image installs",
-    "tutorial/migrate2d1_test.c": "needs libnfft3-dev, which no CI image installs",
     "tutorial/samplegrf1d.m": "the Octave arms run matlab/test, not the tutorials",
 }
 
@@ -159,14 +187,84 @@ def executed(root: Path) -> tuple[list[str], list[str]]:
         if name in ("CMakeLists.txt", "Makefile", "makefile"):
             if any(parent in text for text in texts):
                 continue
-        # Otherwise the build file beside it must name it, or glob its suffix.
+        # Otherwise the build file beside it must name it, glob its suffix, or name the
+        # stem, which is how a target list spells its sources, one per line or several
+        # to a line. The stem match needs a boundary: simple1d1c must not match the
+        # simple1d1cf that a longer target name spells.
         build = root / parent / "CMakeLists.txt"
         if build.is_file():
             text = build.read_text()
-            if name in text or f"*{Path(rel).suffix}" in text:
+            stem, suffix = Path(rel).stem, Path(rel).suffix
+            bounded = rf"(?<![\w.-]){re.escape(stem)}(?![\w.-])"
+            if name in text or f"*{suffix}" in text or re.search(bounded, text):
                 continue
         problems.append(f"{where}: {rel} is embedded but not executed by CI")
     return problems, exempt
+
+
+def tags(root: Path) -> tuple[list[str], int]:
+    """Enforce the tag convention documented beside MARKER."""
+    marked: dict[str, list[tuple[str, str, int]]] = {}
+    plain: dict[str, str] = {}
+    for pattern in TAGGED:
+        for f in sorted(root.rglob(pattern)):
+            if not f.is_file() or set(f.relative_to(root).parts) & set(SKIP):
+                continue
+            rel = f.relative_to(root).as_posix()
+            for n, line in enumerate(f.read_text(errors="replace").splitlines(), 1):
+                found = MARKER.search(line)
+                if found:
+                    marked.setdefault(found.group(1), []).append(
+                        (rel, found.group(2), n)
+                    )
+                elif "@" in line:
+                    for name in re.findall(r"@(\w+)_(?:start|end)\b", line):
+                        plain.setdefault(name, f"{rel}:{n}")
+
+    problems = []
+    for name, sites in sorted(marked.items()):
+        files = {rel for rel, _, _ in sites}
+        if len(files) > 1:
+            problems.append(
+                f"@{name}_start is marked in {len(files)} files: {sorted(files)}"
+            )
+            continue
+        rel = files.pop()
+        kinds = sorted(kind for _, kind, _ in sites)
+        if kinds != ["end", "start"]:
+            problems.append(
+                f"{rel}: @{name}_* is marked {kinds}, not one start and one end"
+            )
+            continue
+        lines = {kind: n for _, kind, n in sites}
+        if lines["start"] > lines["end"]:
+            problems.append(
+                f"{rel}:{lines['start']}: @{name}_end comes before @{name}_start"
+            )
+
+    used = set()
+    for rst in sorted((root / "docs").rglob("*.rst")):
+        for line in rst.read_text().splitlines():
+            option = OPTION.match(line)
+            if not option:
+                continue
+            tag = TAG.match(option.group(2))
+            if not tag:
+                problems.append(f"{rst}: {option.group(2)} is not an @<name>_start tag")
+                continue
+            name = tag.group(1)
+            used.add(name)
+            if name in marked:
+                continue
+            where = plain.get(name, "nowhere the gate can see")
+            problems.append(
+                f"{rst}: @{name}_{tag.group(2)} at {where} lacks the"
+                " `sphinx tag (don't remove):` prefix"
+            )
+    for name in sorted(set(marked) - used):
+        rel = marked[name][0][0]
+        problems.append(f"{rel}: @{name}_start marks a region no docs page embeds")
+    return problems, len(used)
 
 
 def scripted(docs: Path) -> list[str]:
@@ -288,6 +386,26 @@ def selftest() -> int:
                 file=sys.stderr,
             )
             return 1
+        # A target list names stems, several to a line. The stem match must respect a
+        # boundary, or a prefix of a longer target name passes for free.
+        (tree / "examples/CMakeLists.txt").write_text(
+            "set(EXAMPLES_C run_me orphanx)\n"
+        )
+        problems, _ = executed(tree)
+        if len(problems) != 1 or "not executed by CI" not in problems[0]:
+            print(
+                f"selftest: a stem that is only a prefix passed: {problems}",
+                file=sys.stderr,
+            )
+            return 1
+        (tree / "examples/CMakeLists.txt").write_text("set(EXAMPLES_C run_me orphan)\n")
+        if executed(tree)[0]:
+            print(
+                "selftest: a stem in a space-separated target list was not found",
+                file=sys.stderr,
+            )
+            return 1
+        (tree / "examples/CMakeLists.txt").unlink()
         NOT_RUN["examples/orphan.cpp"] = "selftest"
         try:
             problems, exempt = executed(tree)
@@ -317,6 +435,53 @@ def selftest() -> int:
                 "selftest: a hand-edited scripted page was not caught", file=sys.stderr
             )
             return 1
+        tagged = Path(tmp) / "tagged"
+        (tagged / "docs").mkdir(parents=True)
+        (tagged / "src").mkdir()
+        marks = "// sphinx tag (don't remove): @one_{}\n"
+        good = marks.format("start") + "code\n" + marks.format("end")
+        (tagged / "src/a.cpp").write_text(good)
+        (tagged / "docs/page.rst").write_text(
+            ".. literalinclude:: ../src/a.cpp\n"
+            "   :start-after: @one_start\n"
+            "   :end-before: @one_end\n"
+        )
+        problems, used = tags(tagged)
+        if problems or used != 1:
+            print(
+                f"selftest: a conforming tag was reported: {problems}", file=sys.stderr
+            )
+            return 1
+        (tagged / "src/a.cpp").write_text(marks.format("start") + "code\n")
+        if not any("not one start and one end" in p for p in tags(tagged)[0]):
+            print("selftest: an unpaired tag was not caught", file=sys.stderr)
+            return 1
+        (tagged / "src/a.cpp").write_text(good)
+        (tagged / "src/b.cpp").write_text(good)
+        if not any("is marked in 2 files" in p for p in tags(tagged)[0]):
+            print("selftest: a duplicated tag name was not caught", file=sys.stderr)
+            return 1
+        (tagged / "src/b.cpp").unlink()
+        (tagged / "src/a.cpp").write_text("// @one_start\ncode\n// @one_end\n")
+        if not any("lacks the" in p for p in tags(tagged)[0]):
+            print("selftest: an unmarked tag was not caught", file=sys.stderr)
+            return 1
+        (tagged / "src/a.cpp").write_text(good)
+        nested = tagged / ".claude/worktrees/agent/src"
+        nested.mkdir(parents=True)
+        (nested / "a.cpp").write_text(good)
+        problems, used = tags(tagged)
+        if problems or used != 1:
+            print(
+                f"selftest: a nested worktree was not skipped: {problems}",
+                file=sys.stderr,
+            )
+            return 1
+        shutil.rmtree(tagged / ".claude")
+        (tagged / "docs/page.rst").write_text("prose only\n")
+        if not any("no docs page embeds" in p for p in tags(tagged)[0]):
+            print("selftest: an unembedded region was not caught", file=sys.stderr)
+            return 1
         pages = {"page.doc": ("echo", "hi")}
         gen = Path(tmp) / "gen"
         gen.mkdir()
@@ -338,7 +503,10 @@ def selftest() -> int:
         "selftest: the check fails on a removed tag, a missing file,"
         " a missing docs root, a directive-less root, a drifted recipe copy"
         " and a vanished one, plus a stale and a vanished generated page"
-        " and an embedded file nothing in CI runs, plus a hand-edited c*.doc page"
+        " and an embedded file nothing in CI runs, a hand-edited c*.doc page,"
+        " an unpaired, a duplicated, an unmarked and an unembedded sphinx tag,"
+        " and it ignores a tag inside a nested git worktree,"
+        " and it does not accept a target stem that is only a prefix"
     )
     return 0
 
@@ -366,7 +534,10 @@ def main() -> int:
     root = Path(__file__).resolve().parents[2]
     status = run(root / "docs")
     unrun, exempt = executed(root)
-    problems = copies(root) + generated(root) + scripted(root / "docs") + unrun
+    untagged, used = tags(root)
+    problems = (
+        copies(root) + generated(root) + scripted(root / "docs") + unrun + untagged
+    )
     for problem in problems:
         print(problem, file=sys.stderr)
     if problems:
@@ -374,6 +545,7 @@ def main() -> int:
     print("every recipe copy is identical")
     print("every generated page matches the command that writes it")
     print("every c*.doc page matches docs/makecdocs.sh")
+    print(f"{used} sphinx tags pair up, are unique and are embedded once")
     for line in exempt:
         print(line)
     print("every other runnable embed is named by a CI configuration")
