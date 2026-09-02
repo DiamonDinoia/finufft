@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import io
 import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -12,6 +13,9 @@ from pathlib import Path
 BLOCK = re.compile(r"^\.\.\s+literalinclude::\s*(\S+)\s*$")
 OPTION = re.compile(r"^\s+:(start-after|end-before):\s*(\S+)\s*$")
 COPIES = ("examples/quick-start/*/main.cpp", "examples/quick-start/cuda/*/main.cpp")
+# Pages the docs embed verbatim from a command's output, so the command stays the one
+# place the text is written.
+GENERATED = {"docs/makefile.doc": ("make", "usage")}
 
 
 def check(docs: Path) -> tuple[list[str], int]:
@@ -64,6 +68,33 @@ def copies(root: Path) -> list[str]:
                 f"{f.relative_to(root)}={d[:8]}" for f, d in digests.items()
             )
             problems.append(f"{pattern}: the copies have drifted: {listing}")
+    return problems
+
+
+def generated(root: Path, pages: dict = GENERATED) -> list[str]:
+    problems = []
+    for page, command in pages.items():
+        target = root / page
+        printed = " ".join(command)
+        if not target.is_file():
+            problems.append(f"{page}: the generated page is missing")
+            continue
+        try:
+            result = subprocess.run(
+                command, cwd=root, capture_output=True, text=True, timeout=120
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            problems.append(f"{page}: `{printed}` did not run: {exc}")
+            continue
+        if result.returncode != 0:
+            problems.append(
+                f"{page}: `{printed}` failed: {result.stderr.strip()[:200]}"
+            )
+        elif result.stdout != target.read_text():
+            problems.append(
+                f"{page}: drifted from `{printed}`, regenerate with"
+                f" `{printed} > {page}`"
+            )
     return problems
 
 
@@ -131,10 +162,27 @@ def selftest() -> int:
         if not any("fewer than two" in p for p in copies(recipes)):
             print("selftest: a vanished copy was not caught", file=sys.stderr)
             return 1
+        pages = {"page.doc": ("echo", "hi")}
+        gen = Path(tmp) / "gen"
+        gen.mkdir()
+        (gen / "page.doc").write_text("hi\n")
+        if generated(gen, pages):
+            print(
+                "selftest: a current generated page was reported dirty", file=sys.stderr
+            )
+            return 1
+        (gen / "page.doc").write_text("stale\n")
+        if not any("drifted" in p for p in generated(gen, pages)):
+            print("selftest: a stale generated page was not caught", file=sys.stderr)
+            return 1
+        (gen / "page.doc").unlink()
+        if not any("missing" in p for p in generated(gen, pages)):
+            print("selftest: a vanished generated page was not caught", file=sys.stderr)
+            return 1
     print(
         "selftest: the check fails on a removed tag, a missing file,"
         " a missing docs root, a directive-less root, a drifted recipe copy"
-        " and a vanished one"
+        " and a vanished one, plus a stale and a vanished generated page"
     )
     return 0
 
@@ -161,12 +209,13 @@ def main() -> int:
         return selftest()
     root = Path(__file__).resolve().parents[2]
     status = run(root / "docs")
-    problems = copies(root)
+    problems = copies(root) + generated(root)
     for problem in problems:
         print(problem, file=sys.stderr)
     if problems:
         return 1
     print("every recipe copy is identical")
+    print("every generated page matches the command that writes it")
     return status
 
 
