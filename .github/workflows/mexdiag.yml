@@ -1,0 +1,145 @@
+name: diag matlab mex heap
+
+# Throwaway diagnostic for the ubuntu-22.04 MATLAB MEX heap corruption seen in
+# run 33551928063: fullmathtest passes in single precision, then glibc reports
+# "malloc(): invalid size (unsorted)" and MATLAB faults inside finufft.mexa64
+# under GOMP_parallel on the first double-precision transform.
+#
+# Arms: the arch flag (baseline vs the builder's own ISA), twice each to measure
+# how often it fires, plus one sanitizer arm that names the offending access.
+# Delete this file once the cause is fixed.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [diag/mex-heap]
+
+jobs:
+  diag:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arm: base-1
+            arch: -march=x86-64
+            asan: false
+          - arm: base-2
+            arch: -march=x86-64
+            asan: false
+          - arm: native-1
+            arch: native
+            asan: false
+          - arm: native-2
+            arch: native
+            asan: false
+          - arm: base-asan
+            arch: -march=x86-64
+            asan: true
+    name: diag-${{ matrix.arm }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup C++ toolchain
+        uses: aminya/setup-cpp@v1
+        with:
+          cmake: true
+          ninja: true
+
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2023b
+          products: Parallel_Computing_Toolbox
+          cache: false
+
+      - name: Configure & build the MEX
+        shell: bash
+        run: |
+          if [ -n "${MATLAB_ROOT:-}" ]; then export PATH="${MATLAB_ROOT}/bin:${PATH}"; fi
+          EXTRA=(-DCMAKE_CXX_FLAGS=-g)
+          if [ "${{ matrix.asan }}" = "true" ]; then
+            # -g plus the sanitizers on every TU, gateway included, so the MEX
+            # itself carries the instrumentation and the interceptors resolve.
+            EXTRA=(-DCMAKE_BUILD_TYPE=RelWithDebInfo
+                   "-DCMAKE_CXX_FLAGS=-fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -g")
+            # MATLAB starts before the MEX loads, so the runtimes must be preloaded
+            # into the process; the image's gcc decides the soname.
+            echo "LD_PRELOAD=$(gcc -print-file-name=libasan.so):$(gcc -print-file-name=libubsan.so)" >> "$GITHUB_ENV"
+          fi
+          cmake --preset matlab -B build \
+            -DFINUFFT_ARCH_FLAGS="${{ matrix.arch }}" \
+            -DFINUFFT_USE_DUCC0=ON \
+            -DMatlab_MEX_EXTENSION=mexa64 \
+            "${EXTRA[@]}"
+          cmake --build build --target finufft_mex --parallel
+          ldd build/matlab/finufft.mexa64
+
+      # The binary is needed to resolve the crash dump offsets, and the test step
+      # below is expected to kill MATLAB, so upload before running it.
+      - name: Upload the MEX
+        uses: actions/upload-artifact@v7
+        with:
+          name: mex-${{ matrix.arm }}
+          path: build/matlab/finufft.mexa64
+          if-no-files-found: error
+
+      # continue-on-error only defers the verdict: the crash is the thing being
+      # diagnosed, so the next step reads the sanitizer reports and the crash dump
+      # first and then re-raises this step's own status.
+      - name: Run fullmathtest
+        id: test
+        continue-on-error: true
+        uses: matlab-actions/run-command@v3
+        env:
+          OMP_NUM_THREADS: '4'
+          ASAN_OPTIONS: detect_leaks=0:new_delete_type_mismatch=0:alloc_dealloc_mismatch=0:halt_on_error=0:abort_on_error=0:protect_shadow_gap=0:print_stacktrace=1:log_path=asan.report
+          UBSAN_OPTIONS: print_stacktrace=1:log_path=ubsan.report
+        with:
+          command: |
+            addpath(genpath('matlab'));
+            addpath('build/matlab');
+            fullmathtest
+            tolsweeptest
+
+      - name: Symbolize the crash dump and the sanitizer reports
+        if: always()
+        shell: bash
+        run: |
+          echo "test step outcome: ${{ steps.test.outcome }}"
+          for f in asan.report.* ubsan.report.*; do
+            [ -e "$f" ] || continue
+            echo "===== $f ====="
+            cat "$f"
+          done
+          shopt -s nullglob
+          dumps=(matlab_crash_dump.* /tmp/matlab_crash_dump.* "$HOME"/matlab_crash_dump.*)
+          if [ ${#dumps[@]} -eq 0 ]; then
+            echo "no MATLAB crash dump found"
+          fi
+          for d in "${dumps[@]}"; do
+            echo "===== $d ====="
+            cat "$d"
+            echo "----- finufft.mexa64 frames resolved -----"
+            # MATLAB prints "<path>+<decimal offset>" per frame
+            grep -oE 'finufft\.mexa64\+[0-9]+' "$d" | sort -u | while read -r frame; do
+              off=${frame##*+}
+              printf '%s -> ' "$frame"
+              addr2line -f -C -i -e build/matlab/finufft.mexa64 "$(printf '0x%x' "$((10#$off))")"
+            done
+          done
+          # The verdict is the test step's own status, reported after the diagnosis.
+          [ "${{ steps.test.outcome }}" = "success" ]
+
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: logs-${{ matrix.arm }}
+          path: |
+            asan.report.*
+            ubsan.report.*
+            matlab_crash_dump.*
+          if-no-files-found: ignore
