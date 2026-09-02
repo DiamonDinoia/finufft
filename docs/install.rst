@@ -364,6 +364,13 @@ change is needed. On macOS, Homebrew's ``libomp`` is still required for
 ``-DOpenMP_ROOT=$(brew --prefix libomp)``, and never put it on
 ``DYLD_LIBRARY_PATH``.
 
+A MEX built for other machines should not carry the build host's instruction
+set: ``FINUFFT_ARCH_FLAGS`` defaults to ``-march=native`` (an ``/arch:`` level
+read off the host CPU under MSVC), and such a binary dies with an illegal
+instruction on an older CPU. Configure a redistributable MEX with
+``-DFINUFFT_ARCH_FLAGS=-march=x86-64`` on x86, or ``-DFINUFFT_ARCH_FLAGS=`` on
+Arm and MSVC, as the Python wheels do.
+
 
 Notes on compiler flags for various systems
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
