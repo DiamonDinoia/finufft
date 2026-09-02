@@ -48,11 +48,9 @@ iii) the output mode ordering is C (row-major) rather than Fortran (column-major
 this affects how to convert frequency indices into the output array index),
 and iv) there is an extra factor of $2\pi$ in the exponent relative
 to the FINUFFT definition, because NFFT3 assumes a 1-periodic input domain.
-The code is found in our :file:`tutorial/nfft2d1_test.c`. Running the executable gives:
-
-::
-
- 2D type 1 (NFFT3) done in 0.589 s: f_hat[-17,33]=86.0632804289+-350.023846367i, rel err 9.93e-14
+The code is found in our :file:`tutorial/nfft2d1_test.c`. The executable prints the
+time, the value of ``f_hat[-17,33]``, and the relative error of that entry. On one
+core of an AMD 5700U laptop it took 0.589 s and reached a relative error of 9.9e-14.
 
 To show how to migrate this, we write a self-contained code that generates exactly
 the same "user data" (same random seed), then uses FINUFFT to do the transform
@@ -66,13 +64,10 @@ to FINUFFT. Here is the corresponding C code (compare to the above):
 The fact that NFFT3 uses row-major mode arrays whereas FINUFFT uses column-major has
 been handled here by swapping the input $x$ and $y$ coordinates and array sizes in the
 FINUFFT call. (Equivalently, this could have been achieved by transposing the ``f_hat``
-output array. We recommend the former route since it saves memory.) Running the
-executable gives:
-
-::
-
- 2D type 1 (FINUFFT) in 0.0787 s: f_hat[-17,33]=86.0632804289+-350.023846367i, rel err 9.58e-14
-
-Comparing to the above, we see the same answer to all shown digits, a similar error for this tested output entry, plus a 7.5$\times$ speed-up. (Both use a single thread, tested on the same AMD 5700U laptop.) The user may of course now set a coarser (larger) value for ``tol`` and see a further speed-up.
+output array. We recommend the former route since it saves memory.) On the same core
+of the same laptop this took 0.0787 s and reached a relative error of 9.6e-14: the
+same ``f_hat[-17,33]`` to every digit printed, a similar error, and a 7.5$\times$
+speed-up. The user may of course now set a coarser (larger) value for ``tol`` and see
+a further speed-up.
 
 We believe that the above gives the essentials of how to convert your code from using NFFT3 to FINUFFT. Please read our documentation, especially the guru interface if multiple related transforms are required, then post a GitHub Issue if you are still stuck.
