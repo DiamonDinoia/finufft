@@ -20,33 +20,20 @@ foreach(EXAMPLE ${EXAMPLES})
     add_executable(${EXAMPLE} ${EXAMPLE}.cpp)
     target_compile_features(${EXAMPLE} PRIVATE cxx_std_14)
     target_link_libraries(${EXAMPLE} PRIVATE finufft)
-    if(CMAKE_PROJECT_NAME STREQUAL "FINUFFT")
+    if(PROJECT_IS_TOP_LEVEL)
         enable_asan(${EXAMPLE})
     endif()
     add_test(NAME example_${EXAMPLE} COMMAND ${EXAMPLE})
 endforeach()
 
-# Windows does not have complex support in the c compiler we need to compile in c++ mode
-# https://en.cppreference.com/w/c/numeric/complex.html
-# Minimal not working example: https://marco.godbolt.org/z/cf3YroEcv
-# when that happens we need to skip c examples as they will not work
-include(CheckCSourceCompiles)
-# gersemi: off
-check_c_source_compiles("
-        #include <complex.h>
-        int main() {
-            float complex z = 1.0f + 2.0f*I;
-            float x = crealf(z);
-            return 0;
-        }
-    " HAS_C_COMPLEX)
-# gersemi: on
+# The C examples need C99 complex, which MSVC lacks. HAS_C_COMPLEX is probed once in
+# cmake/toolchain.cmake. Minimal not working example: https://marco.godbolt.org/z/cf3YroEcv
 
 if(HAS_C_COMPLEX)
     foreach(EXAMPLE ${EXAMPLES_C})
         add_executable(${EXAMPLE} ${EXAMPLE}.c)
         target_link_libraries(${EXAMPLE} PRIVATE finufft)
-        if(CMAKE_PROJECT_NAME STREQUAL "FINUFFT")
+        if(PROJECT_IS_TOP_LEVEL)
             enable_asan(${EXAMPLE})
         endif()
         if(MATH_LIBRARY)
@@ -62,7 +49,7 @@ if(FINUFFT_USE_OPENMP)
         add_executable(${EXAMPLE} ${EXAMPLE}.cpp)
         target_link_libraries(${EXAMPLE} PRIVATE finufft OpenMP::OpenMP_CXX)
         target_compile_features(${EXAMPLE} PRIVATE cxx_std_11)
-        if(CMAKE_PROJECT_NAME STREQUAL "FINUFFT")
+        if(PROJECT_IS_TOP_LEVEL)
             enable_asan(${EXAMPLE})
         endif()
         add_test(NAME example_${EXAMPLE} COMMAND ${EXAMPLE})
