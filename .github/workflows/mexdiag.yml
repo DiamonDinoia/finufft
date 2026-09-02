@@ -1,12 +1,16 @@
 name: diag matlab mex heap
 
-# Throwaway diagnostic for the ubuntu-22.04 MATLAB MEX heap corruption seen in
-# run 33551928063: fullmathtest passes in single precision, then glibc reports
-# "malloc(): invalid size (unsorted)" and MATLAB faults inside finufft.mexa64
-# under GOMP_parallel on the first double-precision transform.
+# Throwaway diagnostic for the ubuntu-22.04 MATLAB MEX failure in run 33551928063.
+# Run 33650265224 named the defect: AddressSanitizer heap-buffer-overflow at
+# spread.hpp:684, bin_sort_multithread_impl<double,1> indexing a 76-bin histogram
+# with 92, on the first double-precision transform of fullmathtest. Valid
+# coordinates cannot produce that index, and the same code is clean locally
+# (gcc 14, libgomp or MATLAB's libiomp5, SSE2, asan).
 #
-# Arms: the arch flag (baseline vs the builder's own ISA), twice each to measure
-# how often it fires, plus one sanitizer arm that names the offending access.
+# Jobs: `probe` runs the same shape without MATLAB, so the image's gcc 11 and
+# MATLAB's OpenMP runtime are separated; `mexdiag` runs the MEX with the
+# FINUFFT_BINSORT_DIAG report compiled in, which prints the coordinate and the
+# bin bounds that produced the out-of-range index.
 # Delete this file once the cause is fixed.
 
 on:
@@ -15,30 +19,109 @@ on:
     branches: [diag/mex-heap]
 
 jobs:
-  diag:
+  probe:
+    name: probe-${{ matrix.arm }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arm: base-1
-            arch: -march=x86-64
-            asan: false
-          - arm: base-2
-            arch: -march=x86-64
-            asan: false
-          - arm: native-1
-            arch: native
-            asan: false
-          - arm: native-2
-            arch: native
-            asan: false
-          - arm: base-asan
-            arch: -march=x86-64
-            asan: true
-    name: diag-${{ matrix.arm }}
+          - arm: gomp
+            preload: ''
+          - arm: iomp5
+            preload: matlab
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup C++ toolchain
+        uses: aminya/setup-cpp@v1
+        with:
+          cmake: true
+          ninja: true
+
+      - name: Set up MATLAB
+        if: matrix.preload == 'matlab'
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2023b
+          cache: false
+
+      - name: Build the library with the bin-sort report
+        shell: bash
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DFINUFFT_ARCH_FLAGS=-march=x86-64 \
+            -DFINUFFT_USE_DUCC0=ON \
+            -DFINUFFT_BUILD_TESTS=OFF \
+            "-DCMAKE_CXX_FLAGS=-fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -g -DFINUFFT_BINSORT_DIAG"
+          cmake --build build --target finufft --parallel
+          g++ --version
+
+      - name: Run the fullmathtest shape without MATLAB
+        shell: bash
+        run: |
+          cat > repro.cpp <<'EOF'
+          // matlab/test/fullmathtest.m's first double case: 1D types 1 and 2,
+          // M=1000, N=1000, ntrans=20, tol=1e-9, x uniform on [0,2pi].
+          #include <finufft.h>
+          #include <complex>
+          #include <cstdio>
+          #include <cstdlib>
+          #include <random>
+          #include <vector>
+          int main(int argc, char **argv) {
+            const int64_t M = 1000, N = 1000, ntr = 20;
+            const int reps = argc > 1 ? atoi(argv[1]) : 20;
+            std::mt19937_64 rng(1);
+            std::uniform_real_distribution<double> u(0.0, 2 * M_PI);
+            std::vector<double> x(M);
+            std::vector<std::complex<double>> c(M * ntr), f(N * ntr);
+            for (int r = 0; r < reps; ++r) {
+              for (auto &v : x) v = u(rng);
+              for (auto &v : c) v = {u(rng), u(rng)};
+              for (int type : {1, 2}) {
+                finufft_opts o;
+                finufft_default_opts(&o);
+                finufft_plan p;
+                if (finufft_makeplan(type, 1, (int64_t *)&N, 1, ntr, 1e-9, &p, &o)) return 2;
+                if (finufft_setpts(p, M, x.data(), nullptr, nullptr, 0, nullptr, nullptr,
+                                   nullptr))
+                  return 3;
+                if (finufft_execute(p, type == 1 ? c.data() : f.data(),
+                                    type == 1 ? f.data() : c.data()))
+                  return 4;
+                finufft_destroy(p);
+              }
+            }
+            printf("REPOK reps=%d\n", reps);
+            return 0;
+          }
+          EOF
+          g++ -O2 -g -fsanitize=address -fsanitize=undefined -fopenmp -Iinclude repro.cpp \
+            -o repro build/src/libfinufft.a build/src/common/libfinufft_common.a \
+            build/src/libducc0.a
+          PRE=""
+          if [ "${{ matrix.preload }}" = matlab ]; then
+            # The MEX runs on the OpenMP runtime MATLAB has already initialized, so
+            # preload it here (asan first, as its runtime requires).
+            PRE="$(gcc -print-file-name=libasan.so):$(ls "${MATLAB_ROOT}"/sys/os/glnxa64/libiomp5.so)"
+          fi
+          for t in 2 4 8 16; do
+            echo "===== OMP_NUM_THREADS=$t preload=${PRE:-none}"
+            LD_PRELOAD="$PRE" OMP_NUM_THREADS=$t \
+              ASAN_OPTIONS=detect_leaks=0:print_stacktrace=1 ./repro 20
+          done
+
+  mexdiag:
+    name: mexdiag-${{ matrix.arm }}
     runs-on: ubuntu-22.04
     timeout-minutes: 60
-
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [1, 2]
     steps:
       - uses: actions/checkout@v7
 
@@ -55,40 +138,33 @@ jobs:
           products: Parallel_Computing_Toolbox
           cache: false
 
-      - name: Configure & build the MEX
+      - name: Configure & build the MEX with the bin-sort report
         shell: bash
         run: |
           if [ -n "${MATLAB_ROOT:-}" ]; then export PATH="${MATLAB_ROOT}/bin:${PATH}"; fi
-          EXTRA=(-DCMAKE_CXX_FLAGS=-g)
-          if [ "${{ matrix.asan }}" = "true" ]; then
-            # -g plus the sanitizers on every TU, gateway included, so the MEX
-            # itself carries the instrumentation and the interceptors resolve.
-            EXTRA=(-DCMAKE_BUILD_TYPE=RelWithDebInfo
-                   "-DCMAKE_CXX_FLAGS=-fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -g")
-            # MATLAB starts before the MEX loads, so the runtimes must be preloaded
-            # into the process; the image's gcc decides the soname.
-            echo "LD_PRELOAD=$(gcc -print-file-name=libasan.so):$(gcc -print-file-name=libubsan.so)" >> "$GITHUB_ENV"
-          fi
           cmake --preset matlab -B build \
-            -DFINUFFT_ARCH_FLAGS="${{ matrix.arch }}" \
+            -DFINUFFT_ARCH_FLAGS=-march=x86-64 \
             -DFINUFFT_USE_DUCC0=ON \
             -DMatlab_MEX_EXTENSION=mexa64 \
-            "${EXTRA[@]}"
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            "-DCMAKE_CXX_FLAGS=-fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -g -DFINUFFT_BINSORT_DIAG"
           cmake --build build --target finufft_mex --parallel
-          ldd build/matlab/finufft.mexa64
+          # MATLAB starts before the MEX loads, so the runtimes must be preloaded
+          # into the process; the image's gcc decides the soname.
+          echo "LD_PRELOAD=$(gcc -print-file-name=libasan.so):$(gcc -print-file-name=libubsan.so)" >> "$GITHUB_ENV"
 
-      # The binary is needed to resolve the crash dump offsets, and the test step
-      # below is expected to kill MATLAB, so upload before running it.
+      # The binary resolves the crash-dump offsets and the test step below is
+      # expected to kill MATLAB, so upload before running it.
       - name: Upload the MEX
         uses: actions/upload-artifact@v7
         with:
-          name: mex-${{ matrix.arm }}
+          name: mex-diag-${{ matrix.arm }}
           path: build/matlab/finufft.mexa64
           if-no-files-found: error
 
       # continue-on-error only defers the verdict: the crash is the thing being
-      # diagnosed, so the next step reads the sanitizer reports and the crash dump
-      # first and then re-raises this step's own status.
+      # diagnosed, so the next step reads the reports first and then re-raises
+      # this step's own status.
       - name: Run fullmathtest
         id: test
         continue-on-error: true
@@ -104,22 +180,17 @@ jobs:
             fullmathtest
             tolsweeptest
 
-      - name: Symbolize the crash dump and the sanitizer reports
+      - name: Report the sanitizer reports and the crash dump
         if: always()
         shell: bash
         run: |
           echo "test step outcome: ${{ steps.test.outcome }}"
+          shopt -s nullglob
           for f in asan.report.* ubsan.report.*; do
-            [ -e "$f" ] || continue
             echo "===== $f ====="
             cat "$f"
           done
-          shopt -s nullglob
-          dumps=(matlab_crash_dump.* /tmp/matlab_crash_dump.* "$HOME"/matlab_crash_dump.*)
-          if [ ${#dumps[@]} -eq 0 ]; then
-            echo "no MATLAB crash dump found"
-          fi
-          for d in "${dumps[@]}"; do
+          for d in matlab_crash_dump.* /tmp/matlab_crash_dump.* "$HOME"/matlab_crash_dump.*; do
             echo "===== $d ====="
             cat "$d"
             echo "----- finufft.mexa64 frames resolved -----"
@@ -137,7 +208,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: logs-${{ matrix.arm }}
+          name: logs-diag-${{ matrix.arm }}
           path: |
             asan.report.*
             ubsan.report.*

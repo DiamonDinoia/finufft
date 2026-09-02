@@ -681,6 +681,23 @@ inline void bin_sort_multithread_impl(std::vector<BIGINT> &ret, UBIGINT M, const
     for (i = chunk_start; i < chunk_simd; i += simd_size) {
       const auto bin       = compute_bins(i);
       const auto bin_array = to_array(bin);
+#ifdef FINUFFT_BINSORT_DIAG
+      // Throwaway diagnostic for the ubuntu-22.04 MATLAB MEX crash: asan caught this
+      // loop indexing my_counts (nbins=76) with 92. Report the inputs that produced it.
+      for (std::size_t j = 0; j < simd_size; ++j) {
+        const auto b = BIGINT(bin_array[j]);
+        if (b < 0 || b >= BIGINT(nbins)) {
+          fprintf(stderr,
+                  "[binsort diag] t=%d nt=%d i=%lld j=%zu simd=%zu bin=%lld nbins=%lld "
+                  "M=%lld N1=%lld bs=%g kx=%p x=%.17g (%a) scalar_bin=%lld "
+                  "x[0]=%.17g x[M-1]=%.17g\n",
+                  t, nt, (long long)i, j, simd_size, (long long)b, (long long)nbins,
+                  (long long)M, (long long)N1, bin_size_x, (const void *)kx,
+                  double(kx[i + j]), double(kx[i + j]),
+                  (long long)compute_bin_scalar(i + j), double(kx[0]), double(kx[M - 1]));
+        }
+      }
+#endif
       for (std::size_t j = 0; j < simd_size; ++j) ++my_counts[bin_array[j]];
     }
     for (; i < chunk_end; i++) ++my_counts[compute_bin_scalar(i)];
