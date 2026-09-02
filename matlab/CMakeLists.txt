@@ -5,6 +5,50 @@ if(FINUFFT_BUILD_MATLAB)
     find_package(Matlab REQUIRED COMPONENTS MEX_COMPILER MX_LIBRARY)
 endif()
 
+# MATLAB loads and initializes its own OpenMP runtime before any MEX. On macOS a
+# second runtime in the same process aborts the session (OMP #15, or #179 from the
+# pthread mutex it re-initializes), so a macOS build links MATLAB's copy. MathWorks
+# documents this (MATLAB Answers 237411); SuiteSparse:GraphBLAS
+# (graphblas_install.m) and Dynare (wmutschl/matlab_openmp_tls_bug) do the same,
+# and it is what make-platforms/make.inc.macosx_*_matlab has always done. Linux
+# tolerates the two runtimes (libgomp answers its own GOMP_* calls next to
+# MATLAB's libiomp5) and MSVC's /openmp targets the vcomp ABI, which libiomp5md
+# does not answer, so neither swaps.
+if(APPLE AND FINUFFT_BUILD_MATLAB AND FINUFFT_USE_OPENMP)
+    find_library(
+        Matlab_OMP_LIBRARY
+        NAMES omp iomp5
+        HINTS
+            "${Matlab_ROOT_DIR}/bin/maca64" # Apple silicon
+            "${Matlab_ROOT_DIR}/sys/os/maci64" # Intel mac
+            "${Matlab_ROOT_DIR}/toolbox/eml/externalDependency/omp/maca64/lib"
+        NO_DEFAULT_PATH
+        REQUIRED
+        DOC "OpenMP runtime shipped inside MATLAB"
+    )
+    message(STATUS "MATLAB OpenMP runtime: ${Matlab_OMP_LIBRARY}")
+    # Swap the runtime only: the compile flags and omp.h include dir that
+    # FindOpenMP discovered stay as they are. GCC's -fopenmp codegen also runs on
+    # libiomp5, which exports the GOMP_* entry points it calls.
+    foreach(_omp_tgt IN ITEMS OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
+        set_property(TARGET ${_omp_tgt} PROPERTY INTERFACE_LINK_LIBRARIES "${Matlab_OMP_LIBRARY}")
+    endforeach()
+    # No -rpath here: the MEX links this library by absolute path, so CMake already
+    # emits an rpath entry for its directory. A second, identical -rpath makes
+    # dyld reject the bundle outright ("duplicate LC_RPATH", run 33530717083).
+
+    # clang >= 19 calls __kmpc_dispatch_deinit after every dynamic-schedule loop.
+    # Runtimes older than LLVM 19 - MATLAB's copy among them - export no such
+    # symbol, so the MEX fails to link. Upstream implements it as an empty
+    # function (openmp/runtime/src/kmp_dispatch.cpp), hence the stub below is
+    # behaviour-identical; this check drops it once MATLAB ships LLVM >= 19.
+    include(CheckLibraryExists)
+    check_library_exists("${Matlab_OMP_LIBRARY}" __kmpc_dispatch_deinit "" FINUFFT_MATLAB_OMP_HAS_DISPATCH_DEINIT)
+    if(NOT FINUFFT_MATLAB_OMP_HAS_DISPATCH_DEINIT)
+        set(FINUFFT_MEX_OMP_SHIM "${CMAKE_CURRENT_SOURCE_DIR}/matlab_omp_shim.cpp")
+    endif()
+endif()
+
 # Make MEX self-contained where we can
 function(make_mex_self_contained tgt)
     if(UNIX AND NOT APPLE)
@@ -35,7 +79,7 @@ endfunction()
 if(FINUFFT_BUILD_MATLAB AND FINUFFT_USE_CPU)
     matlab_add_mex(
         NAME finufft_mex
-        SRC "${CMAKE_CURRENT_SOURCE_DIR}/finufft.cpp"
+        SRC "${CMAKE_CURRENT_SOURCE_DIR}/finufft.cpp" ${FINUFFT_MEX_OMP_SHIM}
         OUTPUT_NAME "finufft"
         R2018a
         LINK_TO finufft
