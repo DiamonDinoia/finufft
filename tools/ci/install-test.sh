@@ -2,7 +2,7 @@
 set -euo pipefail
 
 rm -rf _build _stage _makestage _consume _fetch _cpm _submod _c _fortran _pkgconfig _leak _broken _broken_consume \
-	_nofetch _userfftw _deffftw _abslibdir broken.log nofetch.log userfftw.log deffftw.log abslibdir.log \
+	_nofetch _userfftw _deffftw _abslibdir _migrate2d1 _nfft2d1 broken.log nofetch.log userfftw.log deffftw.log abslibdir.log \
 	examples/quick-start/makefile/app examples/quick-start/pkgconfig/app
 
 linking=${LINKING:-Static}
@@ -147,24 +147,47 @@ else
 	skip fortran "no gfortran from the toolchain that built the install"
 fi
 
+pcdir=$stage/lib/pkgconfig
+[[ -d "$pcdir" ]] || pcdir=$stage/lib64/pkgconfig
+pcstatic=
+[[ "$linking" == "Static" ]] && pcstatic=--static
+
 # The recipe is a POSIX compiler line, so it needs a Unix-like driver. On the Windows
 # runners `command -v pkg-config` also finds Strawberry Perl's copy, which aborts on
 # every invocation, so the route asks it for its version before believing it.
 if [[ "$cuda" == "0" && "${RUNNER_OS:-}" != "Windows" ]] && pkg-config --version >/dev/null 2>&1; then
-	pcdir=$stage/lib/pkgconfig
-	[[ -d "$pcdir" ]] || pcdir=$stage/lib64/pkgconfig
 	[[ -f "$pcdir/finufft.pc" ]] || {
 		echo "ERROR: the install shipped no finufft.pc, so the pkg-config route proves nothing"
 		exit 1
 	}
-	pcstatic=
-	[[ "$linking" == "Static" ]] && pcstatic=--static
 	PKG_CONFIG_PATH="$pcdir" make -C examples/quick-start/pkgconfig STATIC="$pcstatic" clean app
 	run_app examples/quick-start/pkgconfig
 	make -C examples/quick-start/pkgconfig clean
 	routes="$routes pkgconfig"
 else
 	skip pkgconfig "no working pkg-config, or a compiler line this recipe does not fit"
+fi
+
+# docs/nfft_migr.rst embeds both tutorial C codes whole, so CI compiles and runs them
+# or the embedded text is a claim with no check. Once per platform: neither code varies
+# with the FFT backend or the link mode.
+if [[ "$cuda" == "0" && "$backend" == "ducc" && "${RUNNER_OS:-}" != "Windows" ]] &&
+	pkg-config --version >/dev/null 2>&1; then
+	# shellcheck disable=SC2046 # the flags must word-split
+	cc tutorial/migrate2d1_test.c -o _migrate2d1 \
+		$(PKG_CONFIG_PATH="$pcdir" pkg-config $pcstatic --cflags --libs finufft) -lm
+	./_migrate2d1
+	routes="$routes tutorial"
+	# nfft2d1_test.c needs NFFT3, which only the image that installs libnfft3-dev has.
+	if echo '#include <nfft3.h>' | cc -E -x c - >/dev/null 2>&1; then
+		cc tutorial/nfft2d1_test.c -o _nfft2d1 -lnfft3 -lfftw3 -lm
+		./_nfft2d1
+		routes="$routes nfft"
+	else
+		skip nfft "no nfft3.h, so this image installs no libnfft3-dev"
+	fi
+else
+	skip tutorial "run once per platform, on the ducc backend, where pkg-config works"
 fi
 
 cmake -S "$fetch_consumer" -B _fetch -DCMAKE_BUILD_TYPE=Release \
