@@ -4,38 +4,14 @@ Error (status) codes
 ====================
 
 In all FINUFFT interfaces, the returned value ``ier`` is a status indicator.
-It is ``0`` if successful, otherwise the error code
-has the following meanings which are used by both CPU and GPU versions
-(see codes in ``include/finufft_errors.h``):
+It is ``0`` if successful, otherwise it is one of the codes below, shared by the
+CPU and GPU versions. Codes marked ``[DEPRECATED]`` are no longer returned and
+are kept only so the ABI does not change:
 
-::
-
-  1  [DEPRECATED] requested tolerance epsilon too small (was warning, now see code 26)
-  2  stopped due to needing internal array size >MAX_NF (defined in plan.hpp)
-  3  spreader: fine grid too small compared to spread (kernel) width
-  4  spreader: [DEPRECATED]
-  5  spreader: array allocation error
-  6  spreader: illegal direction (should be 1 or 2)
-  7  upsampfac too small (should be >1.0)
-  8  upsampfac not a value with known Horner poly eval rule (currently 2.0 or 1.25 only)
-  9  ntrans not valid in "many" (vectorized) or guru interface (should be >= 1)
-  10 transform type invalid
-  11 general internal allocation failure
-  12 dimension invalid
-  14 invalid mode array (more than ~2^31 modes, dimension with 0 modes, etc)
-  15 CUDA failure (failure to call any cuda function/kernel, malloc/memset, etc))
-  16 attempt to destroy an uninitialized plan
-  17 invalid spread/interp method for dim (attempt to blockgather in 1D, e.g.)
-  18 size of bins for subprob/blockgather invalid
-  19 GPU shmem too small for subprob/blockgather parameters
-  20 invalid number of nonuniform points: nj or nk negative, or too big (see plan.hpp)
-  21 invalid input argument not covered by other errors
-  22 invalid FFTW lock function
-  23 nthreads invalid
-  24 spread kernel formula type invalid
-  25 unknown exception caught
-  26 requested tolerance epsilon too small to achieve (hard error; tolerance must be >= machine epsilon)
-  27 iteration inside the setup code for the PSWF function evaluator failed to converge
+.. literalinclude:: ../include/finufft_errors.h
+   :language: c
+   :start-after: @error_codes_start
+   :end-before: @error_codes_end
 
 For any nonzero value of ``ier`` the transform may not have been performed and the output should not be trusted. However, we hope that the value of ``ier`` will help to narrow down the problem.
 
