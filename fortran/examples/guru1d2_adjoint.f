@@ -65,9 +65,14 @@ c     (note since dim=1, unused entries on n_modes are never read)
 c     use default options
       call finufft_makeplan(ttype,dim,n_modes,iflag,ntrans,
      $     tol,plan,defopts,ier)
+      if (ier.ne.0) stop 1
 c     note for ttype 1 or 2, arguments 6-9 ignored...
       call finufft_setpts(plan,M,xj,dummy,dummy,dummy,
      $     dummy,dummy,dummy,ier)
+      if (ier.ne.0) then
+         call finufft_destroy(plan,ier)
+         stop 1
+      endif
 c     Do the adjoint of planned transform:
 c     reads fk (mode coeffs), writes cj (strengths) and ier (status)
       call finufft_execute_adjoint(plan,cj,fk,ier)
