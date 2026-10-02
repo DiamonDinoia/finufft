@@ -69,7 +69,7 @@ DEPS_ROOT := deps
 
 # xsimd header-only dependency repo (VERSION can be a tag or commit)
 XSIMD_URL := https://github.com/xtensor-stack/xsimd.git
-XSIMD_VERSION := 6842624
+XSIMD_VERSION := 14.3.0
 XSIMD_DIR := $(DEPS_ROOT)/xsimd
 
 # POET dispatcher dependency: each release ships one amalgamated header (with
@@ -489,7 +489,7 @@ CMCLOBJS = $(FD)/dirft1d.o $(FD)/dirft2d.o $(FD)/dirft3d.o $(FD)/dirft1df.o $(FD
 FE_DIR = fortran/examples
 FE64 = $(FE_DIR)/simple1d1 $(FE_DIR)/simple1d1_f90 $(FE_DIR)/guru1d1 $(FE_DIR)/guru1d1_adjoint $(FE_DIR)/guru1d2_adjoint $(FE_DIR)/nufft1d_demo $(FE_DIR)/nufft2d_demo $(FE_DIR)/nufft3d_demo $(FE_DIR)/nufft2dmany_demo
 # add the "f" single-prec suffix to all examples except double-prec only ones...
-FE32 := $(filter-out %/simple1d1_f90f %/guru1d1_adjointf, $(FE64:%=%f))
+FE32 := $(filter-out %/simple1d1_f90f, $(FE64:%=%f))
 # list of all fortran examples
 FE = $(FE64) $(FE32)
 

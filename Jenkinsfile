@@ -40,11 +40,11 @@ properties([
 // A whole-node pod is `exclusive: true`: a co-tenant pollutes a CPU measurement
 // and pinning does not isolate it. The count has to stay next to it, because a
 // cpu request still sets the pod's cpuset and runPod defaults to 4 - measured on
-// build 50, whose exclusive pod got 4 of the node's 72 processors. 64 is the
-// most the current exclusive node (66 allocatable) can give while the jnlp
-// sidecar keeps 1, and an even count means whole cores rather than SMT halves.
+// build 50, whose exclusive pod got 4 of the node's 72 processors. The exclusive
+// node has SMT off and 30 cores allocatable (SCC Jenkins wiki); the jnlp sidecar
+// keeps 1.
 // The harness sizes every case from the affinity mask it ends up with.
-def PERF_CPU_CORES = 64
+def PERF_CPU_CORES = 29
 
 // gh is in the image; the credential is an environment variable of the step
 // and never lives on disk. Publishing runs in the main container.
@@ -112,6 +112,31 @@ catchError {
       }
     }] }
 
+    // The MEX against every MATLAB release MathWorks publishes an image for,
+    // pulled as is: matlab: true injects the license, and the script fetches
+    // the toolchain. matlab-deep-learning carries the Parallel Computing
+    // Toolbox, so those releases also build and test the GPU MEX; r2020b has
+    // only the plain image and runs the CPU half. canUseGPU() is false on the
+    // Blackwell MIG slices (r2023b, r2025a), so the GPU legs take a V100. The
+    // license server has no r2026b yet.
+    def matlabs = ['r2021b', 'r2022a', 'r2022b', 'r2023a', 'r2023b', 'r2024a',
+                   'r2024b', 'r2025a', 'r2025b', 'r2026a']
+    jobs['matlab-r2020b'] = {
+      runPod(image: 'docker.io/mathworks/matlab:r2020b', cpus: 8, memory: '16Gi', matlab: true) {
+        stage('matlab r2020b') {
+          withEnv(["HOME=$WORKSPACE"]) { sh 'tools/ci/matlab-test.sh' }
+        }
+      }
+    }
+    matlabs.each { rel -> jobs['matlab-' + rel] = {
+      runPod(image: "docker.io/mathworks/matlab-deep-learning:${rel}", cpus: 8, memory: '16Gi',
+             gpus: 1, gpuType: 'v100', matlab: true) {
+        stage("matlab ${rel}") {
+          withEnv(["HOME=$WORKSPACE", "CUDA_ARCH=${gpuArch()}"]) { sh 'tools/ci/matlab-test.sh' }
+        }
+      }
+    } }
+
     // The perftest comment, PR builds only: CHANGE_ID is unset on branch builds.
     // Each half writes its own section in its own pod - the CPU half wants cores
     // and no card, the GPU half wants the card - so the two run in parallel and
@@ -128,8 +153,7 @@ catchError {
         stage('perf cpu') {
           withEnv([
             "HOME=$WORKSPACE",
-            "CPM_SOURCE_CACHE=$WORKSPACE/.cpm",
-            "PARALLEL=16"
+            "CPM_SOURCE_CACHE=$WORKSPACE/.cpm"
           ]) {
             sh 'tools/ci/perf-cpu.sh'
           }
@@ -150,8 +174,7 @@ catchError {
             "HOME=$WORKSPACE",
             "CUDA_ARCH=${arch}",
             "CPM_SOURCE_CACHE=$WORKSPACE/.cpm",
-            "LIBRARY_PATH=/usr/local/cuda/lib64/stubs",
-            "PARALLEL=12"
+            "LIBRARY_PATH=/usr/local/cuda/lib64/stubs"
           ]) {
             sh 'tools/ci/perf-gpu.sh'
           }
@@ -208,7 +231,6 @@ catchError {
         withEnv([
           "HOME=$WORKSPACE",
           "CPM_SOURCE_CACHE=$WORKSPACE/.cpm",
-          "PARALLEL=16",
           "VERSIONS=${PAGE_VERSIONS}",
           "BACKEND=${backend}",
           "DUCC=${ducc}"
@@ -243,7 +265,6 @@ catchError {
             "CUDA_ARCH=${arch}",
             "CPM_SOURCE_CACHE=$WORKSPACE/.cpm",
             "LIBRARY_PATH=/usr/local/cuda/lib64/stubs",
-            "PARALLEL=12",
             "VERSIONS=${PAGE_VERSIONS}"
           ]) {
             sh 'tools/ci/page-worktrees.sh'
@@ -278,7 +299,7 @@ catchError {
           } else {
             // A rehearsal stops here: the page and its figures ride out as
             // build artifacts, and the branch readthedocs fetches is untouched.
-            archiveArtifacts artifacts: 'docs/performance_change_summary.rst,docs/pics/perftestci_*.svg'
+            archiveArtifacts artifacts: 'docs/performance.rst,docs/pics/perftestci_*.svg'
           }
         }
       }
