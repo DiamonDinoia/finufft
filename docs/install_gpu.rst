@@ -48,9 +48,9 @@ This will return a text string such as ``8.6`` which would incidate
 ``sm_86`` architecture, thus to use ``CMAKE_CUDA_ARCHITECTURES=86``.
 
 
-Note that by default the ``CMAKE_CUDA_ARCHITECTURES`` flag is set to ``native``, which means that the code will be compiled for the compute capability of the GPU on which the code is being compiled.
-This might not be portable so it is recommended to set this flag explicitly when building for multiple systems. A good alternative is ``all-major`` which will compile for all major compute capabilities.
-If no GPU is visible at configure time (an HPC login node, or a container build) we fall back to ``all-major`` for you.
+If you leave ``CMAKE_CUDA_ARCHITECTURES`` unset, CMake queries ``nvidia-smi`` for the compute capability of every GPU visible at configure time and builds for the highest one found.
+This is not portable, so set this flag explicitly when building for multiple systems. A good alternative is ``all-major`` which will compile for all major compute capabilities.
+If ``nvidia-smi`` is missing or no GPU is visible at configure time (an HPC login node, or a container build), we fall back to ``all-major`` for you.
 
 
 .. _install_gpu_sites:
@@ -188,6 +188,30 @@ Assuming ``pytest`` is installed (otherwise, just run ``pip install pytest``), y
 
 In contrast to the C interface tests, these check for correctness, so a successful test run signifies that the library is working correctly.
 Note that you can specify other framework (``pycuda``, ``torch``, or ``numba``) for testing using the ``--framework`` argument.
+
+Building inside a conda environment
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+conda is not an officially supported way to install cuFINUFFT. Building from source
+inside a conda environment gets the CUDA toolkit and CuPy from conda-forge instead of
+a system install; conda-forge packages CUDA 12.0 and newer, so a CUDA 11.8 build needs
+a system toolkit and follows the sections above instead. The environment file and the
+install script live next to the package they build, in ``python/cufinufft``. The conda
+solver picks the newest CUDA toolkit the driver's major version allows; to build
+against a specific version, add ``cuda-version=X.Y`` to the file and re-create the
+environment.
+
+.. code-block:: bash
+
+  bash python/cufinufft/conda-install.sh
+
+.. literalinclude:: ../python/cufinufft/conda-install.sh
+   :language: bash
+   :start-after: @conda_cufinufft_start
+   :end-before: @conda_cufinufft_end
+
+.. literalinclude:: ../python/cufinufft/environment.yml
+   :language: yaml
 
 
 Matlab interface

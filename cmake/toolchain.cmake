@@ -39,6 +39,12 @@ set(FINUFFT_CXX_FLAGS_RELEASE
 if(NOT APPLE AND NOT WIN32)
     list(APPEND FINUFFT_CXX_FLAGS_RELEASE -fno-semantic-interposition)
 endif()
+# icpx defaults to -fp-model=fast and -complex-range=promoted, which -fcx-limited-range warns about.
+# Directory options precede target ones, so the Release math flags still apply on top.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-fno-fast-math>)
+    list(TRANSFORM FINUFFT_CXX_FLAGS_RELEASE REPLACE "^-fcx-limited-range$" "-fcomplex-arithmetic=basic")
+endif()
 filter_supported_compiler_flags(FINUFFT_CXX_FLAGS_RELEASE FINUFFT_CXX_FLAGS_RELEASE)
 message(STATUS "FINUFFT Release flags: ${FINUFFT_CXX_FLAGS_RELEASE}")
 set(FINUFFT_CXX_FLAGS_RELWITHDEBINFO ${FINUFFT_CXX_FLAGS_RELEASE})
@@ -62,6 +68,21 @@ if(NOT MSVC)
     list(APPEND FINUFFT_CXX_FLAGS_DEBUG -Wall)
 endif()
 filter_supported_compiler_flags(FINUFFT_CXX_FLAGS_DEBUG FINUFFT_CXX_FLAGS_DEBUG)
+
+# RelWithDebInfo inherits the Debug warning flags in addition to the Release
+# set. Copy before the -O1 workaround below so -O1 stays out of RelWithDebInfo;
+# GCC keeps only the last -O, which must stay the Release -O3 there.
+list(APPEND FINUFFT_CXX_FLAGS_RELWITHDEBINFO ${FINUFFT_CXX_FLAGS_DEBUG})
+message(STATUS "FINUFFT RelWithDebInfo flags: ${FINUFFT_CXX_FLAGS_RELWITHDEBINFO}")
+
+# Work around xsimd 14.3.0: at -O0 GCC refuses to fold the constexpr
+# immediate arguments in xsimd_avx_128.hpp ("last argument must be an 8-bit
+# immediate"). Debug compiles at -O1 on the compilers that hit it (GCC; clang
+# is unaffected). Goes through FINUFFT_CXX_FLAGS_DEBUG so every caller of
+# finufft_apply_compile_settings sees it, not only the enable_asan callers.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    list(APPEND FINUFFT_CXX_FLAGS_DEBUG -O1)
+endif()
 message(STATUS "FINUFFT Debug flags: ${FINUFFT_CXX_FLAGS_DEBUG}")
 
 # MSVC reports what GCC and clang leave to opt-in flags this project does not ask for.
@@ -85,9 +106,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 filter_supported_compiler_flags(FINUFFT_CXX_FLAGS_WARNINGS FINUFFT_CXX_FLAGS_WARNINGS)
 message(STATUS "FINUFFT warning flags: ${FINUFFT_CXX_FLAGS_WARNINGS}")
-
-list(APPEND FINUFFT_CXX_FLAGS_RELWITHDEBINFO ${FINUFFT_CXX_FLAGS_DEBUG})
-message(STATUS "FINUFFT RelWithDebInfo flags: ${FINUFFT_CXX_FLAGS_RELWITHDEBINFO}")
 
 # Microsoft's CRT deprecates portable C (sscanf, getenv, ...) in favour of its _s
 # variants. Applies to any compiler using those headers, MSVC and clang alike.
@@ -128,9 +146,10 @@ if(FINUFFT_BUILD_FORTRAN)
 endif()
 
 # ---- Sanitizers ---------------------------------------------------------------
-# TODO: drop the -O1 below (revert to Debug -O0) once xsimd > 14.3.0 ships the fix
-# for the constexpr immediate-argument folding (xsimd_avx_128.hpp "last argument
-# must be an 8-bit immediate" at -O0). -O1 is only here to work around that.
+# TODO: drop the -O1 in FINUFFT_CXX_FLAGS_DEBUG (revert to Debug -O0) once
+# xsimd > 14.3.0 ships the fix for the constexpr immediate-argument folding
+# (xsimd_avx_128.hpp "last argument must be an 8-bit immediate" at -O0 with GCC).
+# -O1 is only here to work around that.
 set(FINUFFT_SANITIZER_FLAGS)
 string(TOUPPER "${FINUFFT_USE_SANITIZERS}" FINUFFT_USE_SANITIZERS_MODE)
 if(FINUFFT_USE_SANITIZERS_MODE STREQUAL "OFF")

@@ -16,11 +16,8 @@ a header-only library that, like ``xsimd`` and ``DUCC0``, is fetched automatical
 by the build (into the ``deps`` subdirectory), so there is nothing to install by hand.
 In practice, SIMD code generation also depends on the compiler version and
 target CPU. FINUFFT builds with no issues on Linux and MacOS using current
-compilers, and in our experience (as of 2024), GCC13 gives the best
-performance. We do not recommend any GCC version prior to 9 on x86_64, due to
+compilers. We do not recommend any GCC version prior to 9 on x86_64, due to
 vectorization issues.
-
-.. include:: _generated/platforms.rst
 
 .. note::
   There are now two choices of FFT library for the CPU build:
@@ -29,6 +26,8 @@ vectorization issues.
     * `DUCC0 FFT <https://gitlab.mpcdf.mpg.de/mtr/ducc>`_ (which is automatically installed into the ``deps`` subdirectory by CMake or GNU make).
 
   Both are available in either CMake or GNU make build routes. Currently FFTW3 is the default in both routes, since DUCC0 is new as of FINUFFT v2.3 and not as well tested. DUCC0 is from the same author as `PocketFFT <https://gitlab.mpcdf.mpg.de/mtr/pocketfft>`_ (used, for instance, by `scipy <https://scipy.org/>`_); however, DUCC0 FFT is more optimized than PocketFFT. Choosing DUCC0 also exploits the block-sparsity structure in 2D and 3D transforms, and is generally faster than FFTW3 in those cases. In 1D, the relative speed of FFTW3 and DUCC0 varies depending on `N` and the batch size. DUCC0 has no plan stage, whereas FFTW3 requires a plan stage. Some idea of their relative performance can be found in `this discussion <https://github.com/flatironinstitute/finufft/pull/463#issuecomment-2223988300>`_. We encourage the power user to try switching to DUCC to see if it is faster in their setting.
+
+.. include:: _generated/platforms.rst
 
 If you cannot get FINUFFT to compile (see details below), as a last resort you might find
 a precompiled binary for your platform under Assets for various
@@ -64,13 +63,13 @@ Then add the following to your ``CMakeLists.txt``:
 .. code-block:: cmake
 
   # short version
-  CPMAddPackage("gh:flatironinstitute/finufft@2.5.0")
+  CPMAddPackage("gh:flatironinstitute/finufft#v2.5.1")
 
   # alternative in case custom options are needed
   CPMAddPackage(
     NAME             Finufft
     GIT_REPOSITORY   https://github.com/flatironinstitute/finufft.git
-    GIT_TAG          2.5.0
+    GIT_TAG          v2.5.1
     GIT_SHALLOW      Yes
     GIT_PROGRESS     Yes
     EXCLUDE_FROM_ALL Yes
@@ -92,7 +91,7 @@ Add the following to your ``CMakeLists.txt``:
     FetchContent_Declare(
       finufft
       GIT_REPOSITORY https://github.com/flatironinstitute/finufft.git
-      GIT_TAG 2.5.0
+      GIT_TAG v2.5.1
     )
 
     # Make the content available
@@ -114,19 +113,27 @@ the installed package directly:
 
 Point CMake at the install prefix when configuring your project, e.g.
 ``-DCMAKE_PREFIX_PATH=/path/to/install`` (or ``-Dfinufft_DIR=/path/to/install/lib/cmake/finufft``).
+The installed package exports its public headers as a file set, so the
+consumer needs CMake 3.23 or later.
 The package config pulls in the required dependencies automatically
 (OpenMP, and for a *static* install the FFT backend). A **shared** install is
 fully self-contained — everything, including the FFT backend, is baked into the
 library (``libfinufft.so``/``.dylib`` or ``finufft.dll``), so only the OpenMP
-runtime is needed at link time. For a **static** install built with the bundled
-DUCC0 backend, the backend archive is installed and exported alongside FINUFFT;
-a static install built against **FFTW** instead requires the consumer to make
-FFTW discoverable themselves (a shared build avoids this).
+runtime is needed at link time. A **static** ``libfinufft.a`` bundles the DUCC0
+or downloaded FFTW it was built with; for a *system* FFTW the install ships the
+``FindFFTW`` module that located it, which ``find_package(finufft)`` re-runs to
+find the same FFTW in the consumer.
+
+FINUFFT installs itself only when it is the top-level project. When FINUFFT
+enters a build as a subproject (``add_subdirectory``, FetchContent, CPM), the
+default of ``FINUFFT_ENABLE_INSTALL`` is OFF, and ``cmake --install`` on the
+parent project installs the parent alone. Configure with
+``-DFINUFFT_ENABLE_INSTALL=ON`` to install FINUFFT from a subproject build.
 
 CMake based installation and compilation
 ----------------------------------------
 
-Make sure you have ``cmake`` version at least 3.25.
+Make sure you have ``cmake`` version at least 3.23 (the presets file needs 3.25).
 
 .. _cmake-presets:
 
@@ -265,10 +272,16 @@ Here are our CMake build options, showing name, explanatory text, and default va
    :start-after: @cmake_opts_start
    :end-before: @cmake_opts_end
 
-
 After a CMake MATLAB build, the MEX executable and associated M-files will be in ``build/matlab``. There is currently no CTest for MATLAB. Instead, open MATLAB by hand, add this ``build/matlab`` directory to your path,
 cd to ``matlab/test`` and run ``fullmathtest`` which should run for 1 second
 and pass.
+
+Octave, instead of (or as well as) MATLAB, can be built the same CMake way by setting
+``-DFINUFFT_BUILD_OCTAVE=ON``; this needs ``mkoctfile``, ``octave`` and
+``octave-config`` on ``PATH`` (install ``octave`` and ``liboctave-dev``/``octave-devel``).
+It builds ``finufft.mex`` as a native CMake module library into ``build/octave`` and, if
+``FINUFFT_BUILD_TESTS`` is also ``ON``, registers the Octave ``.m`` scripts as individual
+CTest entries under the ``octave`` label.
 
 
 Notes on compiler flags for various systems
@@ -292,7 +305,7 @@ These apply to CMake (as above), or GNU make (as below).
 
 .. warning::
 
-  Intel compilers (unlike GPU compilers) currently engage ``fastmath`` behavior with ``-O2`` or ``-O3``. This may interfere with our use of ``std::isfinite`` in our source and test codes. For this reason in the Intel presets ``icx`` and ``icc`` have set ``-fp-model=strict``. You may get more speed if you remove this flag, or try ``-fno-finite-math-only``.
+  Intel compilers (unlike GPU compilers) currently engage ``fastmath`` behavior with ``-O2`` or ``-O3``, which can interfere with ``std::isfinite`` in FINUFFT's source and tests. For ``icpx``, CMake adds ``-fno-fast-math`` and ``-fcomplex-arithmetic=basic`` so its Release flags match gcc and clang; for the GNU make route, ``cp make-platforms/make.inc.icpx make.inc`` applies the same flags.
 
 
 Classic GNU make based route
@@ -310,7 +323,7 @@ PowerPC. The general procedure to download, then compile for a particular platfo
 Have a look in ``make-platforms/`` to see what is available, and/or edit your ``make.inc`` based on looking in the ``makefile`` and quirks of your local platform. We have continuous integration which tests the default (linux) settings in this ``makefile``, plus those in three OS-specific settings, currently::
 
   make-platforms/make.inc.macosx_clang
-  make-platforms/make.inc.macosx_gcc-14
+  make-platforms/make.inc.macosx_gcc
   make-platforms/make.inc.windows_msys
 
 Thus, those are the recommended files for OSX or Windows users to try as their ``make.inc``.
@@ -330,10 +343,11 @@ Quick linux GNU make install instructions
 Unless you select ``FFT=DUCC``, make sure you have packages ``fftw3`` and ``fftw3-dev`` (or their equivalent on your distro) installed.
 Then ``cd`` into your FINUFFT directory and do ``make test -j``.
 This should compile the dynamic library in ``lib/`` (taking around 10-30 seconds, mostly due to templated SIMD code), some C++ test drivers in ``test/``, then run them,
-printing some terminal output ending in::
-
-  0 segfaults out of 11 tests done
-  0 fails out of 11 tests done
+printing terminal output that ends in a ``0 segfaults`` line and a ``0 fails`` line.
+The test count in those two lines is 13 for double precision on linux or macOS:
+``test/check_finufft.sh`` runs 11 tests unconditionally, adds ``error_handling``
+in double precision only, and adds ``threadsafe_execute`` everywhere except
+Windows. Single precision therefore reports 12, and Windows one fewer again.
 
 As of v2.5 the tests have become more extensive, and now take around 10-20 seconds to run.
 This output repeats for double then single precision (hence, scroll up to check the double also gave no fails).
@@ -373,7 +387,7 @@ Optionally you need:
 * for Fortran wrappers: compiler such as ``gfortran`` in GCC
 * for MATLAB wrappers: MATLAB (versions at least R2016b up to current work)
 * for Octave wrappers: recent Octave version at least 4.4, and its development libraries
-* for the python wrappers you will need ``python`` version at least 3.8 (python 2 is unsupported), with ``numpy``.
+* for the python wrappers you will need ``python`` version at least 3.10 (python 2 is unsupported), with ``numpy``.
 
 
 1) Linux: tips for installing dependencies and compiling
@@ -397,7 +411,7 @@ Alternatively, on Ubuntu linux, base dependencies are::
 
 and for Fortran, Python, and Octave language interfaces also do::
 
-  sudo apt-get gfortran python3 python3-pip octave liboctave-dev
+  sudo apt-get install gfortran python3 python3-pip octave liboctave-dev
 
 In older distros you may have to compile ``octave`` from source to get the needed >=4.4 version.
 
@@ -474,9 +488,11 @@ Then, also as an administrator,
 install Homebrew by pasting the installation command from
 https://brew.sh
 
-Then do::
+Then install the packages the macOS clang CI arm installs:
 
-  brew install libomp fftw
+.. code-block:: bash
+
+   brew install libomp fftw
 
 This happens to also install the latest GCC (which was 8.2.0 in Mojave,
 and 10.2.0 in Catalina, in our tests).
@@ -505,9 +521,11 @@ MATLAB (and currently have MATLAB installed). If so, do::
 
   cp make-platforms/make.inc.macosx_clang_matlab make.inc
 
-Else if you don't have MATLAB, do::
+Else if you don't have MATLAB, copy the file the CI arm copies:
 
-  cp make-platforms/make.inc.macosx_clang make.inc
+.. code-block:: bash
+
+   cp make-platforms/make.inc.macosx_clang make.inc
 
 .. note::
 
@@ -536,19 +554,27 @@ The GCC route
 ~~~~~~~~~~~~~~
 
 This is less recommended, unless you need to link from ``gfortran``, when it
-appears to be essential. The basic idea is::
+appears to be essential. Install the compiler and copy the matching
+``make.inc``, as the macOS GCC CI arm does:
 
-  cp make-platforms/make.inc.macosx_gcc-14 make.inc
-  make test -j
-  make fortran
+.. code-block:: bash
 
-which also compiles and tests the fortran interfaces.
-You may need to edit to ``g++-13``, or whatever your GCC version is,
-in your ``make.inc``.
+   brew install gcc fftw
+   cp make-platforms/make.inc.macosx_gcc make.inc
+
+The unversioned ``gcc`` formula always holds the newest GCC major, so its
+``bin`` dir holds exactly one version of each compiler and
+``make.inc.macosx_gcc`` needs no edit on a GCC major bump. To pin a GCC major,
+pass ``CXX=g++-15 CC=gcc-15`` on the make line instead.
+
+Then ``make test -j`` as above, which CI also runs. ``make fortran`` compiles
+and tests the fortran interfaces; CI reaches those through
+``cmake --preset fortran`` instead, so that target is not covered here.
+Linking from ``gfortran`` needs ``make fortran``.
 
 .. note::
 
-   A problem between GCC and the new XCode 15 requires a workaround to add ``LDFLAGS+=-ld64`` to force the old linker to be used. See the above file ``make.inc.macosx_gcc-14``.
+   A problem between GCC and the new XCode 15 requires a workaround to add ``LDFLAGS+=-ld64`` to force the old linker to be used. See the above file ``make.inc.macosx_gcc``.
 
 We find python may be built as :ref:`below<install-python>`.
 We found that octave interfaces do not work with GCC; please help.
@@ -620,7 +646,7 @@ or the older-style eyeball check with::
 which should report errors around ``1e-6`` and throughputs around 1-10 million points/sec.
 
 However, better performance will result by locally compiling the library on your CPU into a Python module. This can better exploit your CPU's capabilities than the ``pypi`` distribution that ``pip install finufft`` downloads.
-We assume ``python`` (hence ``pip``; make sure you have that installed), at least version 3.8. We now use the modern ``pyproject.toml`` build system,
+We assume ``python`` (hence ``pip``; make sure you have that installed), at least version 3.10. We now use the modern ``pyproject.toml`` build system,
 which locally compiles with cmake (giving you native performance on your CPU).
 For this, run::
 
@@ -647,6 +673,32 @@ An additional performance test you could then do is::
    As of v2.0.1, our python interface is quite different from Dan Foreman-Mackey's original repo that wrapped finufft: `python-finufft <https://github.com/dfm/python-finufft>`_, or Jeremy Magland's wrapper. The interface is simpler, and the existing shared binary is linked to (no recompilation). Under the hood we achieve this via ``ctypes`` instead of ``pybind11``.
 
 
+Building inside a conda environment
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+conda is not an officially supported way to install FINUFFT;
+Building from source inside a conda environment gives a library tuned
+to the machine's CPU (the wheels target baseline ``x86-64``). The environment file and
+the install script live next to the package they build, in ``python/finufft``:
+
+.. code-block:: bash
+
+  bash python/finufft/conda-install.sh
+
+.. literalinclude:: ../python/finufft/conda-install.sh
+   :language: bash
+   :start-after: @conda_finufft_start
+   :end-before: @conda_finufft_end
+
+.. literalinclude:: ../python/finufft/environment.yml
+   :language: yaml
+
+``pip install .`` builds this checkout, not the PyPI package. Add
+``--config-settings=cmake.define.FINUFFT_USE_DUCC0=ON`` to the script's ``pip install``
+line to use the bundled DUCC0 FFT instead of FFTW. This recipe is from
+`@remy-abergel <https://github.com/flatironinstitute/finufft/discussions/649#discussioncomment-12969277>`_
+(issue #668). The GPU package follows the same pattern; see :ref:`install_gpu`.
+
 A few words about python environments
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -655,8 +707,11 @@ There can be confusion and conflicts between various versions of python and inst
   virtualenv -p /usr/bin/python3 env1
   source env1/bin/activate
 
-Now you are in a virtual environment that starts from scratch. All pip installed packages will go inside the ``env1`` directory. (You can get out of the environment by typing ``deactivate``). Also see documentation for ``conda``. In both cases ``python`` will call the version of python you set up. To get the packages FINUFFT needs::
+Now you are in a virtual environment that starts from scratch. All pip installed packages will go inside the ``env1`` directory. (You can get out of the environment by typing ``deactivate``). Also see documentation for ``conda``. In both cases ``python`` will call the version of python you set up. To get the packages FINUFFT needs, install the requirements of whichever
+interface you want, ``python/finufft/requirements.txt`` for the CPU package or
+``python/cufinufft/requirements.txt`` for the GPU one::
 
-  pip install -r python/requirements.txt
+  pip install -r python/finufft/requirements.txt
+  # or, for the GPU package: pip install -r python/cufinufft/requirements.txt
 
 Then ``pip install finufft`` or build as above.

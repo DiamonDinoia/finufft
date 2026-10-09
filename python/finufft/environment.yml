@@ -1,0 +1,12 @@
+# Build environment for `pip install .` from this directory.
+name: finufft-build
+channels:
+  - conda-forge
+dependencies:
+  - python >=3.10
+  - pip
+  - c-compiler
+  - cxx-compiler
+  - binutils
+  - llvm-openmp
+  - fftw

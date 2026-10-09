@@ -15,7 +15,7 @@ build:
     # by the Jenkins perftest page job, so master carries no bot figures.
     # "|| true" keeps the in-tree placeholder when the fetch fails.
     pre_build:
-      - curl -fsSL https://raw.githubusercontent.com/flatironinstitute/finufft/perftest-results/docs/performance_change_summary.rst -o docs/performance_change_summary.rst || true
+      - curl -fsSL https://raw.githubusercontent.com/flatironinstitute/finufft/perftest-results/docs/performance.rst -o docs/performance.rst || true
 
 # Build all formats
 formats: all
@@ -23,6 +23,7 @@ formats: all
 # Build documentation in the docs/ directory with Sphinx
 sphinx:
   configuration: docs/conf.py
+  fail_on_warning: true
 
 # Optionally set the version of Python and requirements required to build your docs
 python:
