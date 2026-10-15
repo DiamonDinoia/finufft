@@ -126,7 +126,8 @@ template<typename TF> int FINUFFT_PLAN_T<TF>::tile_doublings(int cell) const noe
 
 template<typename TF>
 SpreadSchedule FINUFFT_PLAN_T<TF>::make_schedule(int nthr, int batchSize) const {
-  return spread_schedule(m.tiles, UBIGINT(m.nj), grid_size(), nthr, batchSize);
+  return spread_schedule(m.tiles, UBIGINT(m.nj), grid_size(), nthr, batchSize,
+                         m.spopts.nspread);
 }
 
 template<typename TF>
@@ -367,19 +368,50 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
   // draws pairs out of it. Neighbouring tiles' halos overlap on one vector's fine grid,
   // so the add back takes that vector's lock; a single pair per vector cannot collide.
 
-  // TODO: colouring the tiles so no two neighbours run together would drop the lock,
-  // which serialises the add back and costs a sparse grid at a high thread count.
-  const bool may_collide = nb > 1 && nthr > 1;
-  std::vector<my_omp_lock_t> locks(may_collide ? batchSize : 0);
+  // Subproblems of one colour write disjoint boxes, so a coloured pass takes no lock and
+  // the barrier that ends the pass separates it from the next colour.
+  const bool coloured    = sched.ncolours > 0 && nthr > 1;
+  // A coloured run still locks its seam groups, so the locks exist whenever one is armed.
+  const bool may_collide =
+      nb > 1 && nthr > 1 && (!coloured || sched.locked_from >= 0);
+  if (m.spopts.debug)
+    printf("\ttiles: edge=%d nt=%lld,%lld,%lld ngrid=%lld,%lld,%lld ns=%d\n", m.tiles.edge,
+           (long long)m.tiles.nt[0], (long long)m.tiles.nt[1], (long long)m.tiles.nt[2],
+           (long long)m.tiles.ngrid[0], (long long)m.tiles.ngrid[1],
+           (long long)m.tiles.ngrid[2], m.spopts.nspread);
+  if (m.spopts.debug)
+    printf("\tadd back: %s (%d colours, seam from %d)\n",
+           coloured ? "coloured" : (may_collide ? "one lock per grid" : "no guard"),
+           sched.ncolours, sched.locked_from);
+  // Lock lattice over the (y,z) plane of one output grid. A guarded subproblem takes only
+  // the squares its own subgrid covers, in ascending index order so no two orders
+  // deadlock, so the groups the wrap leaves uncolourable still write concurrently where
+  // they do not overlap. In 1D and 2D the lattice is one square, the single grid lock.
+  const BIGINT lock_edge = std::max<BIGINT>(m.tiles.edge / 2, 1);
+  const BIGINT nly       = (BIGINT(N2) + lock_edge - 1) / lock_edge;
+  const BIGINT nlz       = (BIGINT(N3) + lock_edge - 1) / lock_edge;
+  const BIGINT nlock     = std::max<BIGINT>(nly * nlz, 1);
+  std::vector<my_omp_lock_t> locks(may_collide ? size_t(batchSize) * size_t(nlock) : 0);
   for (auto &l : locks) MY_OMP_INIT_LOCK(&l);
+  // The squares one axis covers: a cyclic range, so its first index and its length.
+  const auto span = [](BIGINT off, BIGINT size, BIGINT n, BIGINT edge,
+                       BIGINT nsq) -> std::pair<BIGINT, BIGINT> {
+    if (nsq < 2) return {0, 1};
+    if (size >= n) return {0, nsq};
+    const BIGINT lo = ((off % n) + n) % n;
+    const BIGINT a = lo / edge, b = ((lo + size - 1) % n) / edge;
+    // The range wraps when it runs past the axis, and then it covers the squares
+    // from a to the end plus 0 to b. Index order alone cannot tell the two apart.
+    const BIGINT nsp = lo + size > n ? nsq - a + b + 1 : b - a + 1;
+    return {a, std::min(nsp, nsq)};
+  };
 
 #pragma omp parallel num_threads(nthr)
   {
     // local copies of NU pts and data for each subproblem
     std::vector<TF> kx0{}, ky0{}, kz0{}, dd0{}, du0{};
-#pragma omp for collapse(2) schedule(dynamic, 1) // each is big
-    for (int ib = 0; ib < batchSize; ib++)
-      for (BIGINT isub = 0; isub < BIGINT(nb); isub++) {
+    std::vector<BIGINT> held{}; // lock indices this subproblem holds, ascending
+    const auto run = [&](int ib, BIGINT isub, bool guard) {
         // one subproblem of one vector: spread it into its own padded subgrid and add
         // that subgrid back into the fine grid
         TF *FINUFFT_RESTRICT grid = data_uniform + ib * stride_u;
@@ -417,10 +449,37 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
                                dd0.data());
         // add the subgrid back into the fine grid, under the vector's lock where
         // another thread may be writing the same grid
-        if (may_collide) MY_OMP_SET_LOCK(&locks[ib]);
-        add_wrapped_subgrid(sub, grid, du0.data());
-        if (may_collide) MY_OMP_UNSET_LOCK(&locks[ib]);
-      } // end main loop over subprobs
+        if (guard) {
+          const auto [y0, ny] = span(sub.off2, sub.size2, BIGINT(N2), lock_edge, nly);
+          const auto [z0, nz] = span(sub.off3, sub.size3, BIGINT(N3), lock_edge, nlz);
+          held.clear();
+          for (BIGINT dy = 0; dy < ny; ++dy)
+            for (BIGINT dz = 0; dz < nz; ++dz)
+              held.push_back(BIGINT(ib) * nlock + ((y0 + dy) % nly) * nlz +
+                             (z0 + dz) % nlz);
+          std::sort(held.begin(), held.end());
+          for (const auto l : held) MY_OMP_SET_LOCK(&locks[l]);
+          add_wrapped_subgrid(sub, grid, du0.data());
+          for (const auto l : held) MY_OMP_UNSET_LOCK(&locks[l]);
+        } else {
+          add_wrapped_subgrid(sub, grid, du0.data());
+        }
+    };
+    if (coloured) {
+      // One pass per colour. The implicit barrier that ends each omp for keeps the next
+      // colour's writes off the boxes this one is still touching.
+      for (int c = 0; c < sched.ncolours; ++c) {
+        const BIGINT lo = sched.group_start[c], hi = sched.group_start[c + 1];
+        const bool guard = sched.locked_from >= 0 && c >= sched.locked_from;
+#pragma omp for collapse(2) schedule(dynamic, 1) // each is big
+        for (int ib = 0; ib < batchSize; ib++)
+          for (BIGINT k = lo; k < hi; k++) run(ib, sched.order[k], guard);
+      }
+    } else {
+#pragma omp for collapse(2) schedule(dynamic, 1) // each is big
+      for (int ib = 0; ib < batchSize; ib++)
+        for (BIGINT isub = 0; isub < BIGINT(nb); isub++) run(ib, isub, may_collide);
+    }
   }
   for (auto &l : locks) MY_OMP_DESTROY_LOCK(&l);
   if (m.spopts.debug)
