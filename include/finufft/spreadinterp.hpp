@@ -126,7 +126,8 @@ template<typename TF> int FINUFFT_PLAN_T<TF>::tile_doublings(int cell) const noe
 
 template<typename TF>
 SpreadSchedule FINUFFT_PLAN_T<TF>::make_schedule(int nthr, int batchSize) const {
-  return spread_schedule(m.tiles, UBIGINT(m.nj), grid_size(), nthr, batchSize);
+  return spread_schedule(m.tiles, UBIGINT(m.nj), grid_size(), nthr, batchSize,
+                         m.spopts.nspread);
 }
 
 template<typename TF>
@@ -367,9 +368,21 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
   // draws pairs out of it. Neighbouring tiles' halos overlap on one vector's fine grid,
   // so the add back takes that vector's lock; a single pair per vector cannot collide.
 
-  // TODO: colouring the tiles so no two neighbours run together would drop the lock,
-  // which serialises the add back and costs a sparse grid at a high thread count.
-  const bool may_collide = nb > 1 && nthr > 1;
+  // Subproblems of one colour write disjoint boxes, so a coloured pass takes no lock and
+  // the barrier that ends the pass separates it from the next colour.
+  const bool coloured    = sched.ncolours > 0 && nthr > 1;
+  // A coloured run still locks its seam groups, so the locks exist whenever one is armed.
+  const bool may_collide =
+      nb > 1 && nthr > 1 && (!coloured || sched.locked_from >= 0);
+  if (m.spopts.debug)
+    printf("\ttiles: edge=%d nt=%lld,%lld,%lld ngrid=%lld,%lld,%lld ns=%d\n", m.tiles.edge,
+           (long long)m.tiles.nt[0], (long long)m.tiles.nt[1], (long long)m.tiles.nt[2],
+           (long long)m.tiles.ngrid[0], (long long)m.tiles.ngrid[1],
+           (long long)m.tiles.ngrid[2], m.spopts.nspread);
+  if (m.spopts.debug)
+    printf("\tadd back: %s (%d colours, seam from %d)\n",
+           coloured ? "coloured" : (may_collide ? "one lock per grid" : "no guard"),
+           sched.ncolours, sched.locked_from);
   std::vector<my_omp_lock_t> locks(may_collide ? batchSize : 0);
   for (auto &l : locks) MY_OMP_INIT_LOCK(&l);
 
@@ -377,9 +390,7 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
   {
     // local copies of NU pts and data for each subproblem
     std::vector<TF> kx0{}, ky0{}, kz0{}, dd0{}, du0{};
-#pragma omp for collapse(2) schedule(dynamic, 1) // each is big
-    for (int ib = 0; ib < batchSize; ib++)
-      for (BIGINT isub = 0; isub < BIGINT(nb); isub++) {
+    const auto run = [&](int ib, BIGINT isub, bool guard) {
         // one subproblem of one vector: spread it into its own padded subgrid and add
         // that subgrid back into the fine grid
         TF *FINUFFT_RESTRICT grid = data_uniform + ib * stride_u;
@@ -417,10 +428,25 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
                                dd0.data());
         // add the subgrid back into the fine grid, under the vector's lock where
         // another thread may be writing the same grid
-        if (may_collide) MY_OMP_SET_LOCK(&locks[ib]);
+        if (guard) MY_OMP_SET_LOCK(&locks[ib]);
         add_wrapped_subgrid(sub, grid, du0.data());
-        if (may_collide) MY_OMP_UNSET_LOCK(&locks[ib]);
-      } // end main loop over subprobs
+        if (guard) MY_OMP_UNSET_LOCK(&locks[ib]);
+    };
+    if (coloured) {
+      // One pass per colour. The implicit barrier that ends each omp for keeps the next
+      // colour's writes off the boxes this one is still touching.
+      for (int c = 0; c < sched.ncolours; ++c) {
+        const BIGINT lo = sched.group_start[c], hi = sched.group_start[c + 1];
+        const bool guard = sched.locked_from >= 0 && c >= sched.locked_from;
+#pragma omp for collapse(2) schedule(dynamic, 1) // each is big
+        for (int ib = 0; ib < batchSize; ib++)
+          for (BIGINT k = lo; k < hi; k++) run(ib, sched.order[k], guard);
+      }
+    } else {
+#pragma omp for collapse(2) schedule(dynamic, 1) // each is big
+      for (int ib = 0; ib < batchSize; ib++)
+        for (BIGINT isub = 0; isub < BIGINT(nb); isub++) run(ib, isub, may_collide);
+    }
   }
   for (auto &l : locks) MY_OMP_DESTROY_LOCK(&l);
   if (m.spopts.debug)

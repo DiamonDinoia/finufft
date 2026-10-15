@@ -149,7 +149,7 @@ void test_cut() {
     for (const bool guard_row : {false, true}) {
       const auto tiles = layout(nt, 32, per, ndims, guard_row);
       const auto sched =
-          spread_schedule(tiles, UBIGINT(tiles.starts.back()), 1 << 20, 16, 1);
+          spread_schedule(tiles, UBIGINT(tiles.starts.back()), 1 << 20, 16, 1, 8);
       check(sched.bounds.size() == expected_subs(tiles, sched.points_per_subproblem) + 1,
             "every non-empty tile becomes as many subproblems as the cap needs");
       check(sched.bounds.front() == 0 &&
@@ -167,7 +167,7 @@ void test_cut() {
     auto tiles = layout({8, 8, 8}, 32, per, ndims);
     fill(tiles, ndims, occ);
     const auto sched =
-        spread_schedule(tiles, UBIGINT(tiles.starts.back()), 1 << 20, 16, 1);
+        spread_schedule(tiles, UBIGINT(tiles.starts.back()), 1 << 20, 16, 1, 8);
     check(sched.bounds.size() == expected_subs(tiles, sched.points_per_subproblem) + 1,
           "an empty tile takes no subproblem");
   }

@@ -92,6 +92,14 @@ struct SpreadTileData {
 struct SpreadSchedule {
   std::vector<UBIGINT> bounds;       // NU index breakpoints, one subproblem per gap
   UBIGINT points_per_subproblem = 0; // points one subproblem may hold
+  // Subproblems of one colour write disjoint boxes of the fine grid, so a pass over one
+  // colour needs no guard. Order groups the subproblems by colour and group_start bounds
+  // each colour's run. ncolours == 0 means no valid colouring, and the add back locks.
+  std::vector<BIGINT> order, group_start;
+  int ncolours = 0;
+  // Groups from locked_from on hold the tiles the wrap leaves uncolourable, so they take
+  // the lock. -1 means every group is disjoint.
+  int locked_from = -1;
 };
 
 // A subgrid of the fine grid: its lowest corner and its extents in fine grid points.
