@@ -1,0 +1,63 @@
+name: repro 942
+
+on:
+  push:
+    branches: [repro-942]
+
+jobs:
+  control:
+    # Committed test on released 2.5.1: both modes must fail.
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Homebrew NumPy and released finufft 2.5.1 wheel
+        run: |
+          brew install numpy libomp
+          pyver=$(ls "$(brew --prefix numpy)/lib" | grep '^python3\.' | sort -V | tail -1)
+          brew install "python@${pyver#python}"
+          PY=$(brew --prefix "python@${pyver#python}")/bin/$pyver
+          echo "PY=$PY" >> "$GITHUB_ENV"
+          $PY -m pip install --break-system-packages --only-binary finufft finufft==2.5.1 pytest
+      - name: Default env, Error 15 mode
+        run: |
+          cd python/finufft/test
+          if $PY -m pytest -rA test_duplicate_openmp.py > out.txt 2>&1; then cat out.txt; echo "control did not fail"; exit 1; fi
+          cat out.txt
+          grep "FAILED test_duplicate_openmp.py::test_no_private_libomp_dylib" out.txt
+          grep "FAILED test_duplicate_openmp.py::test_second_libomp_in_process" out.txt
+          grep "Error #15" out.txt
+      - name: KMP_DUPLICATE_LIB_OK=True, Error 179 or hang mode
+        env:
+          KMP_DUPLICATE_LIB_OK: "True"
+        run: |
+          cd python/finufft/test
+          if $PY -m pytest -rA test_duplicate_openmp.py::test_second_libomp_in_process > out.txt 2>&1; then cat out.txt; echo "control did not fail"; exit 1; fi
+          cat out.txt
+          grep "FAILED test_duplicate_openmp.py::test_second_libomp_in_process" out.txt
+          grep -E "Error #179|TimeoutExpired|Segmentation|returncode" out.txt
+
+  reg15:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v7
+        with:
+          name: finufft-wheels-macosx_arm64
+          run-id: 39845417701
+          github-token: ${{ github.token }}
+          path: wheels
+      - name: Registration of both runtimes, both orders
+        env:
+          KMP_VERSION: "1"
+        run: |
+          brew install libomp
+          python -m pip install -q numpy wheels/finufft-*.whl
+          for o in brew-first finufft-first; do
+            echo "=== $o"
+            python .github/repro/reg15.py $o "$(brew --prefix libomp)/lib/libomp.dylib" 2>&1 || echo "rc=$?"
+          done
