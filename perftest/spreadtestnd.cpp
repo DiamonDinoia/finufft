@@ -13,6 +13,7 @@
  * Barbone switched to public FINUFFT API 11/07/2025
  * Barnett 1/12/26: update for v2.5.0, kill all deprecated flags/args, tidy
    and fix the setpts incorrect usage, use M=1 for kersum.
+ * Barnett 10/13/26: opts override FINUFFT_ERR_EPS_TOO_SMALL & its warning.
 */
 
 #include <cmath>
@@ -34,7 +35,7 @@ static void usage() {
     "\tN=# uniform pts (rough total; per-dim N = round(N^(1/d)))\n"
     "\ttol=requested accuracy\n"
     "\tsort=0 (no), 1 (yes), 2 (auto; default)\n"
-    "\tspread_debug=0,1,...\n"
+    "\tspread_debug=0 (default), 1, ... (eg, use 1 to see the ns chosen)\n"
     "\tspread_kerformula=0 (default), 7,8,9 PSWF beta choice (only for devs)\n"
     "\tupsampfac>1.0: sigma upsampling factor (typ range 1.2 to 2.5)\n"
     "\nexample: ./spreadtestnd 3 8e6 8e6 1e-6 2 0 0 1.5\n");
@@ -134,11 +135,14 @@ int main(int argc, char *argv[]) {
   finufft_opts opts;
   FINUFFT_DEFAULT_OPTS(&opts);
   opts.upsampfac         = upsampfac;
-  opts.spread_kerformula = kerformula;
+  opts.spread_kerformula   = kerformula; // for devs only
   opts.spread_debug      = spread_debug;
   opts.spread_sort       = sort;
-  opts.showwarn          = 1;
-  opts.spreadinterponly  = 1; // the key to how this tester can use FINUFFT API
+  opts.spreadinterponly    = 1; // the key to how this tester can use FINUFFT API.
+  // We override the catching of unachievable errors for a NUFFT, since the math test
+  // done here simply tests total mass, a weaker test for spread/interp only:
+  opts.allow_eps_too_small = 1;
+  opts.showwarn            = 0; // also ignore unachievable tol warnings
 
   BIGINT nmodes[3] = {N, N, N};
 
@@ -169,9 +173,9 @@ int main(int argc, char *argv[]) {
   auto kersum = std::accumulate(d_uniform.begin(), d_uniform.end(), CPX(0.0, 0.0));
 
   // -------- Type-1 test (spread) --------
-  printf("dim=%d, per-dim Nj=%lld, total N=%.3g, M=%.3g, tol=%.3g\n", d, (long long)N,
+  printf("dim=%d, per-dim Nj=%lld, total N=%.3g, M=%.3g, tol=%.3g,\n", d, (long long)N,
          (double)Ng, (double)M, tol);
-  printf(" sort=%d, spread_debug=%d, kerform=%d, upsamp=%.3g\n", sort, spread_debug,
+  printf("    sort=%d, spread_debug=%d, kerform=%d, upsamp=%.3g\n", sort, spread_debug,
          kerformula, (double)upsampfac);
 
   // make random data...
@@ -210,7 +214,7 @@ int main(int argc, char *argv[]) {
   CPX csum   = std::accumulate(d_nonuniform.begin(), d_nonuniform.end(), CPX(0.0, 0.0));
   CPX mass   = std::accumulate(d_uniform.begin(), d_uniform.end(), CPX(0.0, 0.0));
   FLT relerr = std::abs(mass - kersum * csum) / std::abs(kersum * csum); // relative err
-  printf("\trel err %.3g\n", relerr);
+  printf("\trel mass err %.3g\n", relerr);
 
   // -------- Type-2 test (U -> NU) using new NU locs, separate type-2 plan --------
   // sets uniform grid to 1.0 everywhere...
@@ -257,7 +261,7 @@ int main(int argc, char *argv[]) {
   FLT superr = 0.0;
   for (auto &cj : d_nonuniform) superr = std::max(superr, std::abs(cj - kersum));
   FLT relsuperr = superr / std::abs(kersum);
-  printf("\trel err %.3g\n", relsuperr);
+  printf("\trel mass err %.3g\n", relsuperr);
   FINUFFT_DESTROY(plan2);
   return 0;
 }

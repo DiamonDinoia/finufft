@@ -11,8 +11,6 @@ properties([
 // rather than written down, and archs is what this nvcc can target - a pod that
 // lands outside it skips instead of failing (sm_120 needs CUDA >= 12.8; 13.x
 // dropped sm_70).
-// One card of each kind, so no run duplicates an arch: 13.x cannot go on the
-// V100 at all, which leaves 12.6 as the only entry that can still cover sm_70.
 // The 11.8 entry is the unpinned one: it takes any GPU node and is the only one
 // asking for two GPUs, since cufinufft_multigpu does not care which cards it
 // gets (it SKIPs anyway unless they are full cards, as CUDA enumerates one MIG
@@ -20,10 +18,9 @@ properties([
 // torch names the PyTorch wheel index. It must match the toolkit, because the
 // image puts /usr/local/cuda/lib64 on LD_LIBRARY_PATH, which outranks torch's
 // RUNPATH: a newer bundled cudart is shadowed by the older system one and every
-// import dies on a missing symbol. It also decides which architectures the wheel
-// carries, and cu126 is the last index building for sm_70 - hence 12.6 for the
-// V100 rather than 12.4, whose index stopped resolving when the cudnn its every
-// torch pins was pruned from download.pytorch.org and pypi.nvidia.com alike.
+// import dies on a missing symbol. Use 12.6 rather than 12.4, whose index
+// stopped resolving when the cudnn its every torch pins was pruned from
+// download.pytorch.org and pypi.nvidia.com alike.
 // Each pod needs a host driver its CUDA accepts (13.0 wants r580+); cuda-compat
 // does not bridge a major version, so the first sh block prints nvidia-smi.
 
@@ -40,11 +37,11 @@ properties([
 // A whole-node pod is `exclusive: true`: a co-tenant pollutes a CPU measurement
 // and pinning does not isolate it. The count has to stay next to it, because a
 // cpu request still sets the pod's cpuset and runPod defaults to 4 - measured on
-// build 50, whose exclusive pod got 4 of the node's 72 processors. 64 is the
-// most the current exclusive node (66 allocatable) can give while the jnlp
-// sidecar keeps 1, and an even count means whole cores rather than SMT halves.
+// build 50, whose exclusive pod got 4 of the node's 72 processors. The exclusive
+// node has SMT off and 30 cores allocatable (SCC Jenkins wiki); the jnlp sidecar
+// keeps 1.
 // The harness sizes every case from the affinity mask it ends up with.
-def PERF_CPU_CORES = 64
+def PERF_CPU_CORES = 29
 
 // gh is in the image; the credential is an environment variable of the step
 // and never lives on disk. Publishing runs in the main container.
@@ -66,23 +63,17 @@ def gpuArch() {
 
 def configs = [
   [cuda: '11.8', gcc: 11, torch: 'cu118',                     archs: ['70', '75', '80', '86', '89', '90'], gpus: 2],
-  [cuda: '12.6', gcc: 13, torch: 'cu126', gpuType: 'v100',    archs: ['70', '75', '80', '86', '89', '90']],
+  [cuda: '12.6', gcc: 13, torch: 'cu126', gpuType: 'a100',    archs: ['70', '75', '80', '86', '89', '90']],
   [cuda: '12.8', gcc: 13, torch: 'cu128', gpuType: 'rtx6000', archs: ['70', '75', '80', '86', '89', '90', '100', '120']],
   [cuda: '13.0', gcc: 14, torch: 'cu130', gpuType: 'a100',    archs: ['75', '80', '86', '89', '90', '100', '120']],
 ]
 
 catchError {
   timeout(time: 3, unit: 'HOURS') {
-    buildImages(configs.collect { cfg ->
-      [ context: 'tools/cufinufft/docker', dockerfile: 'Dockerfile-x86_64',
-        tag: "cuda${cfg.cuda}",
-        buildArgs: "--build-arg CUDA_VERSION=${cfg.cuda} --build-arg GCC_TOOLSET=${cfg.gcc}" +
-                   " --build-arg TORCH_INDEX=${cfg.torch}"
-      ]
-    }, checkout: true)
-
+    // install cpu median 4980 s over 17 builds, serial make on 8 cpus.
+    def installCpus = 8
     def jobs = configs.collectEntries { cfg -> ['cuda-' + cfg.cuda, {
-      runPod(tag: "cuda${cfg.cuda}", cpus: 8, memory: '32Gi',
+      runPod(tag: "cuda${cfg.cuda}", cpus: installCpus, memory: '32Gi',
              gpus: cfg.gpus ?: 1, gpuType: cfg.gpuType) {
         stage("cuda ${cfg.cuda}") {
           def arch = gpuArch()
@@ -97,10 +88,19 @@ catchError {
             "HOME=$WORKSPACE",
             "CUDA=${cfg.cuda}",
             "CUDA_ARCH=${arch}",
+            "WITH_CUDA=ON",
             "LIBRARY_PATH=$WORKSPACE/build:/usr/local/cuda/lib64/stubs",
             "LD_LIBRARY_PATH=$WORKSPACE/build:/usr/local/cuda/lib64"
           ]) {
             sh 'tools/ci/cuda-build-test.sh'
+            // The quick-start recipes against this checkout: install-test
+            // builds and installs the tree, then consumes the staged install
+            // with find_package (CPU and, behind WITH_CUDA, cuFINUFFT) and
+            // FetchContent. The CPU arms alone also run on the install cpu
+            // leg and on the host agents below.
+            withEnv(["CMAKE_BUILD_PARALLEL_LEVEL=${installCpus}"]) {
+              sh 'cmake -P tools/ci/install-test.cmake'
+            }
             sh 'tools/ci/cuda-wheel.sh'
             // catchError so a wheel that fails its tests still gets archived below.
             catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
@@ -111,6 +111,36 @@ catchError {
         }
       }
     }] }
+
+    // The MEX against every MATLAB release MathWorks publishes an image for,
+    // pulled as is: matlab: true injects the license, and the script fetches
+    // the toolchain. matlab-deep-learning carries the Parallel Computing
+    // Toolbox, so those releases also build and test the GPU MEX; r2020b has
+    // only the plain image and runs the CPU half. gpuDevice() in r2024a fails
+    // on a MIG slice (NVML Invalid Argument), so that release keeps the V100.
+    // The license server has no r2026b yet.
+    def matlabs = ['r2021b', 'r2022a', 'r2022b', 'r2023a', 'r2023b', 'r2024a',
+                   'r2024b', 'r2025a', 'r2025b', 'r2026a']
+    jobs['matlab-r2020b'] = {
+      runPod(image: 'docker.io/mathworks/matlab:r2020b', cpus: 8, memory: '16Gi', matlab: true) {
+        stage('matlab r2020b') {
+          withEnv(["HOME=$WORKSPACE"]) { sh 'tools/ci/matlab-test.sh' }
+        }
+      }
+    }
+    // r2026a takes any GPU: it supports every compute capability. Its map
+    // entry is null (runPod then asks for no card type); the rest take a100.
+    def matlabGpuType = ['r2024a': 'v100', 'r2026a': null]
+    matlabs.each { rel -> jobs['matlab-' + rel] = {
+      runPod(image: "docker.io/mathworks/matlab-deep-learning:${rel}", cpus: 8, memory: '16Gi',
+             gpus: 1,
+             gpuType: matlabGpuType.containsKey(rel) ? matlabGpuType[rel] : 'a100',
+             matlab: true) {
+        stage("matlab ${rel}") {
+          withEnv(["HOME=$WORKSPACE", "CUDA_ARCH=${gpuArch()}"]) { sh 'tools/ci/matlab-test.sh' }
+        }
+      }
+    } }
 
     // The perftest comment, PR builds only: CHANGE_ID is unset on branch builds.
     // Each half writes its own section in its own pod - the CPU half wants cores
@@ -128,8 +158,7 @@ catchError {
         stage('perf cpu') {
           withEnv([
             "HOME=$WORKSPACE",
-            "CPM_SOURCE_CACHE=$WORKSPACE/.cpm",
-            "PARALLEL=16"
+            "CPM_SOURCE_CACHE=$WORKSPACE/.cpm"
           ]) {
             sh 'tools/ci/perf-cpu.sh'
           }
@@ -150,8 +179,7 @@ catchError {
             "HOME=$WORKSPACE",
             "CUDA_ARCH=${arch}",
             "CPM_SOURCE_CACHE=$WORKSPACE/.cpm",
-            "LIBRARY_PATH=/usr/local/cuda/lib64/stubs",
-            "PARALLEL=12"
+            "LIBRARY_PATH=/usr/local/cuda/lib64/stubs"
           ]) {
             sh 'tools/ci/perf-gpu.sh'
           }
@@ -208,7 +236,6 @@ catchError {
         withEnv([
           "HOME=$WORKSPACE",
           "CPM_SOURCE_CACHE=$WORKSPACE/.cpm",
-          "PARALLEL=16",
           "VERSIONS=${PAGE_VERSIONS}",
           "BACKEND=${backend}",
           "DUCC=${ducc}"
@@ -243,7 +270,6 @@ catchError {
             "CUDA_ARCH=${arch}",
             "CPM_SOURCE_CACHE=$WORKSPACE/.cpm",
             "LIBRARY_PATH=/usr/local/cuda/lib64/stubs",
-            "PARALLEL=12",
             "VERSIONS=${PAGE_VERSIONS}"
           ]) {
             sh 'tools/ci/page-worktrees.sh'
@@ -278,7 +304,7 @@ catchError {
           } else {
             // A rehearsal stops here: the page and its figures ride out as
             // build artifacts, and the branch readthedocs fetches is untouched.
-            archiveArtifacts artifacts: 'docs/performance_change_summary.rst,docs/pics/perftestci_*.svg'
+            archiveArtifacts artifacts: 'docs/performance.rst,docs/pics/perftestci_*.svg'
           }
         }
       }
@@ -304,7 +330,141 @@ catchError {
     if (pagePublishes || (env.CHANGE_TITLE ?: '').contains('[perf page]')) measures << pageJob
     if (measures) jobs['measure'] = { for (measure in measures) measure() }
 
-    parallel jobs
+    // The seven install arms run 32-33 min serially in one pod (Jenkins
+    // jenkins-fix builds 4 and 6). Two pods split the arms between them. The
+    // fftw-dl arm's _fetch consumer finds the system FFTW (DEFAULT), so the
+    // arm downloads and builds FFTW once. A host without a system FFTW still
+    // downloads it. See the FFTW note in tools/ci/install-test.cmake.
+    def installLeg = { name, arms ->
+      return {
+        runPod(tag: 'cuda12.8', cpus: installCpus, memory: '16Gi') {
+          stage(name) {
+            withEnv(["CMAKE_BUILD_PARALLEL_LEVEL=${installCpus}"]) {
+              for (arm in arms) {
+                def linking = arm[0]
+                def backend = arm[1]
+                def openmp = arm[2]
+                def armEnv = ["HOME=$WORKSPACE", "LINKING=${linking}", "BACKEND=${backend}",
+                              "OPENMP=${openmp}"]
+                if (arm.size() > 3) {
+                  armEnv += ["BUILD_TYPE=${arm[3]}"]
+                }
+                withEnv(armEnv) {
+                  sh 'cmake -P tools/ci/install-test.cmake'
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    // Measured arm times, Jenkins jenkins-fix build 9: leg 1 takes 3:58 +
+    // 7:12 + 3:55 (about 15 min). Leg 2 takes 2:33 + 3:08 + 2:30 + 2:59
+    // (about 11 min). The fftw-dl arm takes 7:12 in build 9 against 11:00 in
+    // builds 4 and 6. The Debug tuple's fourth field sets BUILD_TYPE. That arm
+    // covers the GCC -O1 workaround (xsimd 14.3.0 folds immediate arguments
+    // wrongly at -O0, see cmake/toolchain.cmake).
+    def installArms1 = [['Static', 'ducc', 'ON'], ['Static', 'fftw-dl', 'ON'],
+                        ['Static', 'ducc', 'ON', 'Debug']]
+    def installArms2 = [['Static', 'fftw', 'ON'], ['Shared', 'ducc', 'ON'],
+                        ['Shared', 'fftw', 'ON'], ['Static', 'ducc', 'OFF']]
+    ['install cpu 1': installArms1, 'install cpu 2': installArms2].each { n, arms ->
+      jobs[n] = installLeg(n, arms)
+    }
+
+    // The conda recipe from docs/install.rst, run without change. /opt/conda
+    // belongs to root, so conda keeps its environments and packages in the workspace.
+    jobs['conda finufft'] = {
+      runPod(image: 'docker.io/condaforge/miniforge3:latest', cpus: 8, memory: '16Gi') {
+        stage('conda finufft') {
+          withEnv(["HOME=$WORKSPACE",
+                   "CONDA_ENVS_PATH=$WORKSPACE/.conda/envs",
+                   "CONDA_PKGS_DIRS=$WORKSPACE/.conda/pkgs"]) {
+            sh 'bash python/finufft/conda-install.sh'
+          }
+        }
+      }
+    }
+    // CUDA 12.4 from conda cannot target sm_120, so the pod takes an a100.
+    jobs['conda cufinufft'] = {
+      runPod(image: 'docker.io/condaforge/miniforge3:latest', cpus: 8, memory: '32Gi',
+             gpus: 1, gpuType: 'a100') {
+        stage('conda cufinufft') {
+          withEnv(["HOME=$WORKSPACE",
+                   "CONDA_ENVS_PATH=$WORKSPACE/.conda/envs",
+                   "CONDA_PKGS_DIRS=$WORKSPACE/.conda/pkgs"]) {
+            sh 'bash python/cufinufft/conda-install.sh'
+          }
+        }
+      }
+    }
+
+    // The quick-start recipes on the bare-metal host agents, CPU only: the
+    // card lives in the k8s pods. install-test.cmake is the same install,
+    // consume and run flow as on Linux; host-quick-start.* finds the tools on
+    // the agent: the win script takes the VS-bundled cmake and loads
+    // the MSVC environment from vcvars64.bat, the mac script downloads cmake
+    // into CI_TOOLS, which sits in the build's own workspace. Jenkins gives
+    // each concurrent build a fresh workspace, so two builds never share a
+    // half-written cache. The macs' two arms share the download. OpenMP needs
+    // libomp, which only the win agent's MSVC provides, so the macs run
+    // single threaded.
+    def quickStartHost = { label ->
+      return {
+        node(label) {
+          stage("quick-start ${label}") {
+            checkout scm
+            def tools = isUnix() ? "${env.WORKSPACE}/.ci-tools" : "${env.WORKSPACE}\\.ci-tools"
+            def arms = [['Static', 'OFF'], ['Shared', 'OFF']]
+            if (label == 'win') {
+              // The third arm builds static through clang-cl, the LLVM that
+              // Visual Studio bundles beside MSVC.
+              arms = [['Static', 'ON'], ['Shared', 'ON'], ['Static', 'ON', 'clang-cl']]
+            }
+            def bin = isUnix() ? "${tools}/bin" : "${tools}\\bin"
+            withEnv(["CI_TOOLS=${tools}", "PATH+CI_TOOLS=${bin}"]) {
+              for (arm in arms) {
+                def armEnv = ["LINKING=${arm[0]}", "OPENMP=${arm[1]}", "BACKEND=ducc",
+                              "WITH_CUDA=OFF"]
+                if (arm.size() > 2) {
+                  armEnv += ["CC=${arm[2]}", "CXX=${arm[2]}"]
+                }
+                withEnv(armEnv) {
+                  if (isUnix()) {
+                    sh 'tools/ci/host-quick-start.sh'
+                  } else {
+                    powershell 'tools/ci/host-quick-start.ps1'
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    def hostJobs = [:]
+    for (label in ['win', 'macpro', 'macm1']) {
+      hostJobs['quick-start ' + label] = quickStartHost(label)
+    }
+
+    // The host legs take bare agents and need no pod image, so they run beside
+    // the image build instead of behind it. The pod legs keep their order:
+    // buildImages first, then all their pods at once.
+    parallel(
+      'pod legs': {
+        buildImages(configs.collect { cfg ->
+          [ context: 'tools/cufinufft/docker', dockerfile: 'Dockerfile-x86_64',
+            tag: "cuda${cfg.cuda}",
+            buildArgs: "--build-arg CUDA_VERSION=${cfg.cuda} --build-arg GCC_TOOLSET=${cfg.gcc}" +
+                       " --build-arg TORCH_INDEX=${cfg.torch}"
+          ]
+        }, checkout: true)
+        parallel jobs
+      },
+      'host legs': {
+        parallel hostJobs
+      }
+    )
   }
 }
 emailFailure()
