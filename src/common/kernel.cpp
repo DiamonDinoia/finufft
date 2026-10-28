@@ -46,7 +46,7 @@ std::function<double(double)> kernel_definition_lambda(
   double beta = spopts.beta; // get shape param
   int kf      = spopts.kerformula;
 
-  if (kf >= 7 && kf <= 9) {
+  if (kf >= 7 && kf <= 12) { // 10-12 are the nf/N twins of the 7-9 shape rules
     finufft::common::PSWF0 pswf(beta);
     return [pswf](double z) {
       if (std::abs(z) > 1.0) return 0.0; // restrict support to [-1,1]
@@ -96,7 +96,7 @@ void set_kernel_shape_given_ns(finufft_spread_opts &spopts, int debug) {
   // For PSWF, aligns cut-off (start of aliasing) with freq (c) param. Used below...
   const double beta_cutoff = common::PI * (double)ns * (1.0 - 1.0 / (2.0 * sigma));
 
-  if (kf == 7) {
+  if (kf == 7 || kf == 10) {
     /* Shape param formula (designed for K-B), from Beatty et al,
       IEEE Trans Med Imaging, 2005 24(6):799-808. doi:10.1109/TMI.2005.848376
       "Rapid gridding reconstruction with a minimal oversampling ratio".
@@ -107,14 +107,14 @@ void set_kernel_shape_given_ns(finufft_spread_opts &spopts, int debug) {
     double pis      = common::PI * common::PI;
     spopts.beta = std::sqrt(beta_cutoff * beta_cutoff - c_Beatty / pis);
 
-  } else if (kf == 8) {
+  } else if (kf == 8 || kf == 11) {
     // Std shape param with const shift to exploit a little more tail decay,
     // in the style of Beatty (above) but without the sqrt; a const is better at high ns.
     // This is best for PSWF, within 0.1 digit.
     spopts.beta = beta_cutoff - 0.05; // Libin Lu 1/23/26
                                       // spopts.beta = beta_cutoff; // std param
 
-  } else if (kf == 9) {
+  } else if (kf == 9 || kf == 12) {
     double t = beta_cutoff / common::PI;
     // Marco's LSQ fit using simple functions of t, 1/23/26.
     spopts.beta = ((-0.00149087 * t + 0.0218459) * t + 3.06269) * t - 0.0365245;
@@ -129,6 +129,12 @@ void set_kernel_shape_given_ns(finufft_spread_opts &spopts, int debug) {
         return "PSWF (beta shift)";
       case 9:
         return "PSWF (beta Marco)";
+      case 10:
+        return "PSWF (Beatty beta, nf/N)";
+      case 11:
+        return "PSWF (beta shift, nf/N)";
+      case 12:
+        return "PSWF (beta Marco, nf/N)";
       default:
         return "unknown";
       }
