@@ -1,9 +1,9 @@
-/* Tester for the tiled spread and interp: the row stride, the subproblem cut, the two L2
-   tile ceilings, when the sort runs, the state one plan carries from setpts to setpts,
-   and translation covariance across the periodic boundary. Each is a property of the
-   schedule or the wrap that no reference implementation can show, and none of it repeats
-   what finufft{1,2,3}d_test, tolsweep and adjointness check against a direct sum. The
-   zero-point spreadinterponly case lives in dumbinputs.cpp.
+/* Tester for the tiled spread and interp: the row stride, the subproblem cut, the tile
+   colouring, the two L2 tile ceilings, when the sort runs, the state one plan carries
+   from setpts to setpts, and translation covariance across the periodic boundary. Each is
+   a property of the schedule or the wrap that no reference implementation can show, and
+   none of it repeats what finufft{1,2,3}d_test, tolsweep and adjointness check against a
+   direct sum. The zero-point spreadinterponly case lives in dumbinputs.cpp.
 */
 
 #include <finufft/simd.hpp>
@@ -19,8 +19,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <numeric>
 #include <random>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -180,7 +182,7 @@ void test_cut() {
     for (const bool guard_row : {false, true}) {
       const auto tiles = layout(nt, 32, per, ndims, guard_row);
       check_cut(tiles,
-                spread_schedule(tiles, UBIGINT(tiles.starts.back()), 1 << 20, 16, 1));
+                spread_schedule(tiles, UBIGINT(tiles.starts.back()), 1 << 20, 16, 1, 8));
     }
 
   // Occupancy the layout helper cannot express: a hole in the middle of the ring, and a
@@ -189,9 +191,126 @@ void test_cut() {
     auto tiles = layout({8, 8, 8}, 32, per, ndims);
     fill(tiles, ndims, occ);
     check_cut(tiles,
-              spread_schedule(tiles, UBIGINT(tiles.starts.back()), 1 << 20, 16, 1));
+              spread_schedule(tiles, UBIGINT(tiles.starts.back()), 1 << 20, 16, 1, 8));
   }
 }
+// ------------------------------------------------------------------ the colouring
+
+// What one subproblem writes along each axis, as get_subgrid sizes it: from the ceil of
+// its lowest point minus half a kernel, ns cells past the ceil of its highest.
+using Box = std::array<std::pair<BIGINT, BIGINT>, 3>; // per axis: offset and extent
+
+std::pair<BIGINT, BIGINT> axis_box(double lo, double hi, int ns) {
+  const BIGINT off = BIGINT(std::ceil(lo - ns / 2.0));
+  return {off, BIGINT(std::ceil(hi - ns / 2.0)) - off + ns};
+}
+
+// Cells of the periodic grid n that two subproblems of one group both write. groups
+// lists each group's run of subproblem indices.
+UBIGINT overlaps(const std::vector<Box> &boxes,
+                 const std::vector<std::vector<BIGINT>> &groups,
+                 std::array<BIGINT, 3> n) {
+  const auto cells = size_t(n[0] * n[1] * n[2]);
+  std::vector<BIGINT> group_of(cells, -1), sub_of(cells, -1);
+  UBIGINT hits = 0;
+  for (size_t g = 0; g < groups.size(); ++g)
+    for (const BIGINT i : groups[g]) {
+      const Box &b = boxes[size_t(i)];
+      for (BIGINT k = 0; k < b[2].second; ++k)
+        for (BIGINT j = 0; j < b[1].second; ++j)
+          for (BIGINT l = 0; l < b[0].second; ++l) {
+            const auto wrap = [&](BIGINT x, int d) {
+              return ((x % n[d]) + n[d]) % n[d];
+            };
+            const auto c =
+                size_t(wrap(b[0].first + l, 0) +
+                       n[0] * (wrap(b[1].first + j, 1) + n[1] * wrap(b[2].first + k, 2)));
+            hits += group_of[c] == BIGINT(g) && sub_of[c] != i;
+            group_of[c] = BIGINT(g);
+            sub_of[c]   = i;
+          }
+    }
+  return hits;
+}
+
+// The groups a coloured pass runs without a guard: every colour but the seam.
+std::vector<std::vector<BIGINT>> unguarded_groups(const SpreadSchedule &sched) {
+  std::vector<std::vector<BIGINT>> groups;
+  const size_t ncol = sched.group_start.size() - 1 - (sched.seam ? 1 : 0);
+  for (size_t c = 0; c < ncol; ++c)
+    groups.emplace_back(sched.order.begin() + sched.group_start[c],
+                        sched.order.begin() + sched.group_start[c + 1]);
+  return groups;
+}
+
+// The schedule lists every subproblem once, colour by colour.
+void check_order(const SpreadSchedule &sched, const char *what) {
+  const auto nb = BIGINT(sched.bounds.size()) - 1;
+  std::vector<BIGINT> seen(sched.order);
+  std::sort(seen.begin(), seen.end());
+  bool perm = BIGINT(seen.size()) == nb;
+  for (BIGINT i = 0; perm && i < nb; ++i) perm = seen[size_t(i)] == i;
+  check(perm, what);
+  check(sched.group_start.front() == 0 && sched.group_start.back() == nb &&
+            std::is_sorted(sched.group_start.begin(), sched.group_start.end()),
+        "the colour runs tile the order");
+}
+
+// The rule on one axis, over every grid length from one tile to ten, every kernel width
+// and three tile edges. Each row holds one point at each face, a rounding outside the
+// row, which is the widest box the bin sort lets a row write; the row past the grid
+// holds a point at the top coordinate. A product box is disjoint from another as soon as
+// one axis is, so the axis rule is the whole rule for tiles of different rows.
+void test_colour_rule() {
+  UBIGINT control_hits = 0, parity_hits = 0, cases = 0;
+  for (const int edge : {8, 16, 32})
+    for (int ns = 2; ns <= 16; ++ns)
+      for (BIGINT ng = edge + 1; ng <= 10 * edge; ++ng) {
+        const BIGINT rows = (ng + edge - 1) / edge;
+        SpreadTileData tiles;
+        tiles.edge  = edge;
+        tiles.nt    = {rows + 1, 1, 1}; // the bin grid's round-off row
+        tiles.ngrid = {ng, 1, 1};
+        tiles.starts.resize(size_t(rows) + 2);
+        for (BIGINT t = 0; t <= rows + 1; ++t) tiles.starts[size_t(t)] = 2 * t;
+        const auto sched =
+            spread_schedule(tiles, UBIGINT(2 * (rows + 1)), 1 << 20, 1, 1, ns);
+        std::vector<Box> boxes;
+        for (BIGINT t = 0; t <= rows; ++t) {
+          const double lo = t < rows ? double(t * edge) - 0.25 : double(ng);
+          const double hi =
+              t < rows ? double(std::min((t + 1) * edge, ng)) + 0.25 : double(ng);
+          boxes.push_back({axis_box(lo, hi, ns), {0, 1}, {0, 1}});
+        }
+        if (edge < ns + 2) {
+          check(sched.group_start.empty(),
+                "a tile narrower than the kernel gap is not coloured");
+          continue;
+        }
+        ++cases;
+        check(!sched.group_start.empty(),
+              "every axis with room for the kernel gap is coloured");
+        if (sched.group_start.empty()) continue;
+        check_order(sched, "the 1D colouring lists every subproblem once");
+        check(overlaps(boxes, unguarded_groups(sched), {ng, 1, 1}) == 0,
+              "same-colour rows write disjoint boxes across the wrap");
+        // Positive controls. All rows in one pass overlap at every face, and plain
+        // parity with no seam must fail on the odd rings the seam exists for.
+        std::vector<BIGINT> all(size_t(rows) + 1);
+        std::iota(all.begin(), all.end(), BIGINT(0));
+        control_hits += overlaps(boxes, {all}, {ng, 1, 1});
+        std::vector<std::vector<BIGINT>> parity(2);
+        for (BIGINT t = 0; t <= rows; ++t) parity[size_t(t % 2)].push_back(t);
+        parity_hits += overlaps(boxes, parity, {ng, 1, 1});
+      }
+  check(cases > 0, "the sweep reaches coloured cases");
+  check(control_hits > 0, "the overlap count fires on neighbouring rows");
+  check(parity_hits > 0, "the overlap count fires on parity without the seam");
+  printf("\tcolour rule: %llu coloured axes disjoint; controls fire %llu / %llu\n",
+         (unsigned long long)cases, (unsigned long long)control_hits,
+         (unsigned long long)parity_hits);
+}
+
 // ------------------------------------------------------------------ the tiling rule
 
 // True where even a one-cell tile's padded subgrid leaves L2. The tile then stays one
@@ -419,8 +538,8 @@ void test_unsorted_cut() {
           "the unsorted setpts ran");
       // demands the empty layout and the identity permutation spread_sort=0 promises
       check_setpts_state(plan, M, "the unsorted cut");
-      const auto sched =
-          spread_schedule(plan.tile_data(), UBIGINT(M), plan.grid_size(), nthr, 1);
+      const auto sched  = spread_schedule(plan.tile_data(), UBIGINT(M), plan.grid_size(),
+                                          nthr, 1, plan.nspread());
       const UBIGINT cap = sched.points_per_subproblem;
       check(sched.bounds.front() == 0 && sched.bounds.back() == UBIGINT(M),
             "the unsorted cut covers the whole point list");
@@ -618,6 +737,101 @@ void test_setpts_churn() {
     }
   }
 }
+// The colouring on real plans: the boxes each subproblem's own points write, read back
+// through the sort, are disjoint within every unguarded colour, and a spread on eight
+// threads matches a one-thread spread cell by cell. Uniform points, with a share placed
+// on tile faces, where the bin sort may round either way.
+void test_colour_plans() {
+  using finufft::spreadinterp::fold_rescale;
+  const int nthr   = 8;
+  const double tol = sizeof(FLT) == 4 ? 1e-4 : 1e-9;
+  const FLT bound  = FLT(100) * std::numeric_limits<FLT>::epsilon();
+  int coloured = 0, seams = 0;
+  // 2D tiles run to 256 cells on a side, so its grids must be several of those wide
+  const auto sizes = [](int dim) {
+    if (dim == 2)
+      return test_small ? std::vector<BIGINT>{600} : std::vector<BIGINT>{600, 1024};
+    return test_small ? std::vector<BIGINT>{100} : std::vector<BIGINT>{48, 100, 128, 150};
+  };
+  for (const int dim : {2, 3})
+    for (const BIGINT N : sizes(dim)) {
+      const BIGINT M = BIGINT(0.05 * std::pow(double(N), dim));
+      std::vector<FLT> x, y, z;
+      std::vector<CPX> c;
+      uniform_points(M, x, y, z, c);
+      finufft_opts opts;
+      FINUFFT_DEFAULT_OPTS(&opts);
+      opts.spreadinterponly = 1;
+      opts.upsampfac        = 2.0;
+      opts.debug            = test_debug;
+      std::array<BIGINT, 3> n{N, dim > 1 ? N : 1, dim > 2 ? N : 1};
+      const auto setpts = [&](FINUFFT_PLAN_T<FLT> &plan) {
+        check(plan.setpts(M, x.data(), y.data(), z.data(), 0, nullptr, nullptr,
+                          nullptr) <= 1,
+              "the colouring setpts ran");
+        check(plan.grid_size() == UBIGINT(n[0] * n[1] * n[2]),
+              "a spreadinterponly plan spreads onto the modes it was given");
+      };
+      // every tenth point moves onto a face of the tiles this point set produces
+      int e = 0;
+      {
+        opts.nthreads = nthr;
+        FINUFFT_PLAN_T<FLT> probe(1, dim, n.data(), +1, 1, FLT(tol), &opts);
+        setpts(probe);
+        e = probe.tile_data().edge;
+      }
+      for (BIGINT j = 0; j < M; j += 10)
+        for (FLT *v : {&x[size_t(j)], &y[size_t(j)], &z[size_t(j)]}) {
+          const double cell = std::floor((double(*v) + PI) / (2 * PI) * double(N) / e);
+          *v                = FLT(-PI + 2 * PI * cell * e / double(N));
+        }
+      std::array<std::vector<CPX>, 2> grids;
+      for (const int t : {nthr, 1}) {
+        opts.nthreads = t;
+        FINUFFT_PLAN_T<FLT> plan(1, dim, n.data(), +1, 1, FLT(tol), &opts);
+        setpts(plan);
+        grids[t == 1].resize(size_t(n[0] * n[1] * n[2]));
+        check(plan.execute(c.data(), grids[t == 1].data()) <= 1,
+              "the colouring spread ran");
+        if (t == 1) continue;
+        const auto sched = spread_schedule(plan.tile_data(), UBIGINT(M), plan.grid_size(),
+                                           nthr, 1, plan.nspread());
+        if (sched.group_start.empty()) continue;
+        ++coloured;
+        seams += sched.seam;
+        check_order(sched, "the plan colouring lists every subproblem once");
+        const auto &perm = plan.sort_indices();
+        const auto &XYZ  = plan.getXYZ();
+        std::vector<Box> boxes;
+        for (size_t i = 0; i + 1 < sched.bounds.size(); ++i) {
+          Box b{std::pair<BIGINT, BIGINT>{0, 1}, {0, 1}, {0, 1}};
+          for (int d = 0; d < dim; ++d) {
+            double lo = 1e300, hi = -1e300;
+            for (UBIGINT j = sched.bounds[i]; j < sched.bounds[i + 1]; ++j) {
+              const double f = fold_rescale<FLT>(XYZ[d][perm[j]], UBIGINT(n[d]));
+              lo             = std::min(lo, f);
+              hi             = std::max(hi, f);
+            }
+            b[d] = axis_box(lo, hi, plan.nspread());
+          }
+          boxes.push_back(b);
+        }
+        check(overlaps(boxes, unguarded_groups(sched), n) == 0,
+              "same-colour subproblems of a real plan write disjoint boxes");
+        printf("\tcolour plan %dD N=%lld: edge %d, %zu passes%s\n", dim, (long long)N, e,
+               sched.group_start.size() - 1, sched.seam ? " (last one the seam)" : "");
+      }
+      FLT worst = 0, scale = 0;
+      for (size_t i = 0; i < grids[0].size(); ++i) {
+        worst = std::max(worst, std::abs(grids[0][i] - grids[1][i]));
+        scale = std::max(scale, std::abs(grids[1][i]));
+      }
+      check(worst <= bound * scale, "a coloured spread matches the one-thread spread");
+    }
+  check(coloured > 0, "some plan takes the coloured add back");
+  printf("\tcolour plans: %d coloured, %d with a seam\n", coloured, seams);
+}
+
 // Translation covariance across the periodic boundary: shifting every point by k whole
 // cells circularly shifts the spread grid, and interpolation off the shifted grid returns
 // the unshifted values. The wrap sits in copy/drain_wrapped_subgrid, so one 3D arm covers
@@ -712,11 +926,13 @@ int main() {
     test_seed = std::strtoull(s, nullptr, 10);
   test_row_stride();
   test_cut();
+  test_colour_rule();
   test_ceilings();
   test_sort_rule();
   test_unsorted_cut();
   test_type3_regrid();
   test_setpts_churn();
+  test_colour_plans();
   constexpr bool single = std::is_same_v<FLT, float>;
   test_wrap_translation(32, 3000, 2.0, single ? 1e-4 : 1e-9);
   // the widest kernel the precision reaches: the subgrid pad and the wrap span are

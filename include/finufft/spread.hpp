@@ -5,7 +5,9 @@
 #include <finufft/utils.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
+#include <limits>
 #include <numeric>
 #include <utility>
 
@@ -495,12 +497,77 @@ inline double spread_pow_ndims(double x, int ndims) noexcept {
   return v;
 }
 
+// Most colour passes a schedule may take. Every pass ends on a barrier, so past this
+// count the barriers cost more than the guard they save.
+constexpr std::size_t spread_max_colours = 16;
+
+// Groups the subproblems of a tiled cut by colour; see SpreadSchedule. tile and piece
+// give each subproblem's tile and its piece of that tile.
+inline void spread_colour(const SpreadTileData &tiles, int nspread,
+                          const std::vector<BIGINT> &tile,
+                          const std::vector<BIGINT> &piece, SpreadSchedule &sched) {
+  // A subproblem writes its tile grown by half a kernel width on each side. Two tiles
+  // two rows apart thus write disjoint boxes once the edge holds a kernel width and the
+  // rounding of the points to the tile faces, so tiles of equal parity on every axis
+  // can share a pass. The pieces of one tile share its box, so each takes its own pass.
+  if (tiles.starts.size() < 2 || tiles.edge < nspread + 2) return;
+  // Parity alternates along an axis, so the only pair of same-parity neighbours is the
+  // one the periodic wrap makes between the first row and the last. Rows count the fine
+  // cells they hold, not nt: the bin grid rounds up, so the rows past them hold only
+  // points at the exact top coordinate, whose boxes wrap onto row 0. The run of rows
+  // kept must be even, so an odd count drops its last row. An even count whose last row
+  // is narrower than the gap two kernels need drops two, since across that row the wrap
+  // joins row 0 to a row of its own parity. The dropped rows form the seam. One row, or
+  // two, has no pair of distinct same-parity rows, so it drops nothing.
+  std::array<BIGINT, 3> kept{1, 1, 1};
+  for (int d = 0; d < 3; ++d) {
+    if (tiles.nt[d] < 2) continue;
+    const BIGINT rows = 1 + (tiles.ngrid[d] - 1) / tiles.edge;
+    const BIGINT last = tiles.ngrid[d] - (rows - 1) * tiles.edge;
+    kept[d]           = rows <= 2                    ? rows
+                        : rows % 2                   ? rows - 1
+                        : last < BIGINT(nspread) + 2 ? rows - 2
+                                                     : rows;
+  }
+  constexpr BIGINT seam = std::numeric_limits<BIGINT>::max();
+  const auto nsub       = tile.size();
+  std::vector<BIGINT> key(nsub);
+  for (std::size_t i = 0; i < nsub; ++i) {
+    BIGINT t = tile[i], parity = 0;
+    bool on_seam = false;
+    for (int d = 0; d < 3; ++d) {
+      const BIGINT row = t % tiles.nt[d];
+      t /= tiles.nt[d];
+      on_seam |= row >= kept[d];
+      parity |= (row & 1) << d;
+    }
+    key[i] = on_seam ? seam : parity | piece[i] << 3;
+  }
+  std::vector<BIGINT> colours(key);
+  std::sort(colours.begin(), colours.end());
+  colours.erase(std::unique(colours.begin(), colours.end()), colours.end());
+  if (colours.size() > spread_max_colours) return;
+  sched.seam = colours.back() == seam;
+  // a counting sort of the subproblems by colour, stable so each pass keeps the cut order
+  sched.group_start.assign(colours.size() + 1, 0);
+  for (auto &k : key)
+    k = std::lower_bound(colours.begin(), colours.end(), k) - colours.begin();
+  for (const auto k : key) ++sched.group_start[std::size_t(k) + 1];
+  std::partial_sum(sched.group_start.begin(), sched.group_start.end(),
+                   sched.group_start.begin());
+  auto next = sched.group_start;
+  sched.order.resize(nsub);
+  for (std::size_t i = 0; i < nsub; ++i) sched.order[next[key[i]]++] = BIGINT(i);
+}
+
 inline SpreadSchedule spread_schedule(const SpreadTileData &tiles, UBIGINT M,
-                                      UBIGINT grid_cells, int nthr, int batchSize) {
+                                      UBIGINT grid_cells, int nthr, int batchSize,
+                                      int nspread) {
   // Equal pieces of the point list, one piece at a time out of each tile: the pieces of a
   // tile share that tile's box, so a tile over the cap becomes that many subproblems of
   // the same box rather than one that holds a thread for several tiles' worth of work.
-  const auto cut = [](const std::vector<BIGINT> &starts, UBIGINT cap) {
+  std::vector<BIGINT> tile, piece; // each subproblem's tile, and its piece of that tile
+  const auto cut = [&](const std::vector<BIGINT> &starts, UBIGINT cap) {
     SpreadSchedule sched;
     sched.points_per_subproblem = cap;
     // one bound per tile plus one per split, so the whole cut takes one allocation
@@ -510,9 +577,11 @@ inline SpreadSchedule spread_schedule(const SpreadTileData &tiles, UBIGINT M,
       const UBIGINT lo = sched.bounds.back(), hi = UBIGINT(starts[t]);
       if (hi <= lo) continue; // empty tile
       const UBIGINT pieces = 1 + (hi - lo - 1) / cap;
-      for (UBIGINT c = 1; c < pieces; ++c)
+      for (UBIGINT c = 1; c <= pieces; ++c) {
         sched.bounds.push_back(lo + (hi - lo) * c / pieces);
-      sched.bounds.push_back(hi);
+        tile.push_back(BIGINT(t) - 1);
+        piece.push_back(BIGINT(c) - 1);
+      }
     }
     return sched;
   };
@@ -542,7 +611,9 @@ inline SpreadSchedule spread_schedule(const SpreadTileData &tiles, UBIGINT M,
   // for nothing.
   const UBIGINT wanted = spread_subproblems_per_thread * threads_per_vector;
   if (filled_tiles < wanted) cap = std::min(cap, 1 + (M - 1) / wanted);
-  return cut(starts, std::max(cap, UBIGINT(1)));
+  auto sched = cut(starts, std::max(cap, UBIGINT(1)));
+  spread_colour(tiles, nspread, tile, piece, sched);
+  return sched;
 }
 
 // Doublings of the fine cell per spread tile edge; zero keeps the tile at one cell. One

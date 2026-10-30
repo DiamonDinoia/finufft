@@ -415,8 +415,23 @@ The write guard
 ~~~~~~~~~~~~~~~
 
 Only spreading writes the fine grid. Neighbouring tiles' halos overlap, so two threads
-can add back into the same cells, and the add back needs a guard. The guard is unchanged
-from the untiled spreader. The threads in flight on one vector lie inside that vector's
+can add back into the same cells, and the add back needs a guard.
+
+The spreader first tries to colour the tiles. A tile writes its box grown by half a
+kernel width on each side, so two tiles two rows apart write disjoint boxes once the
+tile edge is at least ``ns + 2``. Tiles of equal row parity on every axis then share a
+colour, and the pieces of a tile that the point cap splits each take a colour of their
+own. Spreading runs one pass per colour with no guard, and the barrier at the end of a
+pass keeps the next colour off the boxes it wrote. The periodic wrap makes the first and
+the last row of an axis neighbours. On an odd row count they have the same parity, so
+the last row goes into a seam group. An even count whose last row is narrower than
+``ns + 2`` puts its last two rows there. The rows past the grid, which hold only points
+at the top coordinate, also join the seam. The seam group runs last, under the guard
+below. A tile edge below ``ns + 2``, or more than 16 colours, leaves the tiles
+uncoloured.
+
+The guard for uncoloured tiles and the seam is unchanged from the untiled spreader. The
+threads in flight on one vector lie inside that vector's
 window of subproblems, so at most ``min(nthr, nb)`` of them write one grid, and that
 count selects the guard. At or below ``opts.spread_nthr_atomic`` the guard is one lock
 per fine grid. Above it the add back uses atomic writes, which cost per element and

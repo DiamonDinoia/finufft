@@ -131,6 +131,11 @@ v2.6.0-dev
   checks that an unusable `gpu_device_id` returns `FINUFFT_ERR_CUDA_FAILURE`; with only
   one device visible the cross-device half cannot run and the test reports a ctest SKIP.
   (Barbone)
+* Spreading colours the cache tiles: tiles of equal row parity on every axis
+  write disjoint boxes of the fine grid, so each colour is one pass with no
+  lock and no atomic writes. Only the tiles the periodic wrap leaves
+  uncolourable (the seam) keep the guard. A tile edge below `ns + 2`, or more
+  than 16 colours, falls back to the guard for every tile. (Barbone)
 * Spreading and interpolation share one cache-tiled subproblem algorithm: the
   sort bins the points into cubic tiles of the fine grid sized to one core's
   L2, and both directions build the same padded subgrid per tile. Spreading

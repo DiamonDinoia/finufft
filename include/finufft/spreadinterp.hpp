@@ -128,7 +128,8 @@ template<typename TF> int FINUFFT_PLAN_T<TF>::tile_doublings(int cell) const noe
 
 template<typename TF>
 SpreadSchedule FINUFFT_PLAN_T<TF>::make_schedule(int nthr, int batchSize) const {
-  return spread_schedule(m.tiles, UBIGINT(m.nj), grid_size(), nthr, batchSize);
+  return spread_schedule(m.tiles, UBIGINT(m.nj), grid_size(), nthr, batchSize,
+                         m.spopts.nspread);
 }
 
 template<typename TF>
@@ -351,81 +352,102 @@ int FINUFFT_PLAN_T<TF>::spreadSorted(TF *FINUFFT_RESTRICT data_uniform,
            (long long)(m.tiles.empty() ? 1 : m.tiles.starts.size() - 1),
            (long long)sched.points_per_subproblem);
 
-  // The loop below collapses the rectangular (vector, subproblem) space and every thread
+  // Each loop below collapses a rectangular (vector, subproblem) space and every thread
   // draws pairs out of it. Neighbouring tiles' halos overlap on one vector's fine grid,
   // so the add back needs a guard; a single pair per vector owns its grid and needs none.
   // The queue advances roughly in order, so the threads in flight on vector ib sit inside
-  // its window of nb iterations, at most min(nthr, nb) of them, and that count picks the
+  // its window of n iterations, at most min(nthr, n) of them, and that count picks the
   // guard: a lock on that vector below spopts.atomic_threshold, atomic writes above it.
-
-  // TODO: colouring the tiles so no two neighbours run together would drop both guards.
-  const bool needs_guard = nb > 1 && nthr > 1;
-  const bool use_atomic =
-      needs_guard && std::min((UBIGINT)nthr, nb) > (UBIGINT)m.spopts.atomic_threshold;
-  if (m.spopts.debug && use_atomic)
-    printf("\tup to %d writers per output: drain_wrapped switching to atomic (!)\n",
-           (int)std::min((UBIGINT)nthr, nb));
-  std::vector<my_omp_lock_t> locks(needs_guard && !use_atomic ? batchSize : 0);
+  // A coloured schedule runs one pass per colour, and the subproblems of one colour write
+  // disjoint boxes, so only the seam pass takes a guard.
+  enum class Guard { none, lock, atomic };
+  const auto guard_for = [&](UBIGINT n) {
+    if (n < 2 || nthr < 2) return Guard::none;
+    return std::min(UBIGINT(nthr), n) > UBIGINT(m.spopts.atomic_threshold) ? Guard::atomic
+                                                                           : Guard::lock;
+  };
+  const bool coloured = !sched.group_start.empty() && nthr > 1;
+  if (m.spopts.debug && coloured)
+    printf("\tadd back: %lld colour passes%s\n",
+           (long long)(sched.group_start.size() - 1 - sched.seam),
+           sched.seam ? " and a guarded seam pass" : "");
+  std::vector<my_omp_lock_t> locks(nthr > 1 && nb > 1 ? batchSize : 0);
   for (auto &l : locks) MY_OMP_INIT_LOCK(&l);
 
 #pragma omp parallel num_threads(nthr)
   {
     // local copies of NU pts and data for each subproblem
     std::vector<TF> kx0{}, ky0{}, kz0{}, dd0{}, du0{};
+    const auto subproblem = [&](int ib, BIGINT isub, Guard guard) {
+      // one subproblem of one vector: spread it into its own padded subgrid and add
+      // that subgrid back into the fine grid
+      TF *FINUFFT_RESTRICT grid = data_uniform + ib * stride_u;
+      const TF *nu              = data_nonuniform + ib * stride_nu;
+      const auto M0             = bounds[isub + 1] - bounds[isub]; // # NU pts here
+      // copy the location and data vectors for the nonuniform points
+      kx0.resize(M0);
+      ky0.resize(M0 * (N2 > 1));
+      kz0.resize(M0 * (N3 > 1));
+      dd0.resize(2 * M0); // complex strength data
+      for (UBIGINT j = 0; j < M0; j++) {
+        // todo: can avoid this copying?
+        const auto kk = m.sortIndices[j + bounds[isub]]; // NU pt from the index list
+        kx0[j]        = fold_rescale<TF>(kx[kk], N1);
+        if (N2 > 1) ky0[j] = fold_rescale<TF>(ky[kk], N2);
+        if (N3 > 1) kz0[j] = fold_rescale<TF>(kz[kk], N3);
+        dd0[j * 2]     = nu[kk * 2];     // real part
+        dd0[j * 2 + 1] = nu[kk * 2 + 1]; // imag part
+      }
+      // The subproblem spreads into the padded subgrid around its own points; the add
+      // back confines wrapping to walk_wrapped_subgrid, so no kernel wraps.
+      const Subgrid sub = get_subgrid(M0, kx0.data(), ky0.data(), kz0.data());
+      if (m.spopts.debug > 1)
+        print_subgrid_info(ndims, sub.off1, sub.off2, sub.off3, sub.padded_size1,
+                           sub.size1, sub.size2, sub.size3, M0);
+      // du0 is zero here whatever resize does: it value-initializes what it appends,
+      // and drain_wrapped_subgrid left every cell the last subproblem touched zeroed.
+      // So the kernels below find the zero buffer they accumulate into. The cells no
+      // run reaches, the anti-alias gap and the tail, rest on the store past a row's
+      // end writing back what it read, so the check covers the whole buffer.
+      du0.resize(2 * sub.cells()); // complex
+      assert(std::all_of(du0.begin(), du0.end(), [](TF v) { return v == TF(0); }));
+      if (ndims == 1)
+        spread_subproblem_1d(sub, du0.data(), M0, kx0.data(), ky0.data(), kz0.data(),
+                             dd0.data());
+      else if (ndims == 2)
+        spread_subproblem_2d(sub, du0.data(), M0, kx0.data(), ky0.data(), kz0.data(),
+                             dd0.data());
+      else
+        spread_subproblem_3d(sub, du0.data(), M0, kx0.data(), ky0.data(), kz0.data(),
+                             dd0.data());
+      // add the subgrid back into the fine grid under the guard, and leave du0 zeroed
+      // for the next subproblem
+      if (guard == Guard::atomic) {
+        drain_wrapped_subgrid<true>(sub, grid, du0.data());
+      } else {
+        if (guard == Guard::lock) MY_OMP_SET_LOCK(&locks[ib]);
+        drain_wrapped_subgrid<false>(sub, grid, du0.data());
+        if (guard == Guard::lock) MY_OMP_UNSET_LOCK(&locks[ib]);
+      }
+    };
+    if (coloured) {
+      // the barrier that ends each omp for keeps the next colour's writes off the boxes
+      // this colour is still writing
+      const BIGINT npass = BIGINT(sched.group_start.size()) - 1;
+      for (BIGINT c = 0; c < npass; ++c) {
+        const BIGINT lo = sched.group_start[c], hi = sched.group_start[c + 1];
+        const Guard guard =
+            sched.seam && c == npass - 1 ? guard_for(UBIGINT(hi - lo)) : Guard::none;
 #pragma omp for collapse(2) schedule(dynamic, 1) // each is big
-    for (int ib = 0; ib < batchSize; ib++)
-      for (BIGINT isub = 0; isub < BIGINT(nb); isub++) {
-        // one subproblem of one vector: spread it into its own padded subgrid and add
-        // that subgrid back into the fine grid
-        TF *FINUFFT_RESTRICT grid = data_uniform + ib * stride_u;
-        const TF *nu              = data_nonuniform + ib * stride_nu;
-        const auto M0             = bounds[isub + 1] - bounds[isub]; // # NU pts here
-        // copy the location and data vectors for the nonuniform points
-        kx0.resize(M0);
-        ky0.resize(M0 * (N2 > 1));
-        kz0.resize(M0 * (N3 > 1));
-        dd0.resize(2 * M0); // complex strength data
-        for (UBIGINT j = 0; j < M0; j++) {
-          // todo: can avoid this copying?
-          const auto kk = m.sortIndices[j + bounds[isub]]; // NU pt from the index list
-          kx0[j]        = fold_rescale<TF>(kx[kk], N1);
-          if (N2 > 1) ky0[j] = fold_rescale<TF>(ky[kk], N2);
-          if (N3 > 1) kz0[j] = fold_rescale<TF>(kz[kk], N3);
-          dd0[j * 2]     = nu[kk * 2];     // real part
-          dd0[j * 2 + 1] = nu[kk * 2 + 1]; // imag part
-        }
-        // The subproblem spreads into the padded subgrid around its own points; the add
-        // back confines wrapping to walk_wrapped_subgrid, so no kernel wraps.
-        const Subgrid sub = get_subgrid(M0, kx0.data(), ky0.data(), kz0.data());
-        if (m.spopts.debug > 1)
-          print_subgrid_info(ndims, sub.off1, sub.off2, sub.off3, sub.padded_size1,
-                             sub.size1, sub.size2, sub.size3, M0);
-        // du0 is zero here whatever resize does: it value-initializes what it appends,
-        // and drain_wrapped_subgrid left every cell the last subproblem touched zeroed.
-        // So the kernels below find the zero buffer they accumulate into. The cells no
-        // run reaches, the anti-alias gap and the tail, rest on the store past a row's
-        // end writing back what it read, so the check covers the whole buffer.
-        du0.resize(2 * sub.cells()); // complex
-        assert(std::all_of(du0.begin(), du0.end(), [](TF v) { return v == TF(0); }));
-        if (ndims == 1)
-          spread_subproblem_1d(sub, du0.data(), M0, kx0.data(), ky0.data(), kz0.data(),
-                               dd0.data());
-        else if (ndims == 2)
-          spread_subproblem_2d(sub, du0.data(), M0, kx0.data(), ky0.data(), kz0.data(),
-                               dd0.data());
-        else
-          spread_subproblem_3d(sub, du0.data(), M0, kx0.data(), ky0.data(), kz0.data(),
-                               dd0.data());
-        // add the subgrid back into the fine grid, under the guard the thread count
-        // chose, and leave du0 zeroed for the next subproblem
-        if (use_atomic) {
-          drain_wrapped_subgrid<true>(sub, grid, du0.data());
-        } else {
-          if (needs_guard) MY_OMP_SET_LOCK(&locks[ib]);
-          drain_wrapped_subgrid<false>(sub, grid, du0.data());
-          if (needs_guard) MY_OMP_UNSET_LOCK(&locks[ib]);
-        }
-      } // end main loop over subprobs
+        for (int ib = 0; ib < batchSize; ib++)
+          for (BIGINT k = lo; k < hi; k++) subproblem(ib, sched.order[k], guard);
+      }
+    } else {
+      const Guard guard = guard_for(nb);
+#pragma omp for collapse(2) schedule(dynamic, 1) // each is big
+      for (int ib = 0; ib < batchSize; ib++)
+        for (BIGINT isub = 0; isub < BIGINT(nb); isub++) subproblem(ib, isub, guard);
+    }
   }
   for (auto &l : locks) MY_OMP_DESTROY_LOCK(&l);
   if (m.spopts.debug)
