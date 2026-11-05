@@ -1023,35 +1023,28 @@ typedef std::complex<float> fcomplex;
      }
      else if (strcmp(fname[ifield],"spread_nthr_atomic") == 0) {
        oc->spread_nthr_atomic = (int)round(*mxGetPr(mxGetFieldByNumber(om,idx,ifield)));
-     }
-     else if (strcmp(fname[ifield],"spread_max_sp_size") == 0) {
-       oc->spread_max_sp_size = (int)round(*mxGetPr(mxGetFieldByNumber(om,idx,ifield)));
-     }
-     else if (strcmp(fname[ifield],"spread_kerformula") == 0) {
+     } else if (strcmp(fname[ifield], "spread_kerformula") == 0) {
        oc->spread_kerformula = (int)round(*mxGetPr(mxGetFieldByNumber(om,idx,ifield)));
-     }
-     else if (strcmp(fname[ifield],"allow_eps_too_small") == 0) {
+     } else if (strcmp(fname[ifield], "allow_eps_too_small") == 0) {
        oc->allow_eps_too_small = (int)round(*mxGetPr(mxGetFieldByNumber(om,idx,ifield)));
-     }
-     else if (strcmp(fname[ifield],"spreadinterponly") == 0) {
+     } else if (strcmp(fname[ifield], "spreadinterponly") == 0) {
        oc->spreadinterponly = (int)round(*mxGetPr(mxGetFieldByNumber(om,idx,ifield)));
-     }
-     else if (strcmp(fname[ifield],"showwarn") == 0) {
+     } else if (strcmp(fname[ifield], "showwarn") == 0) {
        oc->showwarn = (int)round(*mxGetPr(mxGetFieldByNumber(om,idx,ifield)));
      }
      /* deprecated fields, kept for ABI compatibility, ignored by the library */
-     else if (strcmp(fname[ifield],"spread_thread") == 0 ||
-              strcmp(fname[ifield],"spread_kerevalmeth") == 0 ||
-              strcmp(fname[ifield],"spread_kerpad") == 0) {
+     else if (strcmp(fname[ifield], "spread_thread") == 0 ||
+              strcmp(fname[ifield], "spread_kerevalmeth") == 0 ||
+              strcmp(fname[ifield], "spread_kerpad") == 0 ||
+              strcmp(fname[ifield], "spread_max_sp_size") == 0) {
        mexWarnMsgIdAndTxt("FINUFFT:deprecatedOpt",
                           "FINUFFT opts.%s is deprecated and ignored", fname[ifield]);
      }
      /* matlab-only fields, handled in finufft_plan.m... */
-     else if (strcmp(fname[ifield],"floatprec") == 0 ||
-              strcmp(fname[ifield],"chkbnds") == 0) {
+     else if (strcmp(fname[ifield], "floatprec") == 0 ||
+              strcmp(fname[ifield], "chkbnds") == 0) {
        continue;
-     }
-     else
+     } else
        mexWarnMsgIdAndTxt("FINUFFT:unknownOpt",
                           "copy_finufft_opts: unknown option \"%s\" ignored.",
                           fname[ifield]);
