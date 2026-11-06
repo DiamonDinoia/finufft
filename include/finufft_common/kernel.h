@@ -1,10 +1,12 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <type_traits>
 #include <vector>
 
@@ -13,6 +15,14 @@
 #include <finufft_common/spread_opts.h>
 #include <finufft_common/utils.h>
 #include <finufft_errors.h>
+
+namespace finufft::common {
+// Rounding error ROUND_FAC*eps_mach*N_d for one dimension's N_d modes.
+// perdim_estimates_ok below sums it over dimensions, so the total rounding floor
+// is eps_mach*ROUND_FAC*sum_d N_d. No sigma lowers it. Declared here because
+// perdim_estimates_ok calls it; defined in src/common/kernel.cpp.
+double rounding_error(double eps_mach, double mode_diagonal);
+} // namespace finufft::common
 
 namespace finufft::kernel {
 
@@ -69,7 +79,13 @@ template<class T, class F> std::vector<T> poly_fit(F &&f, int n) {
 // The spread/interp kernel phi_beta(z) on z in [-1,1]. Not performance-critical;
 // used only for polynomial interpolation (precompute_horner_coeffs). Always double.
 // Defined in src/common/kernel.cpp.
+std::function<double(double)> kernel_definition_lambda(double beta, int kerformula);
 std::function<double(double)> kernel_definition_lambda(const finufft_spread_opts &spopts);
+
+// The one beta law: switch on kerformula and return the shape parameter for a kernel of
+// width nspread at upsampling ratio upsampfac (the realized nf/N for per-dimension
+// calls). Defined in src/common/kernel.cpp.
+double kernel_beta_given_ns(int nspread, double upsampfac, int kerformula);
 
 int theoretical_kernel_ns(double tol, int dim, int type, double sigma);
 
@@ -82,6 +98,49 @@ double min_sigma_for_deconv_error(double tol, int dim, int ns, double eps_mach);
 // then the float catastrophic-cancellation guard. Shared by setup_spreadinterp() and
 // the upsampfac heuristic so they agree on the width.
 int clamp_kernel_ns(int ns, double upsampfac, int dim, bool is_float);
+
+// The three refusal estimates on per-dimension sigmas sigma_d (= nf_d / N_d in auto
+// mode): rounding at N_d, aliasing and deconvolution at width ns_d. check_sigma
+// (setpts.hpp) and the per-dimension selector (src/heuristics.cpp) share this one
+// test, so the two cannot disagree. Each estimate is summed over dimensions (the
+// safe combination); every sum must be <= tol. The aliasing and deconvolution
+// terms carry a 1/dim share of the fitted uniform-law prefactors, so equal
+// dimensions reproduce those two laws exactly. The rounding term sums as
+// sum_d N_d, not the uniform law's 2-norm. sums, when given, receives the
+// (rounding, aliasing, deconvolution) sums. Defined in src/common/kernel.cpp.
+bool perdim_estimates_ok(
+    double tol, int dim, int type, bool is_float, const std::array<double, 3> &n,
+    const std::array<double, 3> &sigma_d, const std::array<int, 3> &ns,
+    std::array<double, 3> *sums = nullptr);
+
+// One per-dimension (ns, nf) set for the retune, its realized ratios and its modeled
+// cost. ops holds the per-dim spread factors: the padded 2*ns_x-wide row on the fast
+// dim x (get_padded_simd_width on x only), then the ns_y and ns_z row counts.
+struct PerdimSet {
+  std::array<int, 3> ns{};       // kernel width per dimension
+  std::array<BIGINT, 3> nf{};    // fine grid length per dimension
+  std::array<double, 3> sigma{}; // realized ratio nf_d / N_d
+  std::array<double, 3> ops{};   // per-dim spread work factors
+  double cost = std::numeric_limits<double>::infinity();
+};
+
+// Cost of one (ns, nf) set: npts * prod_d ops_d spread work plus the FFT
+// c * G * log2(G) on the per-dim fine grid G = prod_d nf_d. Defined in
+// src/heuristics.cpp (the ops need get_padded_simd_width).
+double perdim_set_cost(bool is_float, double npts, const std::array<int, 3> &ns,
+                       const std::array<BIGINT, 3> &nf, int dim, int nthreads,
+                       std::array<double, 3> *ops_out = nullptr);
+
+// Cost-minimal per-dimension (ns, nf) set meeting the summed error estimate, over the
+// per-dim min-sigma candidates (allow_nf_change, auto) or the width-only candidates at
+// the uniform nf (forced upsampfac stays one sigma in every dim). Width tuples must
+// stay within PERDIM_MAX_NS_DIFF, the dispatched kernel set. best holds the winner
+// (the uniform set when nothing beats or meets it); returns true when it differs from
+// uniform. Defined in src/heuristics.cpp. debug > 1 prints the candidate costs.
+bool perdim_pick_set(double tol, int dim, int type, bool is_float, int nthreads,
+                     const std::array<double, 3> &N, double npts,
+                     const PerdimSet &uniform, bool allow_nf_change, PerdimSet &best,
+                     int debug);
 
 void set_kernel_shape_given_ns(finufft_spread_opts &opts, int debug);
 
@@ -151,9 +210,5 @@ BIGINT fine_grid_len(double sigma, double n_modes, int ns);
 // Returns the tuple (nf, h, gam); destructure with structured bindings.
 std::tuple<BIGINT, double, double> nhg_type3(double sigma, double X, double S, int ns,
                                              BIGINT max_nf);
-
-// Rounding error ROUND_FAC*eps_mach*mode_diagonal, with mode_diagonal the 2-norm of
-// the mode counts ([FIN] Remark 9). No sigma lowers it.
-double rounding_error(double eps_mach, double mode_diagonal);
 
 } // namespace finufft::common

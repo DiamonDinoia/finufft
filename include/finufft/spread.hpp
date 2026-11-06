@@ -88,7 +88,7 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_1d_kernel(
   static constexpr auto padding   = get_padding<T, 2 * NS>();
   static constexpr auto simd_size = KBL::simd_size;
   static constexpr auto ns2       = NS * T(0.5); // half spread width
-  const T *horner_coeffs_ptr      = m.horner_coeffs.data();
+  const T *horner_coeffs_ptr      = m.horner_coeffs[0].data(); // dimension 0's table
   // something weird here. Reversing ker{0} and std fill causes ker
   // to be zeroed inside the loop GCC uses AVX, clang AVX2
   alignas(KBL::alignment) std::array<T, KBL::stride> ker{0};
@@ -200,7 +200,7 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_1d_kernel(
 }
 
 template<typename TF>
-template<int NS, int NC>
+template<int NS, int NSY, int NC>
 FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_2d_kernel(
     const BIGINT off1, const BIGINT off2, const UBIGINT size1, TF *FINUFFT_RESTRICT du,
     const UBIGINT M, const TF *kx, const TF *ky, const TF *dd) const noexcept
@@ -221,23 +221,54 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_2d_kernel(
   using arch_t                    = typename KBL::arch_t;
   static constexpr auto padding   = get_padding<T, 2 * NS>();
   static constexpr auto simd_size = KBL::simd_size;
-  const T *horner_coeffs_ptr      = m.horner_coeffs.data();
+  // NC > 0 is the equal-width path: both dims share one (NS, NC) Horner table and
+  // the inlined fill writes them at the kernel buffer's own stride. NC == 0 keeps
+  // the per-dimension fill instances at the widest stride, so fills cannot overlap.
+  constexpr auto seg              = NC > 0 ? KBL::stride : max_kernel_buffer_stride<T>;
+  static constexpr T half_y       = T(NSY) * T(0.5); // half spread width, dimension 1
+  const T *horner_coeffs_ptr      = m.horner_coeffs[0].data(); // dimension 0's table
+  [[maybe_unused]] std::array<const T *, 3> coeffs{};
+  [[maybe_unused]] std::array<ker_fill_fn<T>, 3> fills{};
+  if constexpr (NC == 0) {
+    // fill instances selected once per call, outside the point loop
+    coeffs = std::array<const T *, 3>{
+        m.horner_coeffs[0].data(), m.horner_coeffs[1].data(), m.horner_coeffs[2].data()};
+    fills = std::array<ker_fill_fn<T>, 3>{select_ker_fill<T>(NS, m.nc_dim[0]),
+                                          select_ker_fill<T>(NSY, m.nc_dim[1]),
+                                          select_ker_fill<T>(NSY, m.nc_dim[1])};
+  }
   // Kernel values stored in consecutive memory. This allows us to compute
   // values in all three directions in a single kernel evaluation call.
-  static constexpr auto ns2 = NS * T(0.5);  // half spread width
-  alignas(KBL::alignment) std::array<T, 2 * KBL::stride> kernel_values{0};
+  static constexpr auto ns2 = NS * T(0.5); // half spread width, dimension 0
+  // The buffer must satisfy every per-dim fill's store alignment: the dims'
+  // PaddedSIMD widths can differ, so take the max, not just dimension 0's.
+  using KBL_Y               = KernelBufferLayout<T, NSY>;
+  constexpr auto buf_align  = std::max(KBL::alignment, KBL_Y::alignment);
+  // NC > 0 mirrors develop's zero-init, whose buffer gcc promotes to registers;
+  // NC == 0's fill writes every read slot first, so that buffer needs no zero-init.
+  alignas(buf_align) std::array<T, 2 * seg> kernel_values;
+  if constexpr (NC != 0) kernel_values = {};
   for (uint64_t pt = 0; pt < M; pt++) {
     // loop over NU pts
-    const auto dd_pt = initialize_complex_register<simd_type>(dd[pt * 2], dd[pt * 2 + 1]);
     // ceil offset, hence rounding, must match that in get_subgrid...
     const auto i1 = (BIGINT)std::ceil(kx[pt] - ns2); // fine grid start indices
-    const auto i2 = (BIGINT)std::ceil(ky[pt] - ns2);
+    const auto i2 = (BIGINT)std::ceil(ky[pt] - half_y);
     const auto x1 = (T)std::ceil(kx[pt] - ns2) - kx[pt];
-    const auto x2 = (T)std::ceil(ky[pt] - ns2) - ky[pt];
-    evaluate_kernel_vector<NS, NC, T, simd_type>(kernel_values.data(), horner_coeffs_ptr,
-                                                 x1, x2);
+    const auto x2 = (T)std::ceil(ky[pt] - half_y) - ky[pt];
+    simd_type dd_pt;
+    if constexpr (NC > 0) {
+      // equal widths: the inlined fill keeps the kernel values in registers
+      dd_pt = initialize_complex_register<simd_type>(dd[pt * 2], dd[pt * 2 + 1]);
+      evaluate_kernel_vector<NS, NC, T, simd_type>(kernel_values.data(),
+                                                   horner_coeffs_ptr, x1, x2);
+    } else {
+      // dd after the never-inline fill: no vector value stays live across the call
+      fill_dims<T, 2>(kernel_values.data(), seg, fills.data(), coeffs.data(), x1, x2,
+                      T(0));
+      dd_pt = initialize_complex_register<simd_type>(dd[pt * 2], dd[pt * 2 + 1]);
+    }
     const auto *ker1 = kernel_values.data();
-    const auto *ker2 = kernel_values.data() + KBL::stride;
+    const auto *ker2                        = kernel_values.data() + seg;
     // Combine kernel with complex source value to simplify inner loop
     // here 2* is because of complex
     static constexpr uint8_t kerval_vectors = (2 * NS + padding) / simd_size;
@@ -285,7 +316,7 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_2d_kernel(
     }();
 
     // critical inner loop:
-    for (auto dy = 0; dy < NS; ++dy) {
+    for (int dy = 0; dy < NSY; ++dy) {
       const auto j = size1 * (i2 - off2 + dy) + i1 - off1; // should be in subgrid
       auto *FINUFFT_RESTRICT trg = du + 2 * j;
       const simd_type kerval_v(ker2[dy]);
@@ -299,7 +330,7 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_2d_kernel(
 }
 
 template<typename TF>
-template<int NS, int NC>
+template<int NS, int NSY, int NSZ, int NC>
 FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_3d_kernel(
     const BIGINT off1, const BIGINT off2, const BIGINT off3, const UBIGINT size1,
     const UBIGINT size2, TF *FINUFFT_RESTRICT du, const UBIGINT M, const TF *kx,
@@ -315,27 +346,60 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_3d_kernel(
   using arch_t                    = typename KBL::arch_t;
   static constexpr auto padding   = get_padding<T, 2 * NS>();
   static constexpr auto simd_size = KBL::simd_size;
-  const T *horner_coeffs_ptr      = m.horner_coeffs.data();
+  // NC > 0 is the equal-width path: all dims share one (NS, NC) Horner table and
+  // the inlined fill writes them at the kernel buffer's own stride. NC == 0 keeps
+  // the per-dimension fill instances at the widest stride, so fills cannot overlap.
+  constexpr auto seg              = NC > 0 ? KBL::stride : max_kernel_buffer_stride<T>;
+  static constexpr T half_y       = T(NSY) * T(0.5); // half spread width, dimension 1
+  static constexpr T half_z       = T(NSZ) * T(0.5); // half spread width, dimension 2
+  const T *horner_coeffs_ptr      = m.horner_coeffs[0].data(); // dimension 0's table
+  [[maybe_unused]] std::array<const T *, 3> coeffs{};
+  [[maybe_unused]] std::array<ker_fill_fn<T>, 3> fills{};
+  if constexpr (NC == 0) {
+    // fill instances selected once per call, outside the point loop
+    coeffs = std::array<const T *, 3>{
+        m.horner_coeffs[0].data(), m.horner_coeffs[1].data(), m.horner_coeffs[2].data()};
+    fills = std::array<ker_fill_fn<T>, 3>{select_ker_fill<T>(NS, m.nc_dim[0]),
+                                          select_ker_fill<T>(NSY, m.nc_dim[1]),
+                                          select_ker_fill<T>(NSZ, m.nc_dim[2])};
+  }
 
-  static constexpr auto ns2 = NS * T(0.5); // half spread width
-  alignas(KBL::alignment) std::array<T, 3 * KBL::stride> kernel_values{0};
+  static constexpr auto ns2 = NS * T(0.5); // half spread width, dimension 0
+  // The buffer must satisfy every per-dim fill's store alignment: the dims'
+  // PaddedSIMD widths can differ, so take the max, not just dimension 0's.
+  using KBL_Y               = KernelBufferLayout<T, NSY>;
+  using KBL_Z               = KernelBufferLayout<T, NSZ>;
+  constexpr auto buf_align =
+      std::max({KBL::alignment, KBL_Y::alignment, KBL_Z::alignment});
+  // NC > 0 mirrors develop's zero-init, whose buffer gcc promotes to registers;
+  // NC == 0's fill writes every read slot first, so that buffer needs no zero-init.
+  alignas(buf_align) std::array<T, 3 * seg> kernel_values;
+  if constexpr (NC != 0) kernel_values = {};
 
   for (uint64_t pt = 0; pt < M; pt++) {
     // loop over NU pts
-    const auto dd_pt = initialize_complex_register<simd_type>(dd[pt * 2], dd[pt * 2 + 1]);
     // ceil offset, hence rounding, must match that in get_subgrid...
     const auto i1 = (BIGINT)std::ceil(kx[pt] - ns2); // fine grid start indices
-    const auto i2 = (BIGINT)std::ceil(ky[pt] - ns2);
-    const auto i3 = (BIGINT)std::ceil(kz[pt] - ns2);
+    const auto i2 = (BIGINT)std::ceil(ky[pt] - half_y);
+    const auto i3 = (BIGINT)std::ceil(kz[pt] - half_z);
     const auto x1 = std::ceil(kx[pt] - ns2) - kx[pt];
-    const auto x2 = std::ceil(ky[pt] - ns2) - ky[pt];
-    const auto x3 = std::ceil(kz[pt] - ns2) - kz[pt];
+    const auto x2 = (T)std::ceil(ky[pt] - half_y) - ky[pt];
+    const auto x3 = (T)std::ceil(kz[pt] - half_z) - kz[pt];
 
-    evaluate_kernel_vector<NS, NC, T, simd_type>(kernel_values.data(), horner_coeffs_ptr,
-                                                 x1, x2, x3);
+    simd_type dd_pt;
+    if constexpr (NC > 0) {
+      // equal widths: the inlined fill keeps the kernel values in registers
+      dd_pt = initialize_complex_register<simd_type>(dd[pt * 2], dd[pt * 2 + 1]);
+      evaluate_kernel_vector<NS, NC, T, simd_type>(kernel_values.data(),
+                                                   horner_coeffs_ptr, x1, x2, x3);
+    } else {
+      // dd after the never-inline fill: no vector value stays live across the call
+      fill_dims<T, 3>(kernel_values.data(), seg, fills.data(), coeffs.data(), x1, x2, x3);
+      dd_pt = initialize_complex_register<simd_type>(dd[pt * 2], dd[pt * 2 + 1]);
+    }
     const auto *ker1 = kernel_values.data();
-    const auto *ker2 = kernel_values.data() + KBL::stride;
-    const auto *ker3 = kernel_values.data() + 2 * KBL::stride;
+    const auto *ker2                        = kernel_values.data() + seg;
+    const auto *ker3                        = kernel_values.data() + 2 * seg;
     // Combine kernel with complex source value to simplify inner loop
     // here 2* is because of complex
     // kerval_vectors is the number of SIMD iterations needed to compute all the elements
@@ -366,9 +430,9 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::spread_subproblem_3d_kernel(
       return ker1val_v;
     }();
     // critical inner loop:
-    for (uint8_t dz{0}; dz < NS; ++dz) {
+    for (uint8_t dz{0}; dz < NSZ; ++dz) {
       const auto oz = size1 * size2 * (i3 - off3 + dz); // offset due to z
-      for (uint8_t dy{0}; dy < NS; ++dy) {
+      for (uint8_t dy{0}; dy < NSY; ++dy) {
         const auto j = oz + size1 * (i2 - off2 + dy) + i1 - off1; // should be in subgrid
         auto *FINUFFT_RESTRICT trg = du + 2 * j;
         const simd_type kerval_v(ker2[dy] * ker3[dz]);
@@ -919,9 +983,9 @@ Subgrid FINUFFT_PLAN_T<TF>::get_subgrid(UBIGINT M, const TF *kx, const TF *ky,
  right-most index of an axis is thus off+size-1.
 
  The rounding of the coords to the grid must match the rounding in
- spread_subproblem_{1,2,3}d_kernel: the ceil of the coord minus ns/2 gives the left-most
- index. A mismatch segfaults the subproblem spread. This assumes max() and ceil() commute
- in the floating point implementation.
+ spread_subproblem_{1,2,3}d_kernel: the ceil of the coord minus half the kernel width of
+ that dimension gives the left-most index. A mismatch segfaults the subproblem spread.
+ This assumes max() and ceil() commute in the floating point implementation.
 
  Costs O(M) reads to find the bounds of the coord arrays, which is almost negligible in
  tests. Originally by J Magland, 2017. AHB realised the rounding issue in 6/16/17, but
@@ -931,21 +995,26 @@ Subgrid FINUFFT_PLAN_T<TF>::get_subgrid(UBIGINT M, const TF *kx, const TF *ky,
 */
 {
   using namespace finufft::spreadinterp;
-  const int ns      = m.spopts.nspread;
+  // dimension 0 keeps the template width; dimensions 1,2 the runtime widths
+  const int ns      = m.spopts.nspread_dim[0];
+  const int ns_y    = m.spopts.nspread_dim[1];
+  const int ns_z    = m.spopts.nspread_dim[2];
   const TF half     = TF(ns) / TF(2);
+  const TF half_y   = TF(ns_y) / TF(2);
+  const TF half_z   = TF(ns_z) / TF(2);
   // The support of one axis: its lowest index touched by a kernel, and how many it spans.
-  const auto extent = [&](const TF *k) {
+  const auto extent = [&](const TF *k, TF h, int w) {
     TF lo, hi;
     simd_arrayrange(int64_t(M), k, &lo, &hi);
-    const BIGINT off = BIGINT(std::ceil(lo - half)); // int(ceil) first!
-    return std::pair{off, BIGINT(std::ceil(hi - half)) - off + ns};
+    const BIGINT off = BIGINT(std::ceil(lo - h)); // int(ceil) first!
+    return std::pair{off, BIGINT(std::ceil(hi - h)) - off + w};
   };
   Subgrid sub;
-  const auto [o1, n1] = extent(kx);
+  const auto [o1, n1] = extent(kx, half, ns);
   sub.off1            = o1;
   sub.set_row_layout<TF>(n1, BIGINT(get_padding<TF>(2 * ns) / 2));
-  if (dim > 1) std::tie(sub.off2, sub.size2) = extent(ky);
-  if (dim > 2) std::tie(sub.off3, sub.size3) = extent(kz);
+  if (dim > 1) std::tie(sub.off2, sub.size2) = extent(ky, half_y, ns_y);
+  if (dim > 2) std::tie(sub.off3, sub.size3) = extent(kz, half_z, ns_z);
   return sub;
 }
 
@@ -980,14 +1049,11 @@ template<typename TF> struct FINUFFT_PLAN_T<TF>::SpreadSubproblem2dCaller {
   const TF *kx;
   const TF *ky;
   const TF *dd;
-  template<int NS, int NC> int operator()() const {
-    if constexpr (!::finufft::kernel::ValidKernelParams<NS, NC>())
-      return finufft::spreadinterp::report_invalid_kernel_params(NS, NC);
-    else {
-      plan.template spread_subproblem_2d_kernel<NS, NC>(
-          sub.off1, sub.off2, sub.padded_size1, du, M, kx, ky, dd);
-      return 0;
-    }
+  template<int NS, int DY> int operator()() const {
+    // DY is the dimension-1 width shift against dimension 0's width
+    plan.template spread_subproblem_2d_kernel<NS, NS + DY>(
+        sub.off1, sub.off2, sub.padded_size1, du, M, kx, ky, dd);
+    return 0;
   }
 };
 
@@ -1000,13 +1066,55 @@ template<typename TF> struct FINUFFT_PLAN_T<TF>::SpreadSubproblem3dCaller {
   const TF *ky;
   const TF *kz;
   const TF *dd;
+  template<int NS, int SHIFT> int operator()() const {
+    // SHIFT packs the dimension-1 and dimension-2 width shifts against dimension 0
+    constexpr int DY =
+        SHIFT / finufft::common::PERDIM_SHIFT_SPAN - finufft::common::PERDIM_MAX_NS_DIFF;
+    constexpr int DZ =
+        SHIFT % finufft::common::PERDIM_SHIFT_SPAN - finufft::common::PERDIM_MAX_NS_DIFF;
+    plan.template spread_subproblem_3d_kernel<NS, NS + DY, NS + DZ>(
+        sub.off1, sub.off2, sub.off3, sub.padded_size1, sub.size2, du, M, kx, ky, kz, dd);
+    return 0;
+  }
+};
+
+// Equal-width tuples carry one shared Horner degree, so they dispatch on (ns, nc)
+// straight into the single-width kernel shape with the fill inlined.
+template<typename TF> struct FINUFFT_PLAN_T<TF>::SpreadSubproblem2dEqCaller {
+  const FINUFFT_PLAN_T &plan;
+  const Subgrid &sub;
+  TF *du;
+  UBIGINT M;
+  const TF *kx;
+  const TF *ky;
+  const TF *dd;
   template<int NS, int NC> int operator()() const {
     if constexpr (!::finufft::kernel::ValidKernelParams<NS, NC>())
       return finufft::spreadinterp::report_invalid_kernel_params(NS, NC);
     else {
-      plan.template spread_subproblem_3d_kernel<NS, NC>(sub.off1, sub.off2, sub.off3,
-                                                        sub.padded_size1, sub.size2, du,
-                                                        M, kx, ky, kz, dd);
+      plan.template spread_subproblem_2d_kernel<NS, NS, NC>(
+          sub.off1, sub.off2, sub.padded_size1, du, M, kx, ky, dd);
+      return 0;
+    }
+  }
+};
+
+template<typename TF> struct FINUFFT_PLAN_T<TF>::SpreadSubproblem3dEqCaller {
+  const FINUFFT_PLAN_T &plan;
+  const Subgrid &sub;
+  TF *du;
+  UBIGINT M;
+  const TF *kx;
+  const TF *ky;
+  const TF *kz;
+  const TF *dd;
+  template<int NS, int NC> int operator()() const {
+    if constexpr (!::finufft::kernel::ValidKernelParams<NS, NC>())
+      return finufft::spreadinterp::report_invalid_kernel_params(NS, NC);
+    else {
+      plan.template spread_subproblem_3d_kernel<NS, NS, NS, NC>(
+          sub.off1, sub.off2, sub.off3, sub.padded_size1, sub.size2, du, M, kx, ky, kz,
+          dd);
       return 0;
     }
   }
@@ -1030,8 +1138,9 @@ void FINUFFT_PLAN_T<TF>::spread_subproblem_1d(
   SpreadSubproblem1dCaller caller{*this, sub, du, M, kx, dd};
   using NsSeq = poet::inclusive_range<MIN_NSPREAD, MAX_NSPREAD<TF>>;
   using NcSeq = poet::inclusive_range<MIN_NC, MAX_NC>;
-  poet::dispatch(caller, std::make_tuple(poet::dispatch_param<NsSeq>{m.spopts.nspread},
-                                         poet::dispatch_param<NcSeq>{m.nc}));
+  poet::dispatch(caller,
+                 std::make_tuple(poet::dispatch_param<NsSeq>{m.spopts.nspread_dim[0]},
+                                 poet::dispatch_param<NcSeq>{m.nc_dim[0]}));
 }
 
 template<typename TF>
@@ -1042,11 +1151,25 @@ void FINUFFT_PLAN_T<TF>::spread_subproblem_2d(
 {
   using namespace finufft::spreadinterp;
   using namespace finufft::common;
-  SpreadSubproblem2dCaller caller{*this, sub, du, M, kx, ky, dd};
   using NsSeq = poet::inclusive_range<MIN_NSPREAD, MAX_NSPREAD<TF>>;
   using NcSeq = poet::inclusive_range<MIN_NC, MAX_NC>;
-  poet::dispatch(caller, std::make_tuple(poet::dispatch_param<NsSeq>{m.spopts.nspread},
-                                         poet::dispatch_param<NcSeq>{m.nc}));
+  // one shared fit (equal width and beta) keeps the tuple at one Horner degree
+  if (m.spopts.nspread_dim[1] == m.spopts.nspread_dim[0] &&
+      m.spopts.beta_dim[1] == m.spopts.beta_dim[0]) {
+    SpreadSubproblem2dEqCaller caller{*this, sub, du, M, kx, ky, dd};
+    poet::dispatch(caller,
+                   std::make_tuple(poet::dispatch_param<NsSeq>{m.spopts.nspread_dim[0]},
+                                   poet::dispatch_param<NcSeq>{m.nc_dim[0]}));
+  } else {
+    SpreadSubproblem2dCaller caller{*this, sub, du, M, kx, ky, dd};
+    assert(std::abs(m.spopts.nspread_dim[1] - m.spopts.nspread_dim[0]) <=
+               finufft::common::PERDIM_MAX_NS_DIFF &&
+           "width tuple outside the dispatched set");
+    poet::dispatch(
+        caller, std::make_tuple(poet::dispatch_param<NsSeq>{m.spopts.nspread_dim[0]},
+                                poet::dispatch_param<ShiftSeq2>{
+                                    m.spopts.nspread_dim[1] - m.spopts.nspread_dim[0]}));
+  }
 }
 
 template<typename TF>
@@ -1057,9 +1180,24 @@ void FINUFFT_PLAN_T<TF>::spread_subproblem_3d(const Subgrid &sub, TF *FINUFFT_RE
 {
   using namespace finufft::spreadinterp;
   using namespace finufft::common;
-  SpreadSubproblem3dCaller caller{*this, sub, du, M, kx, ky, kz, dd};
   using NsSeq = poet::inclusive_range<MIN_NSPREAD, MAX_NSPREAD<TF>>;
-  using NcSeq = poet::inclusive_range<MIN_NC, MAX_NC>;
-  poet::dispatch(caller, std::make_tuple(poet::dispatch_param<NsSeq>{m.spopts.nspread},
-                                         poet::dispatch_param<NcSeq>{m.nc}));
+  using NcSeq  = poet::inclusive_range<MIN_NC, MAX_NC>;
+  const int dy = m.spopts.nspread_dim[1] - m.spopts.nspread_dim[0];
+  const int dz = m.spopts.nspread_dim[2] - m.spopts.nspread_dim[0];
+  // one shared fit (equal widths and beta) keeps the tuple at one Horner degree
+  if (dy == 0 && dz == 0 && m.spopts.beta_dim[1] == m.spopts.beta_dim[0] &&
+      m.spopts.beta_dim[2] == m.spopts.beta_dim[0]) {
+    SpreadSubproblem3dEqCaller caller{*this, sub, du, M, kx, ky, kz, dd};
+    poet::dispatch(caller,
+                   std::make_tuple(poet::dispatch_param<NsSeq>{m.spopts.nspread_dim[0]},
+                                   poet::dispatch_param<NcSeq>{m.nc_dim[0]}));
+  } else {
+    SpreadSubproblem3dCaller caller{*this, sub, du, M, kx, ky, kz, dd};
+    assert(finufft::spreadinterp::detail::shift_in_gate(dy, dz) &&
+           "width tuple outside the dispatched set");
+    poet::dispatch(
+        caller, std::make_tuple(poet::dispatch_param<NsSeq>{m.spopts.nspread_dim[0]},
+                                poet::dispatch_param<ShiftSeq3>{
+                                    finufft::spreadinterp::detail::pack_shift(dy, dz)}));
+  }
 }

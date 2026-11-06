@@ -22,6 +22,8 @@ template void FINUFFT_PLAN_T<FLT>::precompute_horner_coeffs();
 template void FINUFFT_PLAN_T<FLT>::set_nf_type12(BIGINT ms, BIGINT *nf) const;
 template void FINUFFT_PLAN_T<FLT>::onedim_fseries_kernel(BIGINT nf,
                                                           std::vector<FLT> &fwkerhalf) const;
+template void FINUFFT_PLAN_T<FLT>::onedim_fseries_kernel(
+    int idim, BIGINT nf, std::vector<FLT> &fwkerhalf) const;
 
 extern template FLT FINUFFT_PLAN_T<FLT>::evaluate_kernel_runtime(FLT) const;
 extern template void FINUFFT_PLAN_T<FLT>::create_fft_plan();     // instantiated in fft.cpp

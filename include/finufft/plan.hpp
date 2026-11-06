@@ -154,15 +154,18 @@ private:
     // --- Spreader configuration (computed by setup_spreadinterp) ---
     TF tol{};                      // user tolerance, clamped to machine eps by spreader
     finufft_spread_opts spopts{};  // spreading kernel parameters (nspread, beta, etc.)
-    int nc = 0;     // number of Horner polynomial coefficients (<= MAX_NC)
-    size_t padded_ns = 0;          // SIMD-padded kernel width
+    bool perdim_kernels = false;   // the per-dimension retune ran (type 1/2 NUFFT)
+    std::array<int, 3> nc_dim{0, 0, 0}; // Horner coeffs per dimension (<= MAX_NC)
+    std::array<size_t, 3> padded_ns_dim{0, 0, 0}; // SIMD-padded kernel width per
+                                                  // dimension
     // Worst-case sizing: simd.hpp's static_asserts pin
     // max_kernel_buffer_stride<float|double> <= MAX_NSPREAD<double>, so this
     // loose bound is provably safe. Tightening would force plan.hpp to depend
     // on simd.hpp/xsimd, which the test headers don't have on their path.
-    alignas(64) std::array<TF, finufft::common::MAX_NSPREAD<double> *
-                                   finufft::common::MAX_NC> horner_coeffs{0};
-    // piecewise Horner coefficients table (ns x nc layout)
+    alignas(64) std::array<
+        std::array<TF, finufft::common::MAX_NSPREAD<double> * finufft::common::MAX_NC>,
+        3> horner_coeffs{};
+    // piecewise Horner coefficients tables, one per dimension (ns x nc layout)
 
     // --- Fine grid (computed by init_grid_kerFT_FFT or set_nhg_type3) ---
     std::array<BIGINT, 3> nfdim{1, 1, 1};  // upsampled grid dimensions
@@ -234,24 +237,27 @@ private:
   void precompute_horner_coeffs();
   void set_nf_type12(BIGINT ms, BIGINT *nf) const;
   void onedim_fseries_kernel(BIGINT nf, std::vector<TF> &fwkerhalf) const;
+  void onedim_fseries_kernel(int idim, BIGINT nf, std::vector<TF> &fwkerhalf) const;
   void set_nhg_type3(int idim, TF S, TF X);
   // Compile-time-dispatched kernel method templates (NS=nspread, NC=horner degree).
   // Bodies are defined in interp.hpp and spread.hpp respectively.
-  template<int NS, int NC, int NDIMS>
+  template<int NS, int NC, int NDIMS, int NSY = 0, int NSZ = 0>
   void interp_subproblem_kernel(
       BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT padded_size1, UBIGINT size2,
       UBIGINT size3, const TF *du, UBIGINT M, const TF *kx, const TF *ky, const TF *kz,
       const BIGINT *idx, TF *FINUFFT_RESTRICT dd) const noexcept;
   // Only the strides the kernel indexes with: the outermost extent went with the fill
-  // these kernels used to do (see spreadSorted).
+  // these kernels used to do (see spreadSorted). NC > 0 is the equal-width path: the
+  // dims share one (NS, NC) Horner table and the fill is inlined; NC == 0 fills the
+  // dims per width through the fill instances.
   template<int NS, int NC>
   void spread_subproblem_1d_kernel(BIGINT off1, TF *FINUFFT_RESTRICT du, UBIGINT M,
                                    const TF *kx, const TF *dd) const noexcept;
-  template<int NS, int NC>
+  template<int NS, int NSY, int NC = 0>
   void spread_subproblem_2d_kernel(BIGINT off1, BIGINT off2, UBIGINT size1,
                                    TF *FINUFFT_RESTRICT du, UBIGINT M, const TF *kx,
                                    const TF *ky, const TF *dd) const noexcept;
-  template<int NS, int NC>
+  template<int NS, int NSY, int NSZ, int NC = 0>
   void spread_subproblem_3d_kernel(BIGINT off1, BIGINT off2, BIGINT off3, UBIGINT size1,
                                    UBIGINT size2, TF *FINUFFT_RESTRICT du, UBIGINT M,
                                    const TF *kx, const TF *ky, const TF *kz,
@@ -259,13 +265,18 @@ private:
 
   // Nested caller types that turn the runtime kernel width and Horner degree into
   // template arguments, one per dimension and direction. Bodies are in spread.hpp and
-  // interp.hpp.
+  // interp.hpp. The Eq callers take the equal-width tuples, which carry one shared
+  // Horner degree and dispatch on (ns, nc).
   struct SpreadSubproblem1dCaller;
   struct SpreadSubproblem2dCaller;
   struct SpreadSubproblem3dCaller;
+  struct SpreadSubproblem2dEqCaller;
+  struct SpreadSubproblem3dEqCaller;
   struct InterpSubproblem1dCaller;
   struct InterpSubproblem2dCaller;
   struct InterpSubproblem3dCaller;
+  struct InterpSubproblem2dEqCaller;
+  struct InterpSubproblem3dEqCaller;
 
   void bin_sort_singlethread(int cell, int cell_bits, SpreadTileData &tile_data_out);
   void bin_sort_multithread(int cell, int nthr, int cell_bits,
@@ -323,6 +334,7 @@ private:
   int interpSorted(TF *FINUFFT_RESTRICT data_uniform,
                    TF *FINUFFT_RESTRICT data_nonuniform, int batchSize = 1) const;
   TF evaluate_kernel_runtime(TF x) const;
+  TF evaluate_kernel_runtime(int idim, TF x) const;
   std::vector<int> gridsize_for_fft() const;
   void do_fft(TC *fwBatch, int ntrans_actual, bool adjoint) const;
 

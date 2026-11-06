@@ -15,30 +15,51 @@
 
 // ---------- local helpers for setpts: --------
 
-// Throws FINUFFT_ERR_EPS_TOO_SMALL if rounding_error > tol, or if upsampfac is below
-// min_sigma_for_aliasing_error or min_sigma_for_deconv_error at the plan ns.
-// opts.allow_eps_too_small warns instead.
-template<typename TF> void FINUFFT_PLAN_T<TF>::check_sigma(double mode_diagonal) {
+// Throws FINUFFT_ERR_EPS_TOO_SMALL when the summed per-dimension estimates exceed
+// tol. The three estimates (rounding at N_d, aliasing and deconvolution at ns_d) are
+// summed over dimensions (the safe combination) on the per-dimension sigmas: the
+// realized ratio nf_d / N_d in auto mode, the forced upsampfac (one value in every
+// dim) otherwise. perdim_estimates_ok (kernel.cpp) is the same test the selector
+// uses, so the two cannot disagree. opts.allow_eps_too_small warns instead.
+template<typename TF> void FINUFFT_PLAN_T<TF>::check_sigma(double /*mode_diagonal*/) {
   using namespace finufft::common;
   using namespace finufft::kernel;
-  constexpr double eps_mach = std::numeric_limits<TF>::epsilon();
-  const double tol = m.tol, sigma = m.spopts.upsampfac;
-  const int ns           = m.spopts.nspread;
-  const double eps_round = rounding_error(eps_mach, mode_diagonal);
-  const bool below_floor = eps_round > tol;
-  const double sigma_min = std::max(min_sigma_for_aliasing_error(tol, dim, type, ns),
-                                    min_sigma_for_deconv_error(tol, dim, ns, eps_mach));
-  if (!below_floor && sigma >= sigma_min) return;
+  const double tol = m.tol;
+  std::array<double, 3> N{}, sigma_d{};
+  std::array<int, 3> ns_d{};
+  for (int idim = 0; idim < dim; ++idim) {
+    N[idim]       = (double)mstu[idim];
+    // A per-dim plan is tested at the realized ratios nf_d / N_d, the same values the
+    // selector prices. A uniform plan keeps the one searched or forced sigma, so the
+    // refusal contract is the develop one (upsampfac too low refuses). spreadinterponly
+    // has no fine grid ratio and keeps spopts in every dim.
+    sigma_d[idim] = (m.perdim_kernels && !opts.spreadinterponly && mstu[idim] > 0)
+                        ? (double)m.nfdim[idim] / (double)mstu[idim]
+                        : m.spopts.upsampfac;
+    ns_d[idim]    = m.perdim_kernels ? m.spopts.nspread_dim[idim] : m.spopts.nspread;
+  }
+  std::array<double, 3> sums;
+  const bool feasible = perdim_estimates_ok(tol, dim, type, std::is_same_v<TF, float>, N,
+                                            sigma_d, ns_d, &sums);
+  if (feasible) return;
   const bool do_throw = !opts.allow_eps_too_small; // opt-in wins
   // an error always speaks; the warning obeys opts.showwarn, as every other warning does
   if (!do_throw && !opts.showwarn) return;
   const char *level = do_throw ? "error" : "warning";
-  if (below_floor)
-    fprintf(stderr, "%s %s: tol=%.3g is below the rounding floor %.2g\n", __func__, level,
-            tol, eps_round);
-  else
-    fprintf(stderr, "%s %s: upsampfac=%.3g at ns=%d cannot meet tol=%.3g; needs %.3g\n",
-            __func__, level, sigma, ns, tol, sigma_min);
+  if (sums[0] > tol)
+    // the rounding floor dominates: no upsampfac can meet the tolerance
+    fprintf(stderr, "%s %s: tol=%.3g is below the rounding floor %.3g\n", __func__, level,
+            tol, sums[0]);
+  else {
+    // a larger upsampfac fixes the failing aliasing or deconvolution sum
+    const bool aliasing_fails = sums[1] > tol;
+    const double est          = aliasing_fails ? sums[1] : sums[2];
+    fprintf(stderr,
+            "%s %s: the summed %s estimate %.3g exceeds tol=%.3g at ns=(%d,%d,%d); "
+            "upsampfac too low\n",
+            __func__, level, aliasing_fails ? "aliasing" : "deconvolution", est, tol,
+            ns_d[0], ns_d[1], ns_d[2]);
+  }
   if (do_throw) throw finufft::exception(FINUFFT_ERR_EPS_TOO_SMALL);
 }
 
@@ -118,12 +139,14 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
     check_sigma(std::sqrt(mode_diagonal));
 
     m.XYZ   = {xj, yj, zj}; // plan must keep pointers to user's fixed NU pts
-    // Invariant: m.padded_ns must equal the runtime mirror of
+    // Invariant: m.padded_ns_dim must equal the runtime mirror of
     // KernelBufferLayout<TF, NS>::stride. Caught here if any path forgot to
     // call precompute_horner_coeffs (or if the trait diverges from the runtime
     // formula).
-    assert(m.padded_ns ==
-           finufft::spreadinterp::kernel_buffer_stride_runtime<TF>(m.spopts.nspread));
+    for (int idim = 0; idim < dim; ++idim)
+      assert(m.padded_ns_dim[idim] ==
+             finufft::spreadinterp::kernel_buffer_stride_runtime<TF>(
+                 m.spopts.nspread_dim[idim]));
     spreadcheck();          // throws on error
     timer.restart();
     m.sortIndices.resize(nj);
@@ -293,8 +316,28 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
                     nullptr, nullptr,
                     nullptr); // note nk = # output points (not nj); throws on error
     m.innerT2plan = std::move(guard);
-    if (opts.debug)
+    if (opts.debug) {
+      // The inner type-2 plan is the one that goes per dim. It prints its own set
+      // only when its debug level is >= 1, that is opts.debug > 1 here.
+      const auto &ipl = m.innerT2plan;
+      const auto &im  = ipl->m;
+      const std::array<int, 3> ns_set{im.spopts.nspread_dim[0], im.spopts.nspread_dim[1],
+                                      im.spopts.nspread_dim[2]};
+      const std::array<BIGINT, 3> nf_set{im.nfdim[0], im.nfdim[1], im.nfdim[2]};
+      std::array<double, 3> ops{};
+      const double cost = finufft::kernel::perdim_set_cost(
+          std::is_same_v<TF, float>, (double)nk, ns_set, nf_set, d, opts.nthreads, &ops);
+      for (int idim = 0; idim < d; ++idim)
+        printf("[%s] perdim inner d%d: sigma_d=%.4g ns_d=%d nf_d=%lld beta_d=%.4g "
+               "cost_spread_d=%.4g cost_fft_d=%lld\n",
+               __func__, idim,
+               im.perdim_kernels ? (double)im.nfdim[idim] / (double)ipl->mstu[idim]
+                                 : im.spopts.upsampfac,
+               ns_set[idim], (long long)nf_set[idim], im.spopts.beta_dim[idim], ops[idim],
+               (long long)nf_set[idim]);
+      printf("[%s] perdim inner cost=%.4g\n", __func__, cost);
       printf("[%s t3] inner t2 plan & setpts: \t%.3g s\n", __func__, timer.elapsedsec());
+    }
   }
   return 0;
 }

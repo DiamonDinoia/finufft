@@ -37,7 +37,7 @@ void FINUFFT_PLAN_T<TF>::set_nf_type12(BIGINT ms, BIGINT *nf) const
 }
 
 template<typename TF>
-void FINUFFT_PLAN_T<TF>::onedim_fseries_kernel(BIGINT nf,
+void FINUFFT_PLAN_T<TF>::onedim_fseries_kernel(int idim, BIGINT nf,
                                                std::vector<TF> &fwkerhalf) const
 /*
   Approximates exact Fourier series coeffs of spreadinterp's real symmetric
@@ -51,8 +51,8 @@ void FINUFFT_PLAN_T<TF>::onedim_fseries_kernel(BIGINT nf,
   this is now achieved by the sign flip in a[n] below.
 
   Inputs:
+  idim - which dimension's kernel (nspread_dim, horner_coeffs) to transform
   nf - size of 1d uniform spread grid, must be even.
-  Reads spopts (spreading opts) from the plan, needed to eval kernel.
 
   Outputs:
   fwkerhalf - real Fourier series coeffs from indices 0 to nf/2 inclusive,
@@ -68,10 +68,11 @@ void FINUFFT_PLAN_T<TF>::onedim_fseries_kernel(BIGINT nf,
   the FT of the piecewise poly approximant (not "exact" kernel) is computed.
   Previous arg opts (spreading opts) is now read from plan member spopts.
   Converted to class member, Barbone 2/24/26.
+  Per-dimension kernel, Barbone 11/4/26.
  */
 {
   using namespace finufft::common;
-  TF J2 = m.spopts.nspread / 2.0; // J/2, half-width of ker z-support
+  TF J2 = m.spopts.nspread_dim[idim] / 2.0; // J/2, half-width of ker z-support
   // # quadr nodes in z (from 0 to J/2; reflections will be added)...
   int q = (int)(2 + 3.0 * J2); // not sure why so large? (NB cannot exceed MAX_NQUAD)
   TF f[MAX_NQUAD];
@@ -83,7 +84,7 @@ void FINUFFT_PLAN_T<TF>::onedim_fseries_kernel(BIGINT nf,
   for (int n = 0; n < q; ++n) { // set up nodes z_n and vals f_n
     z[n] = J2 * TF(zq[n]);      // rescale nodes
                                 // vals & quadr weighs
-    f[n] = J2 * TF(wq[n]) * evaluate_kernel_runtime(z[n]);
+    f[n] = J2 * TF(wq[n]) * evaluate_kernel_runtime(idim, z[n]);
     // phase winding rates
     a[n] = -std::exp(TF(2 * PI) * I * z[n] / TF(nf));
   }
@@ -110,6 +111,13 @@ void FINUFFT_PLAN_T<TF>::onedim_fseries_kernel(BIGINT nf,
       fwkerhalf[j] = x;
     }
   }
+}
+
+// The uniform kernel of dimension 0; kept for the explicit instantiation.
+template<typename TF>
+void FINUFFT_PLAN_T<TF>::onedim_fseries_kernel(BIGINT nf,
+                                               std::vector<TF> &fwkerhalf) const {
+  onedim_fseries_kernel(0, nf, fwkerhalf);
 }
 
 // --------------- makeplan-related member functions and free functions ----------
@@ -184,6 +192,13 @@ template<typename TF> void FINUFFT_PLAN_T<TF>::setup_spreadinterp() {
             __func__, std::min(ns_theory, max_ns), ns);
   m.spopts.nspread = ns;
   set_kernel_shape_given_ns(m.spopts, opts.debug); // selects kernel params in spopts
+  // The uniform kernel fills every dimension; the per-dimension retune (type 1/2
+  // NUFFT) overwrites these with the values at sigma_eff_d = nf_d / N_d.
+  for (int idim = 0; idim < 3; ++idim) {
+    m.spopts.nspread_dim[idim] = ns;
+    m.spopts.beta_dim[idim]    = m.spopts.beta;
+  }
+  m.perdim_kernels = false;
   if (opts.debug || m.spopts.debug)
     printf("\t\t\ttol=%.3g sigma=%.3g: chose ns=%d beta=%.3g\n", m.tol,
            m.spopts.upsampfac, ns, m.spopts.beta);
@@ -200,109 +215,124 @@ template<typename TF> void FINUFFT_PLAN_T<TF>::precompute_horner_coeffs() {
   using namespace finufft::kernel;
   // Solve for piecewise Horner coeffs for the function kernel.h:kernel_definition()
   // Marco Barbone, Fall 2025. Barnett & Lu edits and two bugs fixed, Jan 2026.
+  // One table per dimension, from that dimension's (nspread_dim, beta_dim); dimensions
+  // of one (width, beta) share one fit, so the plan-time cost is one fit per distinct
+  // (width, beta) pair.
   // *** To-do: investigate using double when TF=float, and tol_cutoff, 1/13/26.
-  const auto nspread = m.spopts.nspread;
-
-  const auto nc_fit = max_nc_given_ns(nspread); // how many coeffs to fit
-
-  // Both the chunk stride here and the per-chunk stride in evaluate_kernel_vector
-  // flow through KernelBufferLayout<TF, NS>::stride (compile-time) and
-  // kernel_buffer_stride_runtime<TF>(ns) (runtime mirror), so they provably agree.
-  m.padded_ns          = finufft::spreadinterp::kernel_buffer_stride_runtime<TF>(nspread);
-  const auto simd_size = get_padded_simd_width<TF>(2 * nspread);
-
-  m.horner_coeffs.fill(TF(0));
-
-  m.nc = MIN_NC; // a class member which will become the number of coeffs used
-
   CNTime timer;
   timer.start();
 
-  // First pass: fit at max_degree (nc_fit-1), and save these coeffs,
-  // then determine largest nc needed and shuffle the coeffs if nc<nc_fit.
-  // Note: `poly_fit()` returns coefficients in descending-degree order
-  // (highest-degree first): coeffs[0] is the highest-degree term. We store
-  // them so that `horner_coeffs[k * padded_ns + j]` holds the k'th Horner
-  // coefficient (k=0 -> highest-degree). `horner_coeffs` was filled with
-  // zeros above, so panels that need fewer coefficients leave the rest as 0.
-
-  auto kernel_lambda = kernel_definition_lambda(m.spopts);
-
-  for (int j = 0; j < nspread; ++j) { // ......... loop over intervals (panels)
-    // affine map of x in [-1,1] to z in jth interval [-1+2j/w,-1+2(j+1)/w]
-    const TF xshiftj = TF(2 * j + 1 - nspread); // jth center in [-w,w]
-    // *** explore making this lambda double always, like kernel itself:
-    const auto kernel_this_interval = [xshiftj, nspread, kernel_lambda](TF x) -> TF {
-      const TF z = (x + xshiftj) / (TF)nspread;
-      return (TF)kernel_lambda((double)z);
-    };
-
-    // we're fitting in float for TF=float, *** explore always double:
-    const auto coeffs = poly_fit<TF>(kernel_this_interval, static_cast<int>(nc_fit));
-
-    // Save coefficients directly into final table (transposed/padded):
-    // coeffs[k] is highest->lowest, store at row k for panel j.
-    for (size_t k = 0; k < coeffs.size(); ++k) {
-      m.horner_coeffs[k * m.padded_ns + j] = coeffs[k];
+  for (int idim = 0; idim < dim; ++idim) {
+    const auto nspread = m.spopts.nspread_dim[idim];
+    int src            = 0; // earlier dimension of the same (width, beta), if any
+    while (src < idim && (m.spopts.nspread_dim[src] != nspread ||
+                          m.spopts.beta_dim[src] != m.spopts.beta_dim[idim]))
+      ++src;
+    if (src < idim) { // one fit per distinct (width, beta): copy the table
+      m.padded_ns_dim[idim] = m.padded_ns_dim[src];
+      m.nc_dim[idim]        = m.nc_dim[src];
+      std::copy(m.horner_coeffs[src].begin(), m.horner_coeffs[src].end(),
+                m.horner_coeffs[idim].begin());
+      continue;
     }
 
-    // Truncate polynomial degree using a numerical coeff size cut-off:
-    // truncation at nc is allowed if all coeffs of degree nc have magnitude
-    // less than tol * coeffs_tol_cutoff. The smallest such nc is found.
-    // Experiments showed with this as 0.1, ns=15 still had err bump...
-    const TF coeffs_tol_cutoff = 0.05; // coeffs cut-off rel to tol: to-do make opts?
-    // Note: ordering is coeffs[0] highest degree, to coeffs[nc_fit-1] const term.
-    int nc_needed = 0; // initialize. then step down from highest degree...
-    for (size_t k = 0; k < coeffs.size(); ++k) {              // power is nc_fit-1-k
-      if (std::abs(coeffs[k]) >= m.tol * coeffs_tol_cutoff) { // stop when large enough
-        nc_needed = static_cast<int>(coeffs.size() - k);
-        break;
+    const auto nc_fit = max_nc_given_ns(nspread); // how many coeffs to fit
+
+    // Both the chunk stride here and the per-chunk stride in evaluate_kernel_vector
+    // flow through KernelBufferLayout<TF, NS>::stride (compile-time) and
+    // kernel_buffer_stride_runtime<TF>(ns) (runtime mirror), so they provably agree.
+    m.padded_ns_dim[idim] =
+        finufft::spreadinterp::kernel_buffer_stride_runtime<TF>(nspread);
+    const auto simd_size = get_padded_simd_width<TF>(2 * nspread);
+    auto *table          = m.horner_coeffs[idim].data();
+
+    for (size_t k = 0; k < m.horner_coeffs[idim].size(); ++k) table[k] = TF(0);
+
+    m.nc_dim[idim] = MIN_NC; // the number of coeffs used in this dimension
+
+    // First pass: fit at max_degree (nc_fit-1), and save these coeffs,
+    // then determine largest nc needed and shuffle the coeffs if nc<nc_fit.
+    // Note: `poly_fit()` returns coefficients in descending-degree order
+    // (highest-degree first): coeffs[0] is the highest-degree term. We store
+    // them so that `table[k * padded_ns + j]` holds the k'th Horner
+    // coefficient (k=0 -> highest-degree). The table was filled with
+    // zeros above, so panels that need fewer coefficients leave the rest as 0.
+    auto kernel_lambda =
+        kernel_definition_lambda(m.spopts.beta_dim[idim], m.spopts.kerformula);
+
+    for (int j = 0; j < nspread; ++j) { // ......... loop over intervals (panels)
+      // affine map of x in [-1,1] to z in jth interval [-1+2j/w,-1+2(j+1)/w]
+      const TF xshiftj                = TF(2 * j + 1 - nspread); // jth center in [-w,w]
+      // *** explore making this lambda double always, like kernel itself:
+      const auto kernel_this_interval = [xshiftj, nspread, kernel_lambda](TF x) -> TF {
+        const TF z = (x + xshiftj) / (TF)nspread;
+        return (TF)kernel_lambda((double)z);
+      };
+
+      // we're fitting in float for TF=float, *** explore always double:
+      const auto coeffs = poly_fit<TF>(kernel_this_interval, static_cast<int>(nc_fit));
+
+      // Save coefficients directly into final table (transposed/padded):
+      // coeffs[k] is highest->lowest, store at row k for panel j.
+      for (size_t k = 0; k < coeffs.size(); ++k) {
+        table[k * m.padded_ns_dim[idim] + j] = coeffs[k];
+      }
+
+      // Truncate polynomial degree using a numerical coeff size cut-off:
+      // truncation at nc is allowed if all coeffs of degree nc have magnitude
+      // less than tol * coeffs_tol_cutoff. The smallest such nc is found.
+      // Experiments showed with this as 0.1, ns=15 still had err bump...
+      const TF coeffs_tol_cutoff = 0.05; // coeffs cut-off rel to tol: to-do make opts?
+      // Note: ordering is coeffs[0] highest degree, to coeffs[nc_fit-1] const term.
+      int nc_needed              = 0; // initialize. then step down from highest degree...
+      for (size_t k = 0; k < coeffs.size(); ++k) {              // power is nc_fit-1-k
+        if (std::abs(coeffs[k]) >= m.tol * coeffs_tol_cutoff) { // stop when large enough
+          nc_needed = static_cast<int>(coeffs.size() - k);
+          break;
+        }
+      }
+      if (nc_needed > m.nc_dim[idim]) m.nc_dim[idim] = nc_needed; // max over panels j
+    } // .............. end loop
+
+    //     prevent nc falling off bottom of valid range...
+    m.nc_dim[idim] = std::max(m.nc_dim[idim], min_nc_given_ns(nspread));
+    // (we know nc cannot be larger than valid due to nc_fit initialization above)
+
+    // If the max required degree (m.nc_dim[idim]) is less than nc_fit, we must shift
+    // the coefficients "left" (to lower row indices) so that the significant
+    // coefficients end at row nc-1.
+    if (m.nc_dim[idim] < static_cast<int>(nc_fit)) {
+      const size_t shift = nc_fit - m.nc_dim[idim];
+      for (size_t k = 0; k < static_cast<size_t>(m.nc_dim[idim]); ++k) {
+        const size_t src_row = k + shift;
+        const size_t dst_row = k;
+        for (size_t j = 0; j < m.padded_ns_dim[idim]; ++j) {
+          table[dst_row * m.padded_ns_dim[idim] + j] =
+              table[src_row * m.padded_ns_dim[idim] + j];
+        }
+      }
+      // Zero out the now-unused tail rows for cleanliness
+      for (size_t k = m.nc_dim[idim]; k < static_cast<size_t>(nc_fit); ++k) {
+        for (size_t j = 0; j < m.padded_ns_dim[idim]; ++j) {
+          table[k * m.padded_ns_dim[idim] + j] = TF(0);
+        }
       }
     }
-    if (nc_needed > m.nc) m.nc = nc_needed; // nc update to be max over panels j
-  } // .............. end loop
-
-  // m.nc = nc_fit;  // overrides truncation, useful for debugging
-  //     prevent nc falling off bottom of valid range...
-  m.nc = std::max(m.nc, min_nc_given_ns(nspread));
-  // (we know nc cannot be larger than valid due to nc_fit initialization above)
-
-  // If the max required degree (m.nc) is less than nc_fit, we must shift
-  // the coefficients "left" (to lower row indices) so that the significant
-  // coefficients end at row nc-1.
-  if (m.nc < static_cast<int>(nc_fit)) {
-    const size_t shift = nc_fit - m.nc;
-    for (size_t k = 0; k < static_cast<size_t>(m.nc); ++k) {
-      const size_t src_row = k + shift;
-      const size_t dst_row = k;
-      for (size_t j = 0; j < m.padded_ns; ++j) {
-        m.horner_coeffs[dst_row * m.padded_ns + j] =
-            m.horner_coeffs[src_row * m.padded_ns + j];
-      }
+    if (opts.debug || m.spopts.debug) {
+      printf("[%s] ns=%d:\t%.3g s\n", __func__, nspread, timer.elapsedsec());
+      printf("\t\tnc_fit=%d (trim to nc=%d), simd_size=%d, padded_ns=%d\n", nc_fit,
+             m.nc_dim[idim], (int)simd_size, (int)m.padded_ns_dim[idim]);
     }
-    // Zero out the now-unused tail rows for cleanliness
-    for (size_t k = m.nc; k < static_cast<size_t>(nc_fit); ++k) {
-      for (size_t j = 0; j < m.padded_ns; ++j) {
-        m.horner_coeffs[k * m.padded_ns + j] = TF(0);
+    if (opts.debug > 2) {
+      // Print transposed layout: all "index 0" coeffs for intervals, then "index 1", ...
+      // Note: k is the coefficient index in Horner order, with highest degree first.
+      printf("dumping precomputed Horner coeffs of dim %d...\n", idim);
+      for (size_t k = 0; k < static_cast<size_t>(m.nc_dim[idim]); ++k) {
+        printf("[%s] idx=%lld: ", __func__, (long long)k);
+        for (size_t j = 0; j < m.padded_ns_dim[idim]; ++j) // show padding as well
+          printf("%.14g ", static_cast<double>(table[k * m.padded_ns_dim[idim] + j]));
+        printf("\n");
       }
-    }
-  }
-  double t = timer.elapsedsec();
-
-  if (opts.debug || m.spopts.debug) {
-    printf("[%s] ns=%d:\t%.3g s\n", __func__, nspread, t);
-    printf("\t\tnc_fit=%d (trim to nc=%d), simd_size=%d, padded_ns=%d\n", nc_fit, m.nc,
-           (int)simd_size, (int)m.padded_ns);
-  }
-  if (opts.debug > 2) {
-    // Print transposed layout: all "index 0" coeffs for intervals, then "index 1", ...
-    // Note: k is the coefficient index in Horner order, with highest degree first.
-    printf("dumping precomputed Horner coeffs...\n");
-    for (size_t k = 0; k < static_cast<size_t>(m.nc); ++k) {
-      printf("[%s] idx=%lld: ", __func__, (long long)k);
-      for (size_t j = 0; j < m.padded_ns; ++j) // use padded_ns to show padding as well
-        printf("%.14g ", static_cast<double>(m.horner_coeffs[k * m.padded_ns + j]));
-      printf("\n");
     }
   }
 }

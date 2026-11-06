@@ -57,7 +57,7 @@ void FINUFFT_PLAN_T<TF>::spreadcheck() const
 }
 
 template<typename TF>
-TF FINUFFT_PLAN_T<TF>::evaluate_kernel_runtime(TF x) const
+TF FINUFFT_PLAN_T<TF>::evaluate_kernel_runtime(int idim, TF x) const
 /* Simple runtime spreading kernel evaluator for a single argument.
    Uses the precomputed piecewise polynomial coeffs (degree nc-1, where
    nc = number of coeffs per panel), for the ns panels covering its support.
@@ -66,33 +66,39 @@ TF FINUFFT_PLAN_T<TF>::evaluate_kernel_runtime(TF x) const
    which evaluates a set of ns kernel values at once, for the corresponding ordinate.
    Is used by numerical Fourier transform in onedim_fseries_kernel and
    Kernel_onedim_FT.
-   Coefficients are stored as horner_coeffs[j * padded_ns + i], where padded_ns
+   Coefficients are stored as horner_coeffs[idim][j * padded_ns + i], where padded_ns
    is rounded up to SIMD alignment which *must* be consistent with that used
    in both evaluate_kernel_vector and precompute_horner_coeffs.
-   Reads spopts.nspread, nc, padded_ns, horner_coeffs from the plan.
+   Reads nspread_dim, nc_dim, padded_ns_dim, horner_coeffs for dimension idim.
    Barbone (Dec/25). Fixed Lu 12/23/25.
    Simplified spopts, removed redundant |x|>=ns/2 exit point, Barnett 1/15/26.
    Previous args (x, ns, nc, horner_coeffs_ptr, spopts) are now plan members
    (spopts.nspread, nc, horner_coeffs, padded_ns).
    Converted to class member, Barbone 2/24/26.
+   Per-dimension kernel, Barbone 11/4/26.
 */
 {
-  const int ns    = m.spopts.nspread;
+  const int ns    = m.spopts.nspread_dim[idim];
   const TF ns2    = ns / TF(2.0); // half width w/2, in grid point units
-  const TF *coefs = m.horner_coeffs.data();
+  const TF *coefs = m.horner_coeffs[idim].data();
   TF res          = TF(0.0);
-  // Invariant: m.padded_ns is the runtime mirror of
+  // Invariant: m.padded_ns_dim[idim] is the runtime mirror of
   // finufft::spreadinterp::KernelBufferLayout<TF, NS>::stride; both are produced
   // by kernel_buffer_stride_runtime<TF>(ns) in precompute_horner_coeffs.
   for (int i = 0; i < ns; ++i) {             // check if x falls into any piecewise panels
     if (x > -ns2 + i && x <= -ns2 + i + 1) { // if so, eval that Horner polynomial
       TF z = std::fma(TF(2.0), x - TF(i), TF(ns - 1)); // maps panel to z in [-1,1]
-      for (int j = 0; j < m.nc; ++j) // Horner loop (highest to lowest order)...
-        res = std::fma(res, z, coefs[j * m.padded_ns + i]);
+      for (int j = 0; j < m.nc_dim[idim]; ++j) // Horner loop (highest to lowest order)...
+        res = std::fma(res, z, coefs[j * m.padded_ns_dim[idim] + i]);
       break;
     }
   }
   return res;
+}
+
+// The uniform kernel of dimension 0; kept for the explicit instantiation.
+template<typename TF> TF FINUFFT_PLAN_T<TF>::evaluate_kernel_runtime(TF x) const {
+  return evaluate_kernel_runtime(0, x);
 }
 
 /*
@@ -112,9 +118,10 @@ TF FINUFFT_PLAN_T<TF>::evaluate_kernel_runtime(TF x) const
 template<typename TF>
 FINUFFT_PLAN_T<TF>::Kernel_onedim_FT::Kernel_onedim_FT(const FINUFFT_PLAN_T &plan)
     : plan_ptr(&plan) {
+  // The type-3 outer plan keeps one uniform kernel, that of dimension 0.
   const auto [gs, pf] = finufft::kernel::pswf_selfft_params(
-      plan.m.spopts.nspread, plan.m.spopts.beta, plan.m.horner_coeffs.data(), plan.m.nc,
-      int(plan.m.padded_ns));
+      plan.m.spopts.nspread_dim[0], plan.m.spopts.beta_dim[0],
+      plan.m.horner_coeffs[0].data(), plan.m.nc_dim[0], int(plan.m.padded_ns_dim[0]));
   grid_scale = TF(gs);
   prefac = TF(pf);
 }

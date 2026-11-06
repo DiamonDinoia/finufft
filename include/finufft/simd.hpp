@@ -6,6 +6,8 @@
 // clang sets no -fassociative-math macro, so xsimd's barrier compiles out; force it on.
 #define XSIMD_REASSOCIATIVE_MATH 1
 
+#include <poet/poet.hpp> // select_ker_fill's (ns, nc) dispatch
+
 // xsimd configuration: ensure unsupported architectures fall back to emulated.
 #include <xsimd/config/xsimd_config.hpp>
 #ifdef XSIMD_NO_SUPPORTED_ARCHITECTURE
@@ -437,5 +439,94 @@ FINUFFT_ALWAYS_INLINE auto evaluate_kernel_vector(
   }
   return ker;
 }
+
+// Per-dimension kernel value fill at runtime width. Dimensions 1 and 2 of the
+// multi-d kernels fill their value vectors through one (ns_d, nc_d) dispatch per
+// subproblem; dimension 0 keeps evaluate_kernel_vector<NS, NC> on the vectorized row.
+template<class T> using ker_fill_fn = void (*)(T *out, const T *coeffs, T x);
+
+template<class T, int NS, int NC> struct KerFill {
+  static void fill(T *FINUFFT_RESTRICT out, const T *coeffs, T x) {
+    evaluate_kernel_vector<NS, NC, T, typename KernelBufferLayout<T, NS>::simd_type>(
+        out, coeffs, x);
+  }
+};
+
+namespace detail {
+template<class T> struct KerFillCaller {
+  ker_fill_fn<T> *out;
+  template<int NS, int NC> int operator()() const {
+    if constexpr (::finufft::kernel::ValidKernelParams<NS, NC>())
+      *out = &KerFill<T, NS, NC>::fill;
+    return 0;
+  }
+};
+} // namespace detail
+
+// The fill for one dimension's (ns_d, nc_d). The pair comes from perdim_kernel_ns and
+// max_nc_given_ns, so it is always valid; invalid pairs (an unfitted dimension) return
+// a null function pointer and leave poet out of range entirely.
+template<class T> inline ker_fill_fn<T> select_ker_fill(int ns, int nc) {
+  if (ns < MIN_NSPREAD || ns > MAX_NSPREAD<T> || nc < finufft::common::MIN_NC ||
+      nc > finufft::common::MAX_NC)
+    return nullptr;
+  using NsSeq = poet::inclusive_range<MIN_NSPREAD, MAX_NSPREAD<T>>;
+  using NcSeq = poet::inclusive_range<finufft::common::MIN_NC, finufft::common::MAX_NC>;
+  ker_fill_fn<T> fn = nullptr;
+  detail::KerFillCaller<T> caller{&fn};
+  poet::dispatch(caller, std::make_tuple(poet::dispatch_param<NsSeq>{ns},
+                                         poet::dispatch_param<NcSeq>{nc}));
+  return fn;
+}
+
+// One fill call per point for all dimensions. The never-inline wrapper keeps the
+// fill calls behind a single call boundary, so no vector value in the caller is
+// live across a register-clobbering call and the scatter nest spills like
+// develop's inlined fills. The caller selects the fill instances once per
+// subproblem, outside the point loop.
+template<class T, int NDIMS>
+FINUFFT_NEVER_INLINE void fill_dims(T *kv, ptrdiff_t seg, const ker_fill_fn<T> *fills,
+                                    const T *const *coeffs, T x0, T x1, T x2) {
+  const T xs[3] = {x0, x1, x2};
+  for (int d = 0; d < NDIMS; ++d) fills[d](kv + d * seg, coeffs[d], xs[d]);
+}
+
+// Per-dimension width-shift dispatch keys. One key packs (d_y, d_z) as
+// PERDIM_SHIFT_SPAN*(d_y+1) + (d_z+1); the 2D key is the bare d_y. The equal
+// pair (d_y = d_z = 0) is here for equal-width tuples whose dims do not share
+// one fit (different beta); the rest holds exactly the shift pairs whose
+// three widths stay within PERDIM_MAX_NS_DIFF of each other; opposite-sign pairs
+// span 2*PERDIM_MAX_NS_DIFF and the plan-time gate never produces them.
+// Instances at widths outside [MIN_NSPREAD, MAX_NSPREAD] are unreachable dead
+// specializations.
+using ShiftSeq2 = std::integer_sequence<int, -finufft::common::PERDIM_MAX_NS_DIFF, 0,
+                                        finufft::common::PERDIM_MAX_NS_DIFF>;
+using ShiftSeq3 = std::integer_sequence<int, 0, 1, 3, 4, 5, 7, 8>;
+
+namespace detail {
+constexpr int pack_shift(int dy, int dz) {
+  return finufft::common::PERDIM_SHIFT_SPAN * (dy + 1) + (dz + 1);
+}
+constexpr bool shift_in_gate(int dy, int dz) {
+  return std::abs(dy - dz) <= finufft::common::PERDIM_MAX_NS_DIFF;
+}
+template<int... V> constexpr bool has_shift(std::integer_sequence<int, V...>, int key) {
+  return ((V == key) || ...);
+}
+template<int... V> constexpr bool shifts_exact(std::integer_sequence<int, V...> seq) {
+  for (int dy = -finufft::common::PERDIM_MAX_NS_DIFF;
+       dy <= finufft::common::PERDIM_MAX_NS_DIFF; ++dy)
+    for (int dz = -finufft::common::PERDIM_MAX_NS_DIFF;
+         dz <= finufft::common::PERDIM_MAX_NS_DIFF; ++dz)
+      if (shift_in_gate(dy, dz) != has_shift(seq, pack_shift(dy, dz))) return false;
+  return true;
+}
+} // namespace detail
+static_assert(detail::shifts_exact(ShiftSeq3{}),
+              "ShiftSeq3 must hold exactly the gated pairs");
+static_assert(detail::has_shift(ShiftSeq2{}, -finufft::common::PERDIM_MAX_NS_DIFF) &&
+                  detail::has_shift(ShiftSeq2{}, 0) &&
+                  detail::has_shift(ShiftSeq2{}, finufft::common::PERDIM_MAX_NS_DIFF),
+              "ShiftSeq2 must hold the gated shifts");
 
 } // namespace finufft::spreadinterp

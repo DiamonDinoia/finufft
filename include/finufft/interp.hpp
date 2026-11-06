@@ -82,7 +82,7 @@ void interp_line(T *FINUFFT_RESTRICT target, const T *du, const T *ker, BIGINT i
   target[1] = out[1];
 }
 
-template<typename T, uint8_t ns, class simd_type = PaddedSIMD<T, 2 * ns>>
+template<typename T, uint8_t ns, uint8_t ns_y, class simd_type = PaddedSIMD<T, 2 * ns>>
 void interp_square(T *FINUFFT_RESTRICT target, const T *du, const T *ker1, const T *ker2,
                    BIGINT i1, BIGINT i2, UBIGINT N1)
 /* 2D interpolate complex values from a ns*ns block of the du (uniform grid
@@ -90,12 +90,14 @@ void interp_square(T *FINUFFT_RESTRICT target, const T *du, const T *ker1, const
    ns*ns outer product of the 1d kernel lists ker1 and ker2.
    Inputs:
    du : input regular subgrid (alternating real,imag), rows N1 apart, padded as in
-        interp_line
-   ker1, ker2 : length-ns real arrays of 1d kernel evaluations, zero padding lanes
+         interp_line
+   ker1, ker2 : real arrays of 1d kernel evaluations, zero padding lanes; ker1 has
+        the row width ns, ker2 has the runtime width ns_y
    i1 : start (left-most) x-coord index to read du from
    i2 : start (bottom) y-coord index to read du from; the caller guarantees the
         kernel support lies inside the subgrid, so no index wraps
    ns : kernel width (must be <=MAX_NSPREAD)
+   ns_y : kernel width in y (runtime, per-dimension)
    Outputs:
    target : size 2 array (containing real,imag) of interpolated output
 
@@ -129,7 +131,7 @@ void interp_square(T *FINUFFT_RESTRICT target, const T *du, const T *ker1, const
     std::array<simd_type, line_vectors> line{0};
     // block for first y line, to avoid explicitly initializing line with zeros
     // add remaining const-y lines to the line (expensive inner loop)
-    for (uint8_t dy{0}; dy < ns; dy++) {
+    for (uint8_t dy{0}; dy < ns_y; dy++) {
       const auto l_ptr = du + 2 * (N1 * (i2 + dy) + i1); // (see above)
       const simd_type ker2_v{ker2[dy]};
       for (uint8_t l{0}; l < line_vectors; ++l) {
@@ -168,7 +170,8 @@ void interp_square(T *FINUFFT_RESTRICT target, const T *du, const T *ker1, const
   target[1] = out[1];
 }
 
-template<typename T, uint8_t ns, class simd_type = PaddedSIMD<T, 2 * ns>>
+template<typename T, uint8_t ns, uint8_t ns_y, uint8_t ns_z,
+         class simd_type = PaddedSIMD<T, 2 * ns>>
 void interp_cube(T *FINUFFT_RESTRICT target, const T *du, const T *ker1, const T *ker2,
                  const T *ker3, BIGINT i1, BIGINT i2, BIGINT i3, UBIGINT N1, UBIGINT N2)
 /* 3D interpolate complex values from a ns*ns*ns block of the du (uniform grid
@@ -177,13 +180,14 @@ void interp_cube(T *FINUFFT_RESTRICT target, const T *du, const T *ker1, const T
    Inputs:
    du : input regular subgrid (alternating real,imag), rows N1 apart and planes
         N1*N2 apart, padded as in interp_line
-   ker1, ker2, ker3 : length-ns real arrays of 1d kernel evaluations, zero padding
-        lanes
+   ker1, ker2, ker3 : real arrays of 1d kernel evaluations, zero padding lanes;
+        ker1 has the row width ns, ker2 and ker3 the runtime widths ns_y, ns_z
    i1 : start (left-most) x-coord index to read du from
    i2 : start (bottom) y-coord index to read du from.
    i3 : start (lowest) z-coord index to read du from; the caller guarantees the
         kernel support lies inside the subgrid, so no index wraps
    ns : kernel width (must be <=MAX_NSPREAD)
+   ns_y, ns_z : kernel widths in y and z (runtime, per-dimension)
    Outputs:
    target : size 2 array (containing real,imag) of interpolated output
 
@@ -208,9 +212,9 @@ void interp_cube(T *FINUFFT_RESTRICT target, const T *du, const T *ker1, const T
                      ker3, du]() constexpr noexcept {
     std::array<simd_type, line_vectors> line{0};
     // co-add y and z contributions to line in x; do not apply x kernel yet
-    for (uint8_t dz{0}; dz < ns; ++dz) {
+    for (uint8_t dz{0}; dz < ns_z; ++dz) {
       const auto oz = N1 * N2 * (i3 + dz);                      // offset due to z
-      for (uint8_t dy{0}; dy < ns; ++dy) {                      // expensive inner loop
+      for (uint8_t dy{0}; dy < ns_y; ++dy) {                    // expensive inner loop
         const auto l_ptr = du + 2 * (oz + N1 * (i2 + dy) + i1); // ptr start of line
         const simd_type ker23{ker2[dy] * ker3[dz]};
         for (uint8_t l{0}; l < line_vectors; ++l) {
@@ -255,7 +259,7 @@ void interp_cube(T *FINUFFT_RESTRICT target, const T *du, const T *ker1, const T
 // subgrid that subproblem holds. Barbone 8/25/26.
 
 template<typename TF>
-template<int NS, int NC, int NDIMS>
+template<int NS, int NC, int NDIMS, int NSY, int NSZ>
 FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::interp_subproblem_kernel(
     BIGINT off1, [[maybe_unused]] BIGINT off2, [[maybe_unused]] BIGINT off3,
     UBIGINT padded_size1, [[maybe_unused]] UBIGINT size2, [[maybe_unused]] UBIGINT size3,
@@ -273,14 +277,40 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::interp_subproblem_kernel(
 */
 {
   using namespace finufft::spreadinterp;
-  using KBL                   = KernelBufferLayout<TF, NS>;
-  using simd_type             = typename KBL::simd_type;
-  static constexpr auto ns2   = NS * TF(0.5);
-  const TF *horner_coeffs_ptr = m.horner_coeffs.data();
-  alignas(KBL::alignment) std::array<TF, 3 * KBL::stride> kernel_values{0};
+  using KBL                  = KernelBufferLayout<TF, NS>;
+  using simd_type            = typename KBL::simd_type;
+  static constexpr auto ns2  = NS * TF(0.5); // half width, dimension 0
+  // NC > 0 is the equal-width path: all dims share one (NS, NC) Horner table and
+  // the inlined fill writes them at the kernel buffer's own stride. NC == 0 keeps
+  // the per-dimension fill instances at the widest stride, so fills cannot overlap.
+  constexpr auto seg         = NC > 0 ? KBL::stride : max_kernel_buffer_stride<TF>;
+  static constexpr TF half_y = TF(NSY) * TF(0.5); // dim 1 half width
+  static constexpr TF half_z = TF(NSZ) * TF(0.5); // dim 2 half width
+  [[maybe_unused]] std::array<const TF *, 3> coeffs{};
+  [[maybe_unused]] std::array<ker_fill_fn<TF>, 3> fills{};
+  if constexpr (NC == 0) {
+    // fill instances selected once per call, outside the point loop
+    coeffs = std::array<const TF *, 3>{
+        m.horner_coeffs[0].data(), m.horner_coeffs[1].data(), m.horner_coeffs[2].data()};
+    fills = std::array<ker_fill_fn<TF>, 3>{select_ker_fill<TF>(NS, m.nc_dim[0]),
+                                           select_ker_fill<TF>(NSY, m.nc_dim[1]),
+                                           select_ker_fill<TF>(NSZ, m.nc_dim[2])};
+  }
+  const TF *horner_coeffs_ptr = m.horner_coeffs[0].data(); // dim 0 table
+  // The buffer must satisfy every per-dim fill's store alignment: the dims'
+  // PaddedSIMD widths can differ, so take the max, not just dimension 0's.
+  // Widths a dim does not use map to NS (1D passes NSY = NSZ = 0).
+  using KBL_Y                 = KernelBufferLayout<TF, NSY == 0 ? NS : NSY>;
+  using KBL_Z                 = KernelBufferLayout<TF, NSZ == 0 ? NS : NSZ>;
+  constexpr auto buf_align =
+      std::max({KBL::alignment, KBL_Y::alignment, KBL_Z::alignment});
+  // NC > 0 mirrors develop's zero-init, whose buffer gcc promotes to registers;
+  // NC == 0's fill writes every read slot first, so that buffer needs no zero-init.
+  alignas(buf_align) std::array<TF, 3 * seg> kernel_values;
+  if constexpr (NC != 0) kernel_values = {};
   const auto *ker1                  = kernel_values.data();
-  [[maybe_unused]] const auto *ker2 = kernel_values.data() + KBL::stride;
-  [[maybe_unused]] const auto *ker3 = kernel_values.data() + 2 * KBL::stride;
+  [[maybe_unused]] const auto *ker2 = kernel_values.data() + seg;
+  [[maybe_unused]] const auto *ker3 = kernel_values.data() + 2 * seg;
   for (UBIGINT j = 0; j < M; ++j) {
     const auto xj = kx[j];
     // ceil offset, hence rounding, must match that in get_subgrid...
@@ -292,23 +322,36 @@ FINUFFT_NEVER_INLINE void FINUFFT_PLAN_T<TF>::interp_subproblem_kernel(
       interp_line<TF, NS, simd_type>(dd + 2 * idx[j], du, ker1, i1 - off1);
     } else if constexpr (NDIMS == 2) {
       const auto yj = ky[j];
-      const auto i2 = BIGINT(std::ceil(yj - ns2));
-      const auto x2 = std::ceil(yj - ns2) - yj;
-      evaluate_kernel_vector<NS, NC, TF, simd_type>(kernel_values.data(),
-                                                    horner_coeffs_ptr, x1, x2);
-      interp_square<TF, NS, simd_type>(dd + 2 * idx[j], du, ker1, ker2, i1 - off1,
-                                       i2 - off2, padded_size1);
+      const auto i2 = BIGINT(std::ceil(yj - half_y));
+      const auto x2 = std::ceil(yj - half_y) - yj;
+      if constexpr (NC > 0) {
+        // equal widths: the inlined fill keeps the kernel values in registers
+        evaluate_kernel_vector<NS, NC, TF, simd_type>(kernel_values.data(),
+                                                      horner_coeffs_ptr, x1, x2);
+      } else {
+        fill_dims<TF, NDIMS>(kernel_values.data(), seg, fills.data(), coeffs.data(), x1,
+                             x2, TF(0));
+      }
+      interp_square<TF, NS, NSY, simd_type>(dd + 2 * idx[j], du, ker1, ker2, i1 - off1,
+                                            i2 - off2, padded_size1);
     } else {
       const auto yj = ky[j];
       const auto zj = kz[j];
-      const auto i2 = BIGINT(std::ceil(yj - ns2));
-      const auto i3 = BIGINT(std::ceil(zj - ns2));
-      const auto x2 = std::ceil(yj - ns2) - yj;
-      const auto x3 = std::ceil(zj - ns2) - zj;
-      evaluate_kernel_vector<NS, NC, TF, simd_type>(kernel_values.data(),
-                                                    horner_coeffs_ptr, x1, x2, x3);
-      interp_cube<TF, NS, simd_type>(dd + 2 * idx[j], du, ker1, ker2, ker3, i1 - off1,
-                                     i2 - off2, i3 - off3, padded_size1, size2);
+      const auto i2 = BIGINT(std::ceil(yj - half_y));
+      const auto i3 = BIGINT(std::ceil(zj - half_z));
+      const auto x2 = std::ceil(yj - half_y) - yj;
+      const auto x3 = std::ceil(zj - half_z) - zj;
+      if constexpr (NC > 0) {
+        // equal widths: the inlined fill keeps the kernel values in registers
+        evaluate_kernel_vector<NS, NC, TF, simd_type>(kernel_values.data(),
+                                                      horner_coeffs_ptr, x1, x2, x3);
+      } else {
+        fill_dims<TF, NDIMS>(kernel_values.data(), seg, fills.data(), coeffs.data(), x1,
+                             x2, x3);
+      }
+      interp_cube<TF, NS, NSY, NSZ, simd_type>(dd + 2 * idx[j], du, ker1, ker2, ker3,
+                                               i1 - off1, i2 - off2, i3 - off3,
+                                               padded_size1, size2);
     }
   }
 }
@@ -350,12 +393,57 @@ template<typename TF> struct FINUFFT_PLAN_T<TF>::InterpSubproblem2dCaller {
   const TF *ky;
   const BIGINT *idx;
   TF *dd;
+  template<int NS, int DY> int operator()() const {
+    // DY is the dimension-1 width shift; NC covers only the 1D inline fill
+    assert(sub.tail >= BIGINT(finufft::spreadinterp::get_padding<TF, 2 * NS>() / 2));
+    plan.template interp_subproblem_kernel<NS, 0, 2, NS + DY>(
+        sub.off1, sub.off2, sub.off3, sub.padded_size1, sub.size2, sub.size3, du, M, kx,
+        ky, nullptr, idx, dd);
+    return 0;
+  }
+};
+
+template<typename TF> struct FINUFFT_PLAN_T<TF>::InterpSubproblem3dCaller {
+  const FINUFFT_PLAN_T &plan;
+  const Subgrid &sub;
+  const TF *du;
+  UBIGINT M;
+  const TF *kx;
+  const TF *ky;
+  const TF *kz;
+  const BIGINT *idx;
+  TF *dd;
+  template<int NS, int SHIFT> int operator()() const {
+    // SHIFT packs the dimension-1 and dimension-2 width shifts against dimension 0
+    constexpr int DY =
+        SHIFT / finufft::common::PERDIM_SHIFT_SPAN - finufft::common::PERDIM_MAX_NS_DIFF;
+    constexpr int DZ =
+        SHIFT % finufft::common::PERDIM_SHIFT_SPAN - finufft::common::PERDIM_MAX_NS_DIFF;
+    assert(sub.tail >= BIGINT(finufft::spreadinterp::get_padding<TF, 2 * NS>() / 2));
+    plan.template interp_subproblem_kernel<NS, 0, 3, NS + DY, NS + DZ>(
+        sub.off1, sub.off2, sub.off3, sub.padded_size1, sub.size2, sub.size3, du, M, kx,
+        ky, kz, idx, dd);
+    return 0;
+  }
+};
+
+// Equal-width tuples carry one shared Horner degree, so they dispatch on (ns, nc)
+// straight into the single-width kernel shape with the fill inlined.
+template<typename TF> struct FINUFFT_PLAN_T<TF>::InterpSubproblem2dEqCaller {
+  const FINUFFT_PLAN_T &plan;
+  const Subgrid &sub;
+  const TF *du;
+  UBIGINT M;
+  const TF *kx;
+  const TF *ky;
+  const BIGINT *idx;
+  TF *dd;
   template<int NS, int NC> int operator()() const {
     if constexpr (!::finufft::kernel::ValidKernelParams<NS, NC>())
       return finufft::spreadinterp::report_invalid_kernel_params(NS, NC);
     else {
       assert(sub.tail >= BIGINT(finufft::spreadinterp::get_padding<TF, 2 * NS>() / 2));
-      plan.template interp_subproblem_kernel<NS, NC, 2>(
+      plan.template interp_subproblem_kernel<NS, NC, 2, NS, NS>(
           sub.off1, sub.off2, sub.off3, sub.padded_size1, sub.size2, sub.size3, du, M, kx,
           ky, nullptr, idx, dd);
       return 0;
@@ -363,7 +451,7 @@ template<typename TF> struct FINUFFT_PLAN_T<TF>::InterpSubproblem2dCaller {
   }
 };
 
-template<typename TF> struct FINUFFT_PLAN_T<TF>::InterpSubproblem3dCaller {
+template<typename TF> struct FINUFFT_PLAN_T<TF>::InterpSubproblem3dEqCaller {
   const FINUFFT_PLAN_T &plan;
   const Subgrid &sub;
   const TF *du;
@@ -378,7 +466,7 @@ template<typename TF> struct FINUFFT_PLAN_T<TF>::InterpSubproblem3dCaller {
       return finufft::spreadinterp::report_invalid_kernel_params(NS, NC);
     else {
       assert(sub.tail >= BIGINT(finufft::spreadinterp::get_padding<TF, 2 * NS>() / 2));
-      plan.template interp_subproblem_kernel<NS, NC, 3>(
+      plan.template interp_subproblem_kernel<NS, NC, 3, NS, NS>(
           sub.off1, sub.off2, sub.off3, sub.padded_size1, sub.size2, sub.size3, du, M, kx,
           ky, kz, idx, dd);
       return 0;
@@ -403,8 +491,9 @@ void FINUFFT_PLAN_T<TF>::interp_subproblem_1d(const Subgrid &sub, const TF *du, 
   InterpSubproblem1dCaller caller{*this, sub, du, M, kx, idx, dd};
   using NsSeq = poet::inclusive_range<MIN_NSPREAD, MAX_NSPREAD<TF>>;
   using NcSeq = poet::inclusive_range<MIN_NC, MAX_NC>;
-  poet::dispatch(caller, std::make_tuple(poet::dispatch_param<NsSeq>{m.spopts.nspread},
-                                         poet::dispatch_param<NcSeq>{m.nc}));
+  poet::dispatch(caller,
+                 std::make_tuple(poet::dispatch_param<NsSeq>{m.spopts.nspread_dim[0]},
+                                 poet::dispatch_param<NcSeq>{m.nc_dim[0]}));
 }
 
 template<typename TF>
@@ -415,11 +504,25 @@ void FINUFFT_PLAN_T<TF>::interp_subproblem_2d(
 {
   using namespace finufft::spreadinterp;
   using namespace finufft::common;
-  InterpSubproblem2dCaller caller{*this, sub, du, M, kx, ky, idx, dd};
   using NsSeq = poet::inclusive_range<MIN_NSPREAD, MAX_NSPREAD<TF>>;
   using NcSeq = poet::inclusive_range<MIN_NC, MAX_NC>;
-  poet::dispatch(caller, std::make_tuple(poet::dispatch_param<NsSeq>{m.spopts.nspread},
-                                         poet::dispatch_param<NcSeq>{m.nc}));
+  // one shared fit (equal width and beta) keeps the tuple at one Horner degree
+  if (m.spopts.nspread_dim[1] == m.spopts.nspread_dim[0] &&
+      m.spopts.beta_dim[1] == m.spopts.beta_dim[0]) {
+    InterpSubproblem2dEqCaller caller{*this, sub, du, M, kx, ky, idx, dd};
+    poet::dispatch(caller,
+                   std::make_tuple(poet::dispatch_param<NsSeq>{m.spopts.nspread_dim[0]},
+                                   poet::dispatch_param<NcSeq>{m.nc_dim[0]}));
+  } else {
+    InterpSubproblem2dCaller caller{*this, sub, du, M, kx, ky, idx, dd};
+    assert(std::abs(m.spopts.nspread_dim[1] - m.spopts.nspread_dim[0]) <=
+               finufft::common::PERDIM_MAX_NS_DIFF &&
+           "width tuple outside the dispatched set");
+    poet::dispatch(
+        caller, std::make_tuple(poet::dispatch_param<NsSeq>{m.spopts.nspread_dim[0]},
+                                poet::dispatch_param<ShiftSeq2>{
+                                    m.spopts.nspread_dim[1] - m.spopts.nspread_dim[0]}));
+  }
 }
 
 template<typename TF>
@@ -430,9 +533,24 @@ void FINUFFT_PLAN_T<TF>::interp_subproblem_3d(const Subgrid &sub, const TF *du, 
 {
   using namespace finufft::spreadinterp;
   using namespace finufft::common;
-  InterpSubproblem3dCaller caller{*this, sub, du, M, kx, ky, kz, idx, dd};
   using NsSeq = poet::inclusive_range<MIN_NSPREAD, MAX_NSPREAD<TF>>;
-  using NcSeq = poet::inclusive_range<MIN_NC, MAX_NC>;
-  poet::dispatch(caller, std::make_tuple(poet::dispatch_param<NsSeq>{m.spopts.nspread},
-                                         poet::dispatch_param<NcSeq>{m.nc}));
+  using NcSeq  = poet::inclusive_range<MIN_NC, MAX_NC>;
+  const int dy = m.spopts.nspread_dim[1] - m.spopts.nspread_dim[0];
+  const int dz = m.spopts.nspread_dim[2] - m.spopts.nspread_dim[0];
+  // one shared fit (equal widths and beta) keeps the tuple at one Horner degree
+  if (dy == 0 && dz == 0 && m.spopts.beta_dim[1] == m.spopts.beta_dim[0] &&
+      m.spopts.beta_dim[2] == m.spopts.beta_dim[0]) {
+    InterpSubproblem3dEqCaller caller{*this, sub, du, M, kx, ky, kz, idx, dd};
+    poet::dispatch(caller,
+                   std::make_tuple(poet::dispatch_param<NsSeq>{m.spopts.nspread_dim[0]},
+                                   poet::dispatch_param<NcSeq>{m.nc_dim[0]}));
+  } else {
+    InterpSubproblem3dCaller caller{*this, sub, du, M, kx, ky, kz, idx, dd};
+    assert(finufft::spreadinterp::detail::shift_in_gate(dy, dz) &&
+           "width tuple outside the dispatched set");
+    poet::dispatch(
+        caller, std::make_tuple(poet::dispatch_param<NsSeq>{m.spopts.nspread_dim[0]},
+                                poet::dispatch_param<ShiftSeq3>{
+                                    finufft::spreadinterp::detail::pack_shift(dy, dz)}));
+  }
 }

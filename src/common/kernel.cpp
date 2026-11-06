@@ -16,8 +16,7 @@
 
 namespace finufft::kernel {
 
-std::function<double(double)> kernel_definition_lambda(
-    const finufft_spread_opts &spopts) {
+std::function<double(double)> kernel_definition_lambda(double beta, int kf) {
   /* The spread/interp kernel phi_beta(z) function on standard interval z in [-1,1].
      This evaluation does not need to be fast; it is used *only* for polynomial
      interpolation via Horner coeffs (the interpolant is evaluated fast).
@@ -25,15 +24,11 @@ std::function<double(double)> kernel_definition_lambda(
      needed, thanks to numerical quadrature in finufft_core:onedim*; playing with
      new kernels is thus very easy.
     Inputs:
-    spopts - spread_opts struct containing fields:
-      beta        - shape parameter for ES, KB, or other prolate kernels
-                    (a.k.a. c parameter in PSWF).
-      kerformula  - positive integer selecting among kernel function types; see
-                    docs in the code below.
-                    (More than one value may give the same type, to allow
-                    kerformula also to select a parameter-choice method.)
-                    Note: the default 0 (in opts.spread_kerformula) is invalid here;
-                    selection of a >0 kernel type must already have happened.
+    beta        - shape parameter for ES, KB, or other prolate kernels
+                  (a.k.a. c parameter in PSWF).
+    kerformula  - positive integer selecting among kernel function types; the
+                  selection of a >0 kernel type must already have happened; see
+                  kernel_beta_given_ns.
     Output: lambda function that can be called with z to return phi(z),
                     as in the notation of original 2019 paper ([FIN] in the docs).
 
@@ -43,9 +38,6 @@ std::function<double(double)> kernel_definition_lambda(
             use them.
     Barnett rewritten 1/13/26 for double on [-1,1]; based on Barbone Dec 2025.
   */
-  double beta = spopts.beta; // get shape param
-  int kf      = spopts.kerformula;
-
   if (kf >= 7 && kf <= 9) {
     finufft::common::PSWF0 pswf(beta);
     return [pswf](double z) {
@@ -53,9 +45,14 @@ std::function<double(double)> kernel_definition_lambda(
       return pswf(z);
     }; // prolate (PSWF) Psi_0, normalized to 1 at z=0
   } else {
-    fprintf(stderr, "[%s] unknown spopts.kerformula=%d\n", __func__, spopts.kerformula);
+    fprintf(stderr, "[%s] unknown spopts.kerformula=%d\n", __func__, kf);
     throw finufft::exception(FINUFFT_ERR_KERFORMULA_NOTVALID);
   }
+}
+
+std::function<double(double)> kernel_definition_lambda(
+    const finufft_spread_opts &spopts) {
+  return kernel_definition_lambda(spopts.beta, spopts.kerformula);
 }
 
 static double kernel_tolfac(int dim, int type) {
@@ -98,15 +95,9 @@ int clamp_kernel_ns(int ns, double upsampfac, int dim, bool is_float) {
   return ns;
 }
 
-void set_kernel_shape_given_ns(finufft_spread_opts &spopts, int debug) {
-  // Writes kernel shape parameter(s) (beta,...), into spopts, given previously-set
-  // kernel info fields in spopts, principally: nspread, upsampfac, kerformula.
-  // debug >0 causes stdout reporting.
-  int ns       = spopts.nspread;
-  double sigma = spopts.upsampfac;
-  int kf       = spopts.kerformula;
+double kernel_beta_given_ns(int ns, double sigma, int kf) {
   // Std shape param formula using ES model for cutoff, eg (4.5) in [FIN] with gamma=1.
-  // For PSWF, aligns cut-off (start of aliasing) with freq (c) param. Used below...
+  // For PSWF, aligns cut-off (start of aliasing) with freq (c) param.
   const double beta_cutoff = common::PI * (double)ns * (1.0 - 1.0 / (2.0 * sigma));
 
   if (kf == 7) {
@@ -118,20 +109,29 @@ void set_kernel_shape_given_ns(finufft_spread_opts &spopts, int debug) {
     */
     double c_Beatty = (ns == 2) ? 0.5 : 0.8; // ns=2 case gives error fac 2 better for KB
     double pis      = common::PI * common::PI;
-    spopts.beta = std::sqrt(beta_cutoff * beta_cutoff - c_Beatty / pis);
+    return std::sqrt(beta_cutoff * beta_cutoff - c_Beatty / pis);
 
   } else if (kf == 8) {
     // Std shape param with const shift to exploit a little more tail decay,
     // in the style of Beatty (above) but without the sqrt; a const is better at high ns.
     // This is best for PSWF, within 0.1 digit.
-    spopts.beta = beta_cutoff - 0.05; // Libin Lu 1/23/26
-                                      // spopts.beta = beta_cutoff; // std param
+    return beta_cutoff - 0.05; // Libin Lu 1/23/26
 
   } else if (kf == 9) {
     double t = beta_cutoff / common::PI;
     // Marco's LSQ fit using simple functions of t, 1/23/26.
-    spopts.beta = ((-0.00149087 * t + 0.0218459) * t + 3.06269) * t - 0.0365245;
+    return ((-0.00149087 * t + 0.0218459) * t + 3.06269) * t - 0.0365245;
   }
+  fprintf(stderr, "[%s] unknown spopts.kerformula=%d\n", __func__, kf);
+  throw finufft::exception(FINUFFT_ERR_KERFORMULA_NOTVALID);
+}
+
+void set_kernel_shape_given_ns(finufft_spread_opts &spopts, int debug) {
+  // Writes kernel shape parameter(s) (beta,...), into spopts, given previously-set
+  // kernel info fields in spopts, principally: nspread, upsampfac, kerformula.
+  // debug >0 causes stdout reporting.
+  int kf      = spopts.kerformula;
+  spopts.beta = kernel_beta_given_ns(spopts.nspread, spopts.upsampfac, kf);
 
   if (debug || spopts.debug) {
     const char *kname = [kf] {
@@ -163,6 +163,27 @@ double min_sigma_for_deconv_error(double tol, int dim, int ns, double eps_mach) 
   if (!(v > 0.0)) return std::numeric_limits<double>::infinity();
   const double q = std::min(std::sqrt(v), 1.0);
   return 1.0 / (q * (2.0 - q));
+}
+
+bool perdim_estimates_ok(double tol, int dim, int type, bool is_float,
+                         const std::array<double, 3> &n,
+                         const std::array<double, 3> &sigma_d,
+                         const std::array<int, 3> &ns, std::array<double, 3> *sums) {
+  // Per-dim terms of the uniform laws at (N_d, ns_d, sigma_d); the refusal sums them.
+  constexpr double eps_float  = std::numeric_limits<float>::epsilon();
+  constexpr double eps_double = std::numeric_limits<double>::epsilon();
+  const double eps_mach       = is_float ? eps_float : eps_double;
+  const double tolfac         = kernel_tolfac(dim, type) / dim; // per-dim prefactor share
+  std::array<double, 3> s{0.0, 0.0, 0.0};
+  for (int idim = 0; idim < dim; ++idim) {
+    const double u = std::sqrt(1.0 - 1.0 / sigma_d[idim]); // aliasing decay rate
+    s[0] += common::rounding_error(eps_mach, n[idim]);
+    s[1] += tolfac * std::exp(-(ns[idim] - common::NSOFF) * common::PI * u);
+    const double w = 1.0 - u; // phihat band-edge drop, deconvolution amplifies it
+    s[2] += eps_mach * std::exp(0.5 * common::PI * ns[idim] * w * w);
+  }
+  if (sums) *sums = s;
+  return s[0] <= tol && s[1] <= tol && s[2] <= tol;
 }
 
 } // namespace finufft::kernel

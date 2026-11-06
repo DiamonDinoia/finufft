@@ -74,7 +74,7 @@ XSIMD_DIR := $(DEPS_ROOT)/xsimd
 
 # POET dispatcher dependency: each release ships one amalgamated header (with
 # the generated poet/version.hpp inlined), so VERSION must be a release tag
-POET_VERSION := v0.0.1
+POET_VERSION := v0.0.3
 POET_DIR := $(DEPS_ROOT)/poet
 POET_URL := https://github.com/flatironinstitute/poet/releases/download/$(POET_VERSION)/poet.hpp
 

@@ -226,6 +226,7 @@ public:
 #include <cstddef>           // size_t
 #include <finufft/plan.hpp>  // FINUFFT_PLAN_T (includes FFT forward decl)
 #include <finufft/utils.hpp> // CNTime
+#include <finufft_common/kernel.h> // per-dimension kernel retune helpers
 #include <finufft_errors.h>  // FINUFFT_ERR_MAXNALLOC
 #include <limits>            // std::numeric_limits
 
@@ -431,10 +432,86 @@ template<typename TF> void FINUFFT_PLAN_T<TF>::init_grid_kerFT_FFT() {
              (long long)m.nfdim[2], ntrans, opts.nthreads, batchSize);
     }
 
+    // Per-dimension kernel retune at the realized ratios sigma_eff_d = nf_d / N_d:
+    // pick the cost-minimal per-dim (ns, nf) set meeting the summed error estimate,
+    // not the first width that meets tol. It runs only when the realized ratios differ
+    // between dimensions by more than the gate constant; at one shared ratio the
+    // uniform kernel already fits every dimension. A forced upsampfac stays one sigma
+    // in every dim (its nf fixed); only auto may move nf_d. The type-3 outer plan has
+    // no N and never gets here; only its inner type-2 plan goes per dim.
+    std::array<double, 3> sigma_eff{0.0, 0.0, 0.0};
+    std::array<double, 3> N{};
+    double rmin = std::numeric_limits<double>::infinity(), rmax = 0.0;
+    bool sizes_ok = true;
+    for (int idim = 0; idim < dim; ++idim) {
+      sizes_ok        = sizes_ok && mstu[idim] > 0;
+      N[idim]         = (double)mstu[idim];
+      sigma_eff[idim] = (double)m.nfdim[idim] / (double)mstu[idim]; // nf_d / N_d
+      rmin            = std::min(rmin, sigma_eff[idim]);
+      rmax            = std::max(rmax, sigma_eff[idim]);
+    }
+    // nj/nk is unknown at the locked constructor path; there nf is fixed and the pick
+    // only orders widths, so the spread-vs-FFT balance stays width-proportional.
+    const double npts = (double)std::max(type == 3 ? m.nk : m.nj, BIGINT(1));
+    if (sizes_ok && rmax > finufft::common::PERDIM_RETUNE_MIN_RATIO * rmin) {
+      const int ns_u = m.spopts.nspread;
+      finufft::kernel::PerdimSet uniform{}, best{};
+      uniform.ns         = {ns_u, ns_u, ns_u};
+      uniform.nf         = {m.nfdim[0], m.nfdim[1], m.nfdim[2]};
+      // The realized ratios nf_d / N_d price and test every set; a forced upsampfac
+      // still fixes each nf (allow_nf_change below), so its search stays one sigma.
+      uniform.sigma      = sigma_eff;
+      const bool changed = finufft::kernel::perdim_pick_set(
+          (double)m.tol, dim, type, std::is_same_v<TF, float>, opts.nthreads, N, npts,
+          uniform, !upsamp_locked, best, opts.debug);
+      if (changed) {
+        for (int idim = 0; idim < dim; ++idim) {
+          m.nfdim[idim] = best.nf[idim];
+          m.phiHat[idim].resize(m.nfdim[idim] / 2 + 1); // fseries follows the new nf
+          m.spopts.nspread_dim[idim] = best.ns[idim];
+        }
+        // One beta law per dimension at its own realized ratio sigma_d. The Horner
+        // fits key on (width, beta), so dimensions that share a width keep their own
+        // kernels.
+        for (int idim = 0; idim < dim; ++idim)
+          m.spopts.beta_dim[idim] = finufft::kernel::kernel_beta_given_ns(
+              m.spopts.nspread_dim[idim], best.sigma[idim], m.spopts.kerformula);
+        // The scalar kernel follows the widest dimension.
+        m.spopts.nspread = 0;
+        for (int idim = 0; idim < dim; ++idim)
+          if (m.spopts.nspread_dim[idim] > m.spopts.nspread) {
+            m.spopts.nspread = m.spopts.nspread_dim[idim];
+            m.spopts.beta    = m.spopts.beta_dim[idim];
+          }
+        m.perdim_kernels = true;
+        precompute_horner_coeffs(); // one fit per distinct (width, beta) at the retune
+      }
+    }
+
+    // Per-dim report of the chosen set and its cost terms. The _d field names keep
+    // these lines out of the selector-line diff harness (it captures ns= and kin).
+    if (opts.debug) {
+      const std::array<int, 3> ns_set{m.spopts.nspread_dim[0], m.spopts.nspread_dim[1],
+                                      m.spopts.nspread_dim[2]};
+      const std::array<BIGINT, 3> nf_set{m.nfdim[0], m.nfdim[1], m.nfdim[2]};
+      std::array<double, 3> ops{};
+      const double cost = finufft::kernel::perdim_set_cost(
+          std::is_same_v<TF, float>, npts, ns_set, nf_set, dim, opts.nthreads, &ops);
+      for (int idim = 0; idim < dim; ++idim)
+        printf("[%s] perdim d%d: sigma_d=%.4g ns_d=%d nf_d=%lld beta_d=%.4g "
+               "cost_spread_d=%.4g cost_fft_d=%lld\n",
+               __func__, idim,
+               (m.perdim_kernels) ? (double)m.nfdim[idim] / (double)mstu[idim]
+                                  : m.spopts.upsampfac,
+               ns_set[idim], (long long)nf_set[idim], m.spopts.beta_dim[idim], ops[idim],
+               (long long)nf_set[idim]);
+      printf("[%s] perdim cost=%.4g\n", __func__, cost);
+    }
+
     // STEP 0: get Fourier coeffs of spreading kernel along each fine grid dim
     timer.restart();
     for (int idim = 0; idim < dim; ++idim)
-      onedim_fseries_kernel(m.nfdim[idim], m.phiHat[idim]);
+      onedim_fseries_kernel(idim, m.nfdim[idim], m.phiHat[idim]);
     if (opts.debug)
       printf("[%s] kernel fser (ns=%d):\t\t%.3g s\n", __func__, m.spopts.nspread,
              timer.elapsedsec());

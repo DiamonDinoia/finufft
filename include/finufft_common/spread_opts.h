@@ -26,6 +26,8 @@ struct finufft_spread_opts {
   double upsampfac=0;        // sigma, upsampling factor, >1.
   double beta=0;             // main kernel shape parameter (for prolate-like kernels)
   int kerformula=0;          // kernel function type; see finufft_common/kernel.h
+  int nspread_dim[3]={0,0,0};   // kernel width per dimension; nspread holds their max
+  double beta_dim[3]={0,0,0};   // shape parameter per dimension; beta is the widest dim's
 };
 /* clang-format on */
 
