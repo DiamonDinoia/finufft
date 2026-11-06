@@ -117,8 +117,9 @@ template<typename T> auto arrayrange(int n, const T *a, cudaStream_t stream) {
 // Only chooses a nonzero center if this increases w by less than fraction
 // ARRAYWIDCEN_GROWFRAC defined in finufft_common/constants.h.
 // This prevents rephasings which don't grow nf by much. 6/8/17
-// If n==0, w and c are not finite.
+// If n==0, w and c are 0.
 template<typename T> auto arraywidcen(int n, const T *a, cudaStream_t stream) {
+  if (n == 0) return std::make_tuple(T(0), T(0));
   const auto [lo, hi] = arrayrange(n, a, stream);
   auto w              = (hi - lo) / 2;
   auto c              = (hi + lo) / 2;

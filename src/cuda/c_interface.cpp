@@ -21,7 +21,7 @@ static inline bool is_invalid_mode_array(int type, int dim, const int64_t *modes
   int64_t tot_size = 1;
   for (int i = 0; i < dim; ++i) {
     if (modes64[i] > std::numeric_limits<int32_t>::max()) return true;
-    if (modes64[i] <= 0) return true;
+    if (modes64[i] < 0) return true; // 0 is a valid empty mode set, see #947
     modes32[i] = modes64[i];
     tot_size *= modes64[i];
   }

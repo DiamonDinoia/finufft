@@ -37,8 +37,8 @@ int main() {
   rc = check_rc("ntrans invalid", rc, FINUFFT_ERR_NTRANS_NOTVALID, 4);
   if (rc) return rc;
 
-  // Invalid nmodes -> expect FINUFFT_ERR_NDATA_NOTVALID
-  const int64_t Nbad[3] = {0, 1, 1};
+  // Negative nmodes is invalid -> expect FINUFFT_ERR_NDATA_NOTVALID
+  const int64_t Nbad[3] = {-1, 1, 1};
   rc                    = cufinufftf_makeplan(1, 1, Nbad, 1, 1, 1e-5f, &fplan, NULL);
   rc                    = check_rc("nmodes invalid", rc, FINUFFT_ERR_NDATA_NOTVALID, 5);
   if (rc) return rc;

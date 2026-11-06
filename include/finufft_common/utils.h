@@ -77,8 +77,12 @@ FINUFFT_ALWAYS_INLINE void arraywidcen(int64_t n, const T *a, T *w, T *c)
 // Only chooses a nonzero center if this increases w by less than fraction
 // ARRAYWIDCEN_GROWFRAC defined in finufft_common/constants.h.
 // This prevents rephasings which don't grow nf by much. 6/8/17
-// If n==0, w and c are not finite.
+// If n==0, w and c are 0.
 {
+  if (n == 0) {
+    *w = *c = 0;
+    return;
+  }
   T lo, hi;
   arrayrange(n, a, &lo, &hi);
   *w = (hi - lo) / 2;

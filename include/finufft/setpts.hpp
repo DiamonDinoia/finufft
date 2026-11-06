@@ -297,7 +297,7 @@ int FINUFFT_PLAN_T<TF>::setpts(BIGINT nj, const TF *xj, const TF *yj, const TF *
     // (old STEP 3a) Compute deconvolution post-factors array (per targ pt)...
     // (exploits that FT separates because kernel is prod of 1D funcs)
     m.deconv.resize(nk);
-    // C can be nan or inf if M=0, no input NU pts
+    // C is 0 if M=0, no input NU pts
     bool Cfinite = std::isfinite(m.t3P.C[0]) && std::isfinite(m.t3P.C[1]) &&
                    std::isfinite(m.t3P.C[2]);
     bool Cnonzero = m.t3P.C[0] != 0.0 || m.t3P.C[1] != 0.0 || m.t3P.C[2] != 0.0;

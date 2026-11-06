@@ -41,6 +41,29 @@
 
 using namespace std;
 
+// type-3 adjoint with nk=0 must write zero strengths, not NaN; the simple
+// interfaces have no adjoint, so use the guru one
+int t3_adjoint_nk0(int d, int M, const FLT *x, FLT acc, const finufft_opts &opts) {
+  CPX *ca = (CPX *)malloc(sizeof(CPX) * M);
+  for (int j = 0; j < M; ++j) ca[j] = FLT(12345) + IMA * FLT(123); // sentinels
+  CPX dummy{}; // nk=0 input strengths need no storage
+  FINUFFT_PLAN plan;
+  BIGINT Ns[3] = {1, 1, 1};
+  int ier      = FINUFFT_MAKEPLAN(3, d, Ns, +1, 1, acc, &plan, &opts);
+  if (!ier)
+    ier = FINUFFT_SETPTS(plan, M, x, d > 1 ? x : NULL, d > 2 ? x : NULL, 0, NULL, NULL,
+                         NULL);
+  if (!ier) ier = FINUFFT_EXECUTE_ADJOINT(plan, ca, &dummy);
+  FLT t = twonorm(M, ca);
+  FINUFFT_DESTROY(plan);
+  free(ca);
+  if (ier || t != 0.0) {
+    printf("t%d3 adj nk=0:\tier=%d nrm(c)=%.3g\n", d, ier, t);
+    return 1;
+  }
+  return 0;
+}
+
 int main() {
   int M = 100;    // number of nonuniform points
   int N = 10;     // # modes, keep small, also output NU pts in type 3
@@ -169,6 +192,7 @@ int main() {
     printf("1d3 nk=0:\tier=%d\n", ier);
     return ier;
   }
+  if (t3_adjoint_nk0(1, M, x, acc, opts)) return 1;
   ier = FINUFFT1D3(M, x, c, +1, acc, -1, s, F, &opts);
   if (ier != FINUFFT_ERR_NUM_NU_PTS_INVALID) {
     printf("1d3 nk=-1:\twrong err code %d\n", ier);
@@ -409,6 +433,7 @@ int main() {
     printf("2d3 nk=0:\tier=%d\n", ier);
     return ier;
   }
+  if (t3_adjoint_nk0(2, M, x, acc, opts)) return 1;
   ier = FINUFFT2D3(0, x, x, c, +1, acc, N, s, s, F, &opts);
   t   = twonorm(N, F);
   if (ier || t != 0.0) {
@@ -605,6 +630,7 @@ int main() {
     printf("3d3 nk=0:\tier=%d\n", ier);
     return ier;
   }
+  if (t3_adjoint_nk0(3, M, x, acc, opts)) return 1;
   ier = FINUFFT3D3(0, x, x, x, c, +1, acc, N, s, s, s, F, &opts);
   t   = twonorm(N, F);
   if (ier || t != 0.0) {

@@ -16,6 +16,7 @@
 #include <finufft_common/constants.h>
 #include <finufft_errors.h>
 #include <thrust/device_vector.h>
+#include <thrust/fill.h>
 
 /* Kernel for copying fw to fk with amplication by prefac/ker */
 // Note: assume modeord=0: CMCL-compatible mode ordering in fk (from -N/2 up
@@ -268,6 +269,28 @@ void cufinufft_plan_t<T>::execute_type3(cuda_complex<T> *d_c,
 template<typename T>
 void cufinufft_plan_t<T>::execute(cuda_complex<T> *d_c, cuda_complex<T> *d_fk) const {
   DeviceSwitcher switcher(opts.gpu_device_id);
+  // M == 0, type-3 N == 0, or no modes (types 1/2): nothing to launch, as on the
+  // CPU. Zero the output when it has elements: type 2's c; type 1's f is empty.
+  std::int64_t nmodes = 1;
+  for (int idim = 0; idim < dim; ++idim) nmodes *= std::int64_t(mstu[idim]);
+  if (M == 0 || (type == 3 && N == 0) || (type < 3 && nmodes == 0)) {
+    // int64: ntransf*N, ntransf*nmodes and ntransf*M can exceed 32 bits for a valid
+    // batch, so every factor is widened before the multiply.
+    std::int64_t n_out   = 0;
+    cuda_complex<T> *out = d_fk;
+    if (type == 3) n_out = std::int64_t(ntransf) * N;
+    if (type == 1) {
+      n_out = std::int64_t(ntransf);
+      for (int idim = 0; idim < dim; ++idim) n_out *= std::int64_t(mstu[idim]);
+    }
+    if (type == 2) {
+      n_out = std::int64_t(ntransf) * M;
+      out   = d_c;
+    }
+    if (n_out > 0)
+      thrust::fill_n(thrust::cuda::par.on(stream), out, n_out, cuda_complex<T>{});
+    return;
+  }
   switch (type) {
   case 1:
     return execute_type1(d_c, d_fk);
